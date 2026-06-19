@@ -18,6 +18,7 @@ import material from "./assets/material.json" with { type: "json" }
 import matrix from "./assets/matrix.json" with { type: "json" }
 import mercury from "./assets/mercury.json" with { type: "json" }
 import monokai from "./assets/monokai.json" with { type: "json" }
+import motryx from "./assets/motryx.json" with { type: "json" }
 import nightowl from "./assets/nightowl.json" with { type: "json" }
 import nord from "./assets/nord.json" with { type: "json" }
 import onedark from "./assets/one-dark.json" with { type: "json" }
@@ -145,6 +146,7 @@ export const DEFAULT_THEMES: Record<string, ThemeJson> = {
   matrix,
   mercury,
   monokai,
+  motryx,
   nightowl,
   nord,
   ["one-dark"]: onedark,

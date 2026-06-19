@@ -49,6 +49,7 @@ import { DialogConsoleOrg } from "./component/dialog-console-org"
 import { ThemeProvider, useTheme } from "./context/theme"
 import { Home } from "./routes/home"
 import { Session } from "./routes/session"
+import { IcAgent } from "./routes/ic-agent"
 import { PromptHistoryProvider } from "./component/prompt/history"
 import { FrecencyProvider } from "./component/prompt/frecency"
 import { PromptStashProvider } from "./component/prompt/stash"
@@ -264,7 +265,11 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
                     >
                       <TuiStartupProvider
                         value={{
-                          initialRoute: process.env.OPENCODE_ROUTE ? JSON.parse(process.env.OPENCODE_ROUTE) : undefined,
+                          initialRoute: process.env.OPENCODE_ROUTE
+                            ? JSON.parse(process.env.OPENCODE_ROUTE)
+                            : process.env.OPENCODE_IC_AGENT_TUI
+                              ? { type: "ic-agent" }
+                              : undefined,
                           skipInitialLoading: Boolean(process.env.OPENCODE_FAST_BOOT),
                         }}
                       >
@@ -456,6 +461,11 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
       return
     }
 
+    if (route.data.type === "ic-agent") {
+      renderer.setTerminalTitle("Motryx")
+      return
+    }
+
     if (route.data.type === "plugin") {
       renderer.setTerminalTitle(`OC | ${route.data.id}`)
     }
@@ -475,7 +485,7 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
           })
         local.model.set({ providerID, modelID }, { recent: true })
       }
-      if (args.sessionID && !args.fork) {
+      if (args.sessionID && !args.fork && route.data.type !== "ic-agent") {
         route.navigate({
           type: "session",
           sessionID: args.sessionID,
@@ -1084,6 +1094,9 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
               <Show when={route.data.type === "session" ? route.data.sessionID : undefined} keyed>
                 {(_) => <Session />}
               </Show>
+            </Match>
+            <Match when={route.data.type === "ic-agent"}>
+              <IcAgent />
             </Match>
           </Switch>
           {plugin()}

@@ -1348,6 +1348,292 @@ export function Session() {
   )
 }
 
+export function SessionSurface(props: {
+  sessionID?: string
+  width?: number
+  promptRight?: JSX.Element
+  empty?: JSX.Element
+}) {
+  const sync = useSync()
+  const sdk = useSDK()
+  const project = useProject()
+  const editor = useEditorContext()
+  const dimensions = useTerminalDimensions()
+  const tuiConfig = useTuiConfig()
+  const kv = useKV()
+  const { theme } = useTheme()
+  const renderer = useRenderer()
+  const dialog = useDialog()
+  const promptRef = usePromptRef()
+  const pluginRuntime = usePluginRuntime()
+  const local = useLocal()
+
+  const session = createMemo(() => {
+    const sessionID = props.sessionID
+    if (!sessionID) return
+    return sync.session.get(sessionID)
+  })
+  const messages = createMemo(() => {
+    const sessionID = props.sessionID
+    if (!sessionID) return []
+    return sync.data.message[sessionID] ?? []
+  })
+  const children = createMemo(() => {
+    const current = session()
+    if (!current) return []
+    const parentID = current.parentID ?? current.id
+    return sync.data.session
+      .filter((x) => x.parentID === parentID || x.id === parentID)
+      .toSorted((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+  })
+  const permissions = createMemo(() => {
+    if (session()?.parentID) return []
+    return children().flatMap((x) => sync.data.permission[x.id] ?? [])
+  })
+  const questions = createMemo(() => {
+    if (session()?.parentID) return []
+    return children().flatMap((x) => sync.data.question[x.id] ?? [])
+  })
+  const visible = createMemo(() => !session()?.parentID && permissions().length === 0 && questions().length === 0)
+  const disabled = createMemo(() => permissions().length > 0 || questions().length > 0)
+  const pending = createMemo(() => {
+    const completed = messages().findLast((x) => x.role === "assistant" && x.time.completed)?.id
+    return messages().findLast((x) => x.role === "assistant" && !x.time.completed && (!completed || x.id > completed))
+      ?.id
+  })
+  const lastAssistant = createMemo(() => messages().findLast((x) => x.role === "assistant"))
+  const foregroundTasks = createMemo(() =>
+    messages().flatMap((message) =>
+      (sync.data.part[message.id] ?? []).filter(
+        (part): part is ToolPart =>
+          part.type === "tool" &&
+          part.tool === "task" &&
+          part.state.status === "running" &&
+          part.state.metadata?.background !== true,
+      ),
+    ),
+  )
+  const userMessageIDs = createMemo(
+    () =>
+      new Set(
+        messages()
+          .filter((message) => message.role === "user")
+          .map((message) => message.id),
+      ),
+  )
+  const [conceal] = createSignal(true)
+  const thinking = useThinkingMode()
+  const thinkingMode = thinking.mode
+  const showThinking = createMemo(() => true)
+  const [timestamps] = kv.signal<"hide" | "show">("timestamps", "hide")
+  const [showDetails] = kv.signal("tool_details_visibility", true)
+  const [showScrollbar] = kv.signal("scrollbar_visible", false)
+  const [diffWrapMode] = kv.signal<"word" | "none">("diff_wrap_mode", "word")
+  const [showGenericToolOutput] = kv.signal("generic_tool_output_visibility", false)
+  const showTimestamps = createMemo(() => timestamps() === "show")
+  const providers = createMemo(() => Model.index(sync.data.provider))
+  const contentWidth = createMemo(() => Math.max(20, props.width ?? dimensions().width - 4))
+  const scrollAcceleration = createMemo(() => getScrollAcceleration(tuiConfig))
+  const [loading, setLoading] = createSignal(false)
+  const [error, setError] = createSignal("")
+
+  let scroll: ScrollBoxRenderable | undefined
+  let prompt: PromptRef | undefined
+  const bind = (r: PromptRef | undefined) => {
+    prompt = r
+    promptRef.set(r)
+  }
+
+  function toBottom() {
+    setTimeout(() => {
+      if (!scroll || scroll.isDestroyed) return
+      scroll.scrollTo(scroll.scrollHeight)
+    }, 50)
+  }
+
+  createEffect(
+    on(
+      () => props.sessionID,
+      (sessionID) => {
+        if (!sessionID) {
+          setLoading(false)
+          setError("")
+          return
+        }
+        setLoading(true)
+        setError("")
+        void (async () => {
+          const previousWorkspace = untrack(() => project.workspace.current())
+          const result = await sdk.client.session.get({ sessionID }, { throwOnError: true })
+          if (!result.data) throw new Error(`Session not found: ${sessionID}`)
+          if (result.data.workspaceID !== previousWorkspace) {
+            project.workspace.set(result.data.workspaceID)
+            try {
+              await sync.bootstrap({ fatal: false })
+            } catch {}
+          }
+          editor.reconnect(result.data.directory)
+          await sync.session.sync(sessionID)
+          toBottom()
+        })()
+          .then(() => {
+            setLoading(false)
+          })
+          .catch((error) => {
+            setLoading(false)
+            setError(errorMessage(error))
+          })
+      },
+      { defer: false },
+    ),
+  )
+
+  createEffect(on(() => props.sessionID, toBottom))
+
+  return (
+    <PathFormatterProvider path={session()?.directory}>
+      <context.Provider
+        value={{
+          get width() {
+            return contentWidth()
+          },
+          get sessionID() {
+            return props.sessionID ?? ""
+          },
+          conceal,
+          thinkingMode,
+          showThinking,
+          showTimestamps,
+          showDetails,
+          showGenericToolOutput,
+          userMessageIDs,
+          diffWrapMode,
+          providers,
+          sync,
+          tui: tuiConfig,
+        }}
+      >
+        <box flexGrow={1} minHeight={0} flexDirection="column" gap={1}>
+          <Show
+            when={props.sessionID}
+            fallback={props.empty ?? <text fg={theme.textMuted}>No focused session.</text>}
+          >
+            <Show
+              when={!error()}
+              fallback={
+                <box paddingTop={1}>
+                  <text fg={theme.error}>{error()}</text>
+                </box>
+              }
+            >
+              <Show
+                when={session()}
+                fallback={
+                  <box paddingTop={1}>
+                    <text fg={theme.textMuted}>{loading() ? "Loading focused session..." : "Session not loaded yet."}</text>
+                  </box>
+                }
+              >
+                <scrollbox
+                  ref={(r) => (scroll = r)}
+                  viewportOptions={{
+                    paddingRight: showScrollbar() ? 1 : 0,
+                  }}
+                  verticalScrollbarOptions={{
+                    paddingLeft: 1,
+                    visible: showScrollbar(),
+                    trackOptions: {
+                      backgroundColor: theme.backgroundElement,
+                      foregroundColor: theme.border,
+                    },
+                  }}
+                  stickyScroll={true}
+                  stickyStart="bottom"
+                  flexGrow={1}
+                  minHeight={0}
+                  scrollAcceleration={scrollAcceleration()}
+                >
+                  <box height={1} />
+                  <For each={messages()}>
+                    {(message, index) => (
+                      <Switch>
+                        <Match when={message.role === "user"}>
+                          <UserMessage
+                            index={index()}
+                            onMouseUp={() => {
+                              if (renderer.getSelection()?.getSelectedText()) return
+                              const sessionID = props.sessionID
+                              if (!sessionID) return
+                              dialog.replace(() => (
+                                <DialogMessage
+                                  messageID={message.id}
+                                  sessionID={sessionID}
+                                  setPrompt={(promptInfo) => prompt?.set(promptInfo)}
+                                />
+                              ))
+                            }}
+                            message={message as UserMessage}
+                            parts={sync.data.part[message.id] ?? []}
+                            pending={pending()}
+                          />
+                        </Match>
+                        <Match when={message.role === "assistant"}>
+                          <AssistantMessage
+                            last={lastAssistant()?.id === message.id}
+                            message={message as AssistantMessage}
+                            parts={sync.data.part[message.id] ?? []}
+                          />
+                        </Match>
+                      </Switch>
+                    )}
+                  </For>
+                </scrollbox>
+                <box flexShrink={0}>
+                  <Show when={permissions().length > 0}>
+                    <PermissionPrompt
+                      request={permissions()[0]}
+                      directory={sync.session.get(permissions()[0].sessionID)?.directory}
+                    />
+                  </Show>
+                  <Show when={permissions().length === 0 && questions().length > 0}>
+                    <QuestionPrompt
+                      request={questions()[0]}
+                      directory={sync.session.get(questions()[0].sessionID)?.directory}
+                    />
+                  </Show>
+                  <Show when={session()?.parentID}>
+                    <SubagentFooter />
+                  </Show>
+                  <Show when={visible()}>
+                    <pluginRuntime.Slot
+                      name="session_prompt"
+                      mode="replace"
+                      session_id={props.sessionID!}
+                      visible={visible()}
+                      disabled={disabled()}
+                      on_submit={toBottom}
+                      ref={bind}
+                    >
+                      <Prompt
+                        visible={visible()}
+                        ref={bind}
+                        disabled={disabled()}
+                        onSubmit={toBottom}
+                        sessionID={props.sessionID}
+                        right={props.promptRight ?? <pluginRuntime.Slot name="session_prompt_right" session_id={props.sessionID!} />}
+                      />
+                    </pluginRuntime.Slot>
+                  </Show>
+                </box>
+              </Show>
+            </Show>
+          </Show>
+        </box>
+      </context.Provider>
+    </PathFormatterProvider>
+  )
+}
+
 const MIME_BADGE: Record<string, string> = {
   "text/plain": "txt",
   "image/png": "img",

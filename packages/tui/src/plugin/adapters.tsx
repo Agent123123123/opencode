@@ -65,6 +65,14 @@ function routeCurrent(route: ReturnType<typeof useRoute>): TuiPluginApi["route"]
       },
     }
   }
+  if (route.data.type === "ic-agent") {
+    return {
+      name: "ic-agent",
+      params: {
+        sessionID: route.data.sessionID,
+      },
+    }
+  }
 
   return {
     name: route.data.id,

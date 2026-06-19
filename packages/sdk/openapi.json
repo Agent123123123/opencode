@@ -5572,6 +5572,10 @@
               "schema": {
                 "type": "object",
                 "properties": {
+                  "id": {
+                    "type": "string",
+                    "pattern": "^ses"
+                  },
                   "parentID": {
                     "type": "string",
                     "pattern": "^ses"

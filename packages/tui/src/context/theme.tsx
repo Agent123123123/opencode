@@ -118,7 +118,9 @@ export const { use: useTheme, provider: ThemeProvider } = createSimpleContext({
         if (!lock && pick(kv.get("theme_mode")) !== undefined) kv.set("theme_mode", undefined)
         draft.mode = mode
         draft.lock = lock
-        const active = config.theme ?? kv.get("theme", "opencode")
+        const active = config.theme
+          ?? process.env.OPENCODE_IC_AGENT_THEME
+          ?? (process.env.OPENCODE_IC_AGENT_TUI ? "motryx" : kv.get("theme", "opencode"))
         draft.active = typeof active === "string" ? active : "opencode"
         draft.ready = false
       }),
