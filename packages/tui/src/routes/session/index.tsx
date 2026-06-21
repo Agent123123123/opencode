@@ -1352,6 +1352,7 @@ export function SessionSurface(props: {
   sessionID?: string
   width?: number
   promptRight?: JSX.Element
+  showScrollbar?: boolean
   empty?: JSX.Element
 }) {
   const sync = useSync()
@@ -1428,6 +1429,7 @@ export function SessionSurface(props: {
   const [timestamps] = kv.signal<"hide" | "show">("timestamps", "hide")
   const [showDetails] = kv.signal("tool_details_visibility", true)
   const [showScrollbar] = kv.signal("scrollbar_visible", false)
+  const scrollbarVisible = createMemo(() => props.showScrollbar ?? showScrollbar())
   const [diffWrapMode] = kv.signal<"word" | "none">("diff_wrap_mode", "word")
   const [showGenericToolOutput] = kv.signal("generic_tool_output_visibility", false)
   const showTimestamps = createMemo(() => timestamps() === "show")
@@ -1450,6 +1452,86 @@ export function SessionSurface(props: {
       scroll.scrollTo(scroll.scrollHeight)
     }, 50)
   }
+
+  const scrollCommands = createMemo(() => [
+    {
+      namespace: "palette",
+      name: "session.page.up",
+      title: "Page up",
+      category: "Session",
+      hidden: true,
+      run: () => scroll?.scrollBy(-(scroll.height / 2)),
+    },
+    {
+      namespace: "palette",
+      name: "session.page.down",
+      title: "Page down",
+      category: "Session",
+      hidden: true,
+      run: () => scroll?.scrollBy(scroll.height / 2),
+    },
+    {
+      namespace: "palette",
+      name: "session.line.up",
+      title: "Line up",
+      category: "Session",
+      hidden: true,
+      run: () => scroll?.scrollBy(-1),
+    },
+    {
+      namespace: "palette",
+      name: "session.line.down",
+      title: "Line down",
+      category: "Session",
+      hidden: true,
+      run: () => scroll?.scrollBy(1),
+    },
+    {
+      namespace: "palette",
+      name: "session.half.page.up",
+      title: "Half page up",
+      category: "Session",
+      hidden: true,
+      run: () => scroll?.scrollBy(-(scroll.height / 4)),
+    },
+    {
+      namespace: "palette",
+      name: "session.half.page.down",
+      title: "Half page down",
+      category: "Session",
+      hidden: true,
+      run: () => scroll?.scrollBy(scroll.height / 4),
+    },
+    {
+      namespace: "palette",
+      name: "session.first",
+      title: "First message",
+      category: "Session",
+      hidden: true,
+      run: () => scroll?.scrollTo(0),
+    },
+    {
+      namespace: "palette",
+      name: "session.last",
+      title: "Last message",
+      category: "Session",
+      hidden: true,
+      run: () => scroll?.scrollTo(scroll.scrollHeight),
+    },
+  ])
+
+  useBindings(() => ({
+    commands: scrollCommands(),
+  }))
+
+  useBindings(() => ({
+    bindings: tuiConfig.keybinds.gather("session.global", sessionGlobalBindingCommands),
+  }))
+
+  useBindings(() => ({
+    enabled: () => renderer.currentFocusedEditor === null,
+    bindings: tuiConfig.keybinds.gather("session.global.unfocused", sessionGlobalUnfocusedBindingCommands),
+  }))
 
   createEffect(
     on(
@@ -1537,11 +1619,11 @@ export function SessionSurface(props: {
                 <scrollbox
                   ref={(r) => (scroll = r)}
                   viewportOptions={{
-                    paddingRight: showScrollbar() ? 1 : 0,
+                    paddingRight: scrollbarVisible() ? 1 : 0,
                   }}
                   verticalScrollbarOptions={{
                     paddingLeft: 1,
-                    visible: showScrollbar(),
+                    visible: scrollbarVisible(),
                     trackOptions: {
                       backgroundColor: theme.backgroundElement,
                       foregroundColor: theme.border,

@@ -221,6 +221,7 @@ export function projectIcTui(input: {
   selectedLaneID?: string
   selectedLaneRole?: IcLaneRole
   selectedArtifactID?: string
+  debugView?: boolean
   workflow?: IcWorkflowSnapshot
 }): IcTuiViewModel {
   const primarySessions = input.sessions
@@ -230,13 +231,19 @@ export function projectIcTui(input: {
   const hasWorkflowState = Boolean(input.workflow?.workflow)
     || Boolean(input.workflow?.lanes.length)
     || Boolean(input.workflow?.agents.length)
-  const requestedLane = input.workflow?.lanes.find((lane) => lane.id === input.selectedLaneID)
+  const explicitLane = input.workflow?.lanes.find((lane) => lane.id === input.selectedLaneID)
+  const debugLaneFocus = input.debugView && input.selectedSessionID
+    ? findLaneRoleForSession(input.workflow, input.selectedSessionID)
+    : undefined
+  const requestedLane = explicitLane ?? debugLaneFocus?.lane
+  const requestedLaneRole = explicitLane ? input.selectedLaneRole : debugLaneFocus?.role
   const requestedArtifact = input.workflow?.artifacts.find((artifact) => artifact.id === input.selectedArtifactID)
   const resolvedSessionID = resolveSelectedSessionID({
     requestedSessionID: input.selectedSessionID,
     sessionMode: input.sessionMode,
     workflow: input.workflow,
-    sessions: primarySessions,
+    sessions: allSessions,
+    debugView: input.debugView,
   })
   const baseSummaries = summarizeSessions({
     sessions: allSessions,
@@ -257,7 +264,7 @@ export function projectIcTui(input: {
       workflow: input.workflow,
       statuses: input.statuses,
       selected: lane.id === requestedLane?.id,
-      focusedRole: undefined,
+      focusedRole: input.debugView ? requestedLaneRole : undefined,
     }),
   )
   const summaries = selectedSessionID === resolvedSessionID
@@ -296,7 +303,7 @@ export function projectIcTui(input: {
   return {
     surfaceLevel,
     focus: requestedLane
-      ? focusForLane(requestedLane, selectedSessionID)
+      ? focusForLane(requestedLane, selectedSessionID, input.debugView ? requestedLaneRole : undefined)
       : selectedSession
         ? focusForSession(selectedSession)
         : selectedWorkflowAgent
@@ -716,11 +723,15 @@ function resolveSelectedSessionID(input: {
   sessionMode?: IcSessionMode
   workflow?: IcWorkflowSnapshot
   sessions: Session[]
+  debugView?: boolean
 }) {
   const hasWorkflowState = Boolean(input.workflow?.workflow)
     || Boolean(input.workflow?.lanes.length)
     || Boolean(input.workflow?.agents.length)
   if (hasWorkflowState) {
+    if (input.debugView && input.requestedSessionID && isKnownDebugSession(input.requestedSessionID, input.sessions, input.workflow)) {
+      return input.requestedSessionID
+    }
     return findOrchestratorAgent(input.workflow)?.sessionID
       || findOrchestrator(input.sessions)?.id
       || ""
@@ -728,11 +739,26 @@ function resolveSelectedSessionID(input: {
   if (input.sessionMode === "new" && !input.requestedSessionID) return ""
   if (input.requestedSessionID) {
     const requested = input.sessions.find((session) => session.id === input.requestedSessionID)
+    if (input.debugView && requested) return input.requestedSessionID
     if (!requested || roleFromSession(requested) === "orchestrator") return input.requestedSessionID
   }
   return findOrchestratorAgent(input.workflow)?.sessionID
     || findOrchestrator(input.sessions)?.id
     || ""
+}
+
+function isKnownDebugSession(sessionID: string, sessions: Session[], workflow?: IcWorkflowSnapshot) {
+  return sessions.some((session) => session.id === sessionID)
+    || Boolean(workflow?.agents.some((agent) => agent.sessionID === sessionID))
+    || Boolean(findLaneRoleForSession(workflow, sessionID))
+}
+
+function findLaneRoleForSession(workflow: IcWorkflowSnapshot | undefined, sessionID: string) {
+  for (const lane of workflow?.lanes ?? []) {
+    if (lane.coordinatorSessionID === sessionID) return { lane, role: "coordinator" as const }
+    if (lane.checkerSessionID === sessionID) return { lane, role: "checker" as const }
+  }
+  return undefined
 }
 
 function summarizeSession(
@@ -768,14 +794,14 @@ function focusForSession(session: Session): IcFocus {
   }
 }
 
-function focusForLane(lane: IcWorkflowSnapshot["lanes"][number], sessionID: string): IcFocus {
+function focusForLane(lane: IcWorkflowSnapshot["lanes"][number], sessionID: string, laneRole: IcLaneRole = "orchestrator"): IcFocus {
   return {
     type: "lane",
     laneID: lane.id,
     name: lane.name,
     status: lane.status,
     sessionID: sessionID || undefined,
-    laneRole: "orchestrator",
+    laneRole,
   }
 }
 

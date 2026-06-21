@@ -412,6 +412,99 @@ test("switches workflow snapshot when the selected Motryx orchestrator changes",
   }
 })
 
+test("uses project context instead of env resume session when scanning latest Motryx DB", async () => {
+  const previousResume = process.env.MOTRYX_RESUME_SESSION
+  const previousOrchestrator = process.env.MOTRYX_ORCHESTRATOR_SESSION_ID
+  const root = await mkdtemp(path.join(os.tmpdir(), "ic-agent-tui-"))
+  try {
+    const project = path.join(root, "project")
+    const orchDb = path.join(project, ".motryx", "db", "orchestrators", "ses_orch", "ic-agent.db")
+    createTinyWorkflowDb(orchDb, "wf_orch")
+    process.env.MOTRYX_RESUME_SESSION = "ses_coord_internal"
+    delete process.env.MOTRYX_ORCHESTRATOR_SESSION_ID
+
+    const snapshot = await readIcWorkflowSnapshot(project, {
+      projectContext: {
+        product: "Motryx",
+        projectDir: project,
+        dataRoot: path.join(project, ".motryx", "db"),
+        channelDbPath: path.join(project, ".motryx", "db", "channel.db"),
+        motryxSessionDbPath: path.join(project, ".motryx", "db", "opencode", "motryx.db"),
+        bindingStatus: "none",
+      },
+    })
+
+    expect(snapshot.stateDb).toBe(orchDb)
+    expect(snapshot.stateDbSource).toMatchObject({
+      kind: "orchestrator-latest",
+      legacy: false,
+      productTruth: true,
+    })
+    expect(snapshot.workflow?.id).toBe("wf_orch")
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+    restoreEnv("MOTRYX_RESUME_SESSION", previousResume)
+    restoreEnv("MOTRYX_ORCHESTRATOR_SESSION_ID", previousOrchestrator)
+  }
+})
+
+test("recovers the owning orchestrator DB when a binding points at an empty internal agent DB", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "ic-agent-tui-"))
+  try {
+    const project = path.join(root, "project")
+    const dataRoot = path.join(project, ".motryx", "db")
+    const ownerDb = path.join(dataRoot, "orchestrators", "ses_orch", "ic-agent.db")
+    const internalDb = path.join(dataRoot, "orchestrators", "ses_coord", "ic-agent.db")
+    createTinyWorkflowDb(ownerDb, "wf_owner")
+    mkdirSync(path.dirname(internalDb), { recursive: true })
+    new Database(internalDb).close()
+
+    const owner = new Database(ownerDb)
+    try {
+      owner.exec(`
+        create table agent_instances (
+          instance_id text,
+          role text,
+          session_id text,
+          orchestrator_session_id text,
+          status text
+        );
+        insert into agent_instances values ('inst_orch', 'orchestrator', 'ses_orch', 'ses_orch', 'ALIVE');
+        insert into agent_instances values ('inst_coord', 'coordinator', 'ses_coord', 'ses_orch', 'ALIVE');
+      `)
+    } finally {
+      owner.close()
+    }
+
+    const snapshot = await readIcWorkflowSnapshot(project, {
+      projectContext: {
+        product: "Motryx",
+        projectDir: project,
+        dataRoot,
+        channelDbPath: path.join(dataRoot, "channel.db"),
+        motryxSessionDbPath: path.join(dataRoot, "opencode", "motryx.db"),
+        currentOrchestratorSessionID: "ses_coord",
+        currentIcAgentDbPath: internalDb,
+        bindingStatus: "bound",
+      },
+    })
+
+    expect(snapshot.stateDb).toBe(ownerDb)
+    expect(snapshot.stateDbSource).toMatchObject({
+      kind: "internal-agent-owner",
+      legacy: false,
+      productTruth: true,
+    })
+    expect(snapshot.workflow?.id).toBe("wf_owner")
+    expect(snapshot.agents.map((agent) => [agent.role, agent.sessionID])).toEqual([
+      ["orchestrator", "ses_orch"],
+      ["coordinator", "ses_coord"],
+    ])
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
 test("does not scan legacy workflow DBs when current Motryx context has no binding", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "ic-agent-tui-"))
   try {

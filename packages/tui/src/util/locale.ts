@@ -58,24 +58,74 @@ export function duration(input: number) {
   return `${days}d ${hours}h`
 }
 
+const ellipsis = "…"
+const ellipsisWidth = displayWidth(ellipsis)
+const graphemeSegmenter =
+  typeof Intl !== "undefined" && "Segmenter" in Intl
+    ? new Intl.Segmenter(undefined, { granularity: "grapheme" })
+    : undefined
+
+export function displayWidth(str: string): number {
+  return Bun.stringWidth(str)
+}
+
+function graphemes(str: string): string[] {
+  if (!graphemeSegmenter) return Array.from(str)
+  return Array.from(graphemeSegmenter.segment(str), (part) => part.segment)
+}
+
+function takeStartByDisplayWidth(str: string, maxWidth: number): string {
+  if (maxWidth <= 0) return ""
+  let width = 0
+  let result = ""
+  for (const segment of graphemes(str)) {
+    const nextWidth = width + displayWidth(segment)
+    if (nextWidth > maxWidth) break
+    result += segment
+    width = nextWidth
+  }
+  return result
+}
+
+function takeEndByDisplayWidth(str: string, maxWidth: number): string {
+  if (maxWidth <= 0) return ""
+  let width = 0
+  const result: string[] = []
+  const segments = graphemes(str)
+  for (let index = segments.length - 1; index >= 0; index--) {
+    const segment = segments[index]!
+    const nextWidth = width + displayWidth(segment)
+    if (nextWidth > maxWidth) break
+    result.unshift(segment)
+    width = nextWidth
+  }
+  return result.join("")
+}
+
 export function truncate(str: string, len: number): string {
-  if (str.length <= len) return str
-  return str.slice(0, len - 1) + "…"
+  if (displayWidth(str) <= len) return str
+  if (len <= 0) return ""
+  if (len < ellipsisWidth) return takeStartByDisplayWidth(str, len)
+  return takeStartByDisplayWidth(str, len - ellipsisWidth) + ellipsis
 }
 
 export function truncateLeft(str: string, len: number): string {
-  if (str.length <= len) return str
-  return "…" + str.slice(-(len - 1))
+  if (displayWidth(str) <= len) return str
+  if (len <= 0) return ""
+  if (len < ellipsisWidth) return takeEndByDisplayWidth(str, len)
+  return ellipsis + takeEndByDisplayWidth(str, len - ellipsisWidth)
 }
 
 export function truncateMiddle(str: string, maxLength: number = 35): string {
-  if (str.length <= maxLength) return str
+  if (displayWidth(str) <= maxLength) return str
+  if (maxLength <= 0) return ""
+  if (maxLength < ellipsisWidth) return takeStartByDisplayWidth(str, maxLength)
 
-  const ellipsis = "…"
-  const keepStart = Math.ceil((maxLength - ellipsis.length) / 2)
-  const keepEnd = Math.floor((maxLength - ellipsis.length) / 2)
+  const keepWidth = maxLength - ellipsisWidth
+  const keepStart = Math.ceil(keepWidth / 2)
+  const keepEnd = Math.floor(keepWidth / 2)
 
-  return str.slice(0, keepStart) + ellipsis + str.slice(-keepEnd)
+  return takeStartByDisplayWidth(str, keepStart) + ellipsis + takeEndByDisplayWidth(str, keepEnd)
 }
 
 export function pluralize(count: number, singular: string, plural: string): string {

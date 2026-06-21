@@ -774,6 +774,366 @@ test("resume session mode refuses known internal sessions as the product entry",
   expect(model.sessions.find((item) => item.id === "ses_orchestrator")?.selected).toBe(true)
 })
 
+test("debug view can focus an internal lane session without changing product defaults", () => {
+  const sessions = [
+    session("ses_orch", "orchestrator", 100),
+    session("ses_coord", "coordinator coverage", 200),
+    session("ses_checker", "checker coverage", 300),
+  ]
+  const workflow = {
+    stateDb: "/run/.ic-agent/state.db",
+    workflow: {
+      id: "wf_1",
+      status: "active",
+      goal: "close coverage",
+    },
+    lanes: [{
+      id: "lane_1",
+      name: "coverage",
+      status: "CHECKING",
+      coordinatorSessionID: "ses_coord",
+      checkerSessionID: "ses_checker",
+    }],
+    agents: [{
+      instanceID: "inst_orch",
+      role: "orchestrator",
+      sessionID: "ses_orch",
+      status: "ALIVE",
+      laneIDs: [],
+    }, {
+      instanceID: "inst_coord",
+      role: "coordinator",
+      sessionID: "ses_coord",
+      status: "ALIVE",
+      laneIDs: ["lane_1"],
+    }, {
+      instanceID: "inst_checker",
+      role: "checker",
+      sessionID: "ses_checker",
+      status: "BUSY",
+      laneIDs: ["lane_1"],
+    }],
+    artifacts: [],
+    diagnostics: [],
+  } satisfies NonNullable<Parameters<typeof projectIcTui>[0]["workflow"]>
+
+  const productModel = projectIcTui({
+    sessions,
+    messages: {},
+    parts: {},
+    statuses: {
+      ses_orch: { type: "idle" },
+      ses_coord: { type: "idle" },
+      ses_checker: { type: "busy" },
+    },
+    selectedSessionID: "ses_checker",
+    selectedLaneID: "lane_1",
+    selectedLaneRole: "checker",
+    workflow,
+  })
+
+  expect(productModel.focusSessionID).toBe("ses_orch")
+  expect(productModel.focus).toMatchObject({
+    type: "lane",
+    laneRole: "orchestrator",
+    sessionID: "ses_orch",
+  })
+  expect(productModel.lanes[0]?.checker.selected).toBe(false)
+
+  const debugModel = projectIcTui({
+    sessions,
+    messages: {},
+    parts: {},
+    statuses: {
+      ses_orch: { type: "idle" },
+      ses_coord: { type: "idle" },
+      ses_checker: { type: "busy" },
+    },
+    selectedSessionID: "ses_checker",
+    selectedLaneID: "lane_1",
+    selectedLaneRole: "checker",
+    debugView: true,
+    workflow,
+  })
+
+  expect(debugModel.focusSessionID).toBe("ses_checker")
+  expect(debugModel.focus).toMatchObject({
+    type: "lane",
+    laneRole: "checker",
+    sessionID: "ses_checker",
+  })
+  expect(debugModel.sessions.find((item) => item.id === "ses_checker")?.selected).toBe(true)
+  expect(debugModel.agents.find((item) => item.sessionID === "ses_checker")?.selected).toBe(true)
+  expect(debugModel.lanes[0]).toMatchObject({
+    focusedRole: "checker",
+    checker: {
+      selected: true,
+      status: "busy",
+    },
+  })
+
+  const debugCommands = icCommandSpecs(debugModel, { debugView: true })
+  expect(debugCommands.map((command) => command.slashName)).toEqual([
+    "orchestrator",
+    "sessions",
+    "refresh",
+    "workflow",
+    "lane",
+    "coordinator",
+    "checker",
+  ])
+  expect(debugCommands.find((command) => command.id === "ic.orchestrator.focus")?.intent).toEqual({
+    type: "focus-session",
+    sessionID: "ses_orch",
+  })
+  expect(debugCommands.find((command) => command.id === "ic.debug.coordinator")?.intent).toEqual({
+    type: "focus-lane-role",
+    laneID: "lane_1",
+    role: "coordinator",
+  })
+  expect(debugCommands.find((command) => command.id === "ic.debug.checker")?.intent).toEqual({
+    type: "focus-lane-role",
+    laneID: "lane_1",
+    role: "checker",
+  })
+})
+
+test("debug view can focus a workflow agent before its OpenCode session is hydrated", () => {
+  const model = projectIcTui({
+    sessions: [session("ses_orch", "orchestrator", 100)],
+    messages: {},
+    parts: {},
+    statuses: {
+      ses_orch: { type: "idle" },
+      ses_coord: { type: "idle" },
+    },
+    selectedSessionID: "ses_coord",
+    selectedLaneID: "lane_1",
+    selectedLaneRole: "coordinator",
+    debugView: true,
+    workflow: {
+      stateDb: "/run/.motryx/db/orchestrators/ses_orch/ic-agent.db",
+      workflow: {
+        id: "wf_1",
+        status: "active",
+        goal: "close coverage",
+      },
+      lanes: [{
+        id: "lane_1",
+        name: "coverage",
+        status: "WORKING",
+        coordinatorSessionID: "ses_coord",
+      }],
+      agents: [{
+        instanceID: "inst_orch",
+        role: "orchestrator",
+        sessionID: "ses_orch",
+        status: "ALIVE",
+        laneIDs: [],
+      }, {
+        instanceID: "inst_coord",
+        role: "coordinator",
+        sessionID: "ses_coord",
+        status: "ALIVE",
+        laneIDs: ["lane_1"],
+      }],
+      artifacts: [],
+      diagnostics: [],
+    },
+  })
+
+  expect(model.focusSessionID).toBe("ses_coord")
+  expect(model.focus).toMatchObject({
+    type: "lane",
+    laneRole: "coordinator",
+    sessionID: "ses_coord",
+  })
+  expect(model.sessions.find((item) => item.id === "ses_coord")).toMatchObject({
+    role: "coordinator",
+    selected: true,
+  })
+  expect(model.agents.find((item) => item.sessionID === "ses_coord")?.selected).toBe(true)
+  expect(icCommandSpecs(model, { debugView: true }).find((command) => command.slashName === "orchestrator")?.intent).toEqual({
+    type: "focus-session",
+    sessionID: "ses_orch",
+  })
+  expect(icCommandSpecs(model, { debugView: true }).find((command) => command.slashName === "coordinator")).toMatchObject({
+    enabled: true,
+    intent: {
+      type: "focus-lane-role",
+      laneID: "lane_1",
+      role: "coordinator",
+    },
+  })
+  expect(icCommandSpecs(model, { debugView: true }).find((command) => command.slashName === "checker")).toMatchObject({
+    enabled: false,
+    intent: {
+      type: "sidecard",
+      mode: "debug",
+    },
+  })
+})
+
+test("debug view infers the focused lane role from a lane-bound internal session", () => {
+  const model = projectIcTui({
+    sessions: [session("ses_orch", "orchestrator", 100)],
+    messages: {},
+    parts: {},
+    statuses: {
+      ses_orch: { type: "idle" },
+      ses_coord: { type: "idle" },
+    },
+    selectedSessionID: "ses_coord",
+    debugView: true,
+    workflow: {
+      stateDb: "/run/.motryx/db/orchestrators/ses_orch/ic-agent.db",
+      workflow: {
+        id: "wf_1",
+        status: "active",
+        goal: "close coverage",
+      },
+      lanes: [{
+        id: "lane_1",
+        name: "coverage",
+        status: "WORKING",
+        coordinatorSessionID: "ses_coord",
+      }],
+      agents: [{
+        instanceID: "inst_orch",
+        role: "orchestrator",
+        sessionID: "ses_orch",
+        status: "ALIVE",
+        laneIDs: [],
+      }],
+      artifacts: [],
+      diagnostics: [],
+    },
+  })
+
+  expect(model.focusSessionID).toBe("ses_coord")
+  expect(model.focus).toMatchObject({
+    type: "lane",
+    laneRole: "coordinator",
+    sessionID: "ses_coord",
+    laneID: "lane_1",
+  })
+  expect(model.lanes[0]).toMatchObject({
+    selected: true,
+    focusedRole: "coordinator",
+    coordinator: {
+      selected: true,
+      sessionID: "ses_coord",
+    },
+    checker: {
+      selected: false,
+    },
+  })
+  expect(icCommandSpecs(model, { debugView: true }).find((command) => command.slashName === "coordinator")).toMatchObject({
+    enabled: true,
+    intent: {
+      type: "focus-lane-role",
+      laneID: "lane_1",
+      role: "coordinator",
+    },
+  })
+  expect(icCommandSpecs(model, { debugView: true }).find((command) => command.slashName === "checker")).toMatchObject({
+    enabled: false,
+    intent: {
+      type: "sidecard",
+      mode: "debug",
+    },
+  })
+})
+
+test("debug view can return from an internal lane session to the owner orchestrator target", () => {
+  const workflow = {
+    stateDb: "/run/.motryx/db/orchestrators/ses_orch/ic-agent.db",
+    workflow: {
+      id: "wf_1",
+      status: "active",
+      goal: "close coverage",
+    },
+    lanes: [{
+      id: "lane_1",
+      name: "coverage",
+      status: "WORKING",
+      coordinatorSessionID: "ses_coord",
+      checkerSessionID: "ses_checker",
+    }],
+    agents: [{
+      instanceID: "inst_orch",
+      role: "orchestrator",
+      sessionID: "ses_orch",
+      status: "ALIVE",
+      laneIDs: [],
+    }, {
+      instanceID: "inst_coord",
+      role: "coordinator",
+      sessionID: "ses_coord",
+      status: "ALIVE",
+      laneIDs: ["lane_1"],
+    }, {
+      instanceID: "inst_checker",
+      role: "checker",
+      sessionID: "ses_checker",
+      status: "ALIVE",
+      laneIDs: ["lane_1"],
+    }],
+    artifacts: [],
+    diagnostics: [],
+  } satisfies NonNullable<Parameters<typeof projectIcTui>[0]["workflow"]>
+
+  const coordinatorModel = projectIcTui({
+    sessions: [session("ses_orch", "orchestrator", 100)],
+    messages: {},
+    parts: {},
+    statuses: {
+      ses_orch: { type: "idle" },
+      ses_coord: { type: "idle" },
+      ses_checker: { type: "idle" },
+    },
+    selectedSessionID: "ses_coord",
+    selectedLaneID: "lane_1",
+    selectedLaneRole: "coordinator",
+    debugView: true,
+    workflow,
+  })
+  expect(coordinatorModel.focusSessionID).toBe("ses_coord")
+  expect(coordinatorModel.focus).toMatchObject({
+    type: "lane",
+    laneRole: "coordinator",
+    sessionID: "ses_coord",
+  })
+  expect(coordinatorModel.lanes[0]?.coordinator.selected).toBe(true)
+
+  const orchestratorModel = projectIcTui({
+    sessions: [session("ses_orch", "orchestrator", 100)],
+    messages: {},
+    parts: {},
+    statuses: {
+      ses_orch: { type: "idle" },
+      ses_coord: { type: "idle" },
+      ses_checker: { type: "idle" },
+    },
+    selectedSessionID: "ses_orch",
+    selectedLaneID: "lane_1",
+    selectedLaneRole: undefined,
+    debugView: true,
+    workflow,
+  })
+
+  expect(orchestratorModel.focusSessionID).toBe("ses_orch")
+  expect(orchestratorModel.focus).toMatchObject({
+    type: "lane",
+    laneRole: "orchestrator",
+    sessionID: "ses_orch",
+  })
+  expect(orchestratorModel.lanes[0]?.selected).toBe(true)
+  expect(orchestratorModel.lanes[0]?.coordinator.selected).toBe(false)
+  expect(orchestratorModel.agents.find((agent) => agent.sessionID === "ses_orch")?.selected).toBe(true)
+  expect(orchestratorModel.agents.find((agent) => agent.sessionID === "ses_coord")?.selected).toBe(false)
+})
+
 test("continue mode does not use a known internal session as the fallback entry", () => {
   const model = projectIcTui({
     sessions: [session("ses_checker", "checker coverage lane", 300)],

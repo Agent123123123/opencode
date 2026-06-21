@@ -1,6 +1,6 @@
-import type { IcTuiViewModel } from "./projection"
+import type { IcLaneRole, IcTuiViewModel } from "./projection"
 
-export type IcSidecardMode = "workflow" | "detail"
+export type IcSidecardMode = "workflow" | "detail" | "debug"
 
 export type IcCommandID =
   | "ic.orchestrator.focus"
@@ -8,6 +8,8 @@ export type IcCommandID =
   | "ic.workflow.refresh"
   | "ic.workflow.focus"
   | "ic.lane.focus"
+  | "ic.debug.coordinator"
+  | "ic.debug.checker"
 
 export type IcCommandIntent =
   | { type: "start-orchestrator" }
@@ -15,6 +17,7 @@ export type IcCommandIntent =
   | { type: "refresh-workflow" }
   | { type: "sidecard"; mode: IcSidecardMode }
   | { type: "focus-lane"; laneID: string }
+  | { type: "focus-lane-role"; laneID: string; role: Exclude<IcLaneRole, "orchestrator"> }
   | { type: "focus-session"; sessionID: string }
 
 export type IcCommandSpec = {
@@ -28,22 +31,24 @@ export type IcCommandSpec = {
   intent: IcCommandIntent
 }
 
-export function icCommandSpecs(model: IcTuiViewModel): IcCommandSpec[] {
+export function icCommandSpecs(model: IcTuiViewModel, options?: { debugView?: boolean }): IcCommandSpec[] {
   const firstLane = model.lanes[0]
-  const firstSession = model.sessions.find((session) => session.selected) ?? model.sessions[0]
+  const orchestratorSession = findOrchestratorSession(model)
+  const debugCoordinatorLane = findDebugLaneForRole(model, "coordinator")
+  const debugCheckerLane = findDebugLaneForRole(model, "checker")
 
-  return [
+  const commands: IcCommandSpec[] = [
     {
       id: "ic.orchestrator.focus",
-      title: firstSession ? `Focus orchestrator ${firstSession.title}` : "Start orchestrator session",
-      description: firstSession
+      title: orchestratorSession ? `Focus orchestrator ${orchestratorSession.title}` : "Start orchestrator session",
+      description: orchestratorSession
         ? "Return to the primary Motryx orchestrator conversation."
         : "Create a new Motryx orchestrator conversation.",
       slashName: "orchestrator",
       slashAliases: ["orch"],
       category: "Motryx",
       enabled: true,
-      intent: firstSession ? { type: "focus-session", sessionID: firstSession.id } : { type: "start-orchestrator" },
+      intent: orchestratorSession ? { type: "focus-session", sessionID: orchestratorSession.id } : { type: "start-orchestrator" },
     },
     {
       id: "ic.orchestrator.sessions",
@@ -88,4 +93,60 @@ export function icCommandSpecs(model: IcTuiViewModel): IcCommandSpec[] {
       intent: firstLane ? { type: "focus-lane", laneID: firstLane.id } : { type: "sidecard", mode: "workflow" },
     },
   ]
+  if (options?.debugView) {
+    commands.push(
+      {
+        id: "ic.debug.coordinator",
+        title: debugCoordinatorLane ? `Debug coordinator ${debugCoordinatorLane.name}` : "Debug coordinator",
+        description: debugCoordinatorLane
+          ? "Focus the coordinator conversation for the selected Motryx lane."
+          : "No coordinator session is available for the current lane.",
+        slashName: "coordinator",
+        slashAliases: ["coord"],
+        category: "Motryx",
+        enabled: Boolean(debugCoordinatorLane?.coordinator.available),
+        intent: debugCoordinatorLane
+          ? { type: "focus-lane-role", laneID: debugCoordinatorLane.id, role: "coordinator" }
+          : { type: "sidecard", mode: "debug" },
+      },
+      {
+        id: "ic.debug.checker",
+        title: debugCheckerLane ? `Debug checker ${debugCheckerLane.name}` : "Debug checker",
+        description: debugCheckerLane
+          ? "Focus the checker conversation for the selected Motryx lane."
+          : "No checker session is available for the current lane.",
+        slashName: "checker",
+        slashAliases: ["check"],
+        category: "Motryx",
+        enabled: Boolean(debugCheckerLane?.checker.available),
+        intent: debugCheckerLane
+          ? { type: "focus-lane-role", laneID: debugCheckerLane.id, role: "checker" }
+          : { type: "sidecard", mode: "debug" },
+      },
+    )
+  }
+  return commands
+}
+
+function findOrchestratorSession(model: IcTuiViewModel) {
+  const orchestratorAgent = model.agents.find((agent) => agent.role === "orchestrator" && agent.sessionID)
+  if (orchestratorAgent) {
+    return model.sessions.find((session) => session.id === orchestratorAgent.sessionID)
+      ?? {
+        id: orchestratorAgent.sessionID,
+        title: orchestratorAgent.title,
+        role: "orchestrator",
+        status: orchestratorAgent.status,
+        updated: 0,
+        messageCount: 0,
+        selected: orchestratorAgent.selected,
+      }
+  }
+  return model.sessions.find((session) => session.role === "orchestrator")
+}
+
+function findDebugLaneForRole(model: IcTuiViewModel, role: Exclude<IcLaneRole, "orchestrator">) {
+  const entry = (lane: IcTuiViewModel["lanes"][number]) => role === "coordinator" ? lane.coordinator : lane.checker
+  return model.lanes.find((lane) => lane.selected && entry(lane).available)
+    ?? model.lanes.find((lane) => entry(lane).available)
 }

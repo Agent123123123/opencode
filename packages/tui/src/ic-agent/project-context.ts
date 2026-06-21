@@ -15,15 +15,19 @@ export type MotryxProjectContext = {
 
 export function resolveMotryxProjectContext(input: {
   projectDir?: string
+  orchestratorSessionID?: string
   selectedSessionID?: string
   env?: Record<string, string | undefined>
 } = {}): MotryxProjectContext {
   const env = input.env ?? process.env
   const projectDir = resolve(input.projectDir || env.MOTRYX_PROJECT_DIR || process.cwd())
   const paths = resolveMotryxRuntimePaths({ projectDir, env })
+  const explicitOrchestratorSessionID = input.orchestratorSessionID?.trim() || ""
   const selectedSessionID = input.selectedSessionID?.trim() || ""
   const envSessionID = (env.MOTRYX_ORCHESTRATOR_SESSION_ID || env.MOTRYX_RESUME_SESSION || "").trim()
-  const currentOrchestratorSessionID = selectedSessionID || (envSessionID.startsWith("@") ? "" : envSessionID)
+  const currentOrchestratorSessionID = explicitOrchestratorSessionID
+    || selectedSessionID
+    || (envSessionID.startsWith("@") ? "" : envSessionID)
   const explicitIcAgentDbPath = env.MOTRYX_IC_AGENT_DB_PATH || env.IC_AGENT_DB_PATH || ""
   const motryxSessionDbPath = resolveMotryxSessionDbPath({ env, dataRoot: paths.dataRoot })
 

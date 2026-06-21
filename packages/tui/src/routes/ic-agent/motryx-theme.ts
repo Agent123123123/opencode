@@ -10,6 +10,7 @@ export const motryx = {
   redDark: "#8f332d",
   gold: "#c8a760",
   green: "#4d8a56",
+  logoLight: "#eaddc3",
   logoGreen: "#0f3b2e",
   codeBg: "#161613",
   codeFg: "#d8ceb0",

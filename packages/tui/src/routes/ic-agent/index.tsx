@@ -5,15 +5,20 @@ import { useSync } from "../../context/sync"
 import { useSDK } from "../../context/sdk"
 import { useLocal } from "../../context/local"
 import { useTuiConfig } from "../../config"
+import { Locale } from "../../util/locale"
 import { getScrollAcceleration } from "../../util/scroll"
 import { Toast, useToast } from "../../ui/toast"
 import { SplitBorder } from "../../ui/border"
 import { useDialog } from "../../ui/dialog"
 import { DialogSelect, type DialogSelectOption } from "../../ui/dialog-select"
 import { laneBoardLayout } from "../../ic-agent/lane-board-layout"
-import { motryxLogoLines, motryxLogoVariant, type MotryxLogoSegment, type MotryxLogoSize } from "../../ic-agent/motryx-logo"
+import {
+  motryxWordmarkLines,
+  type MotryxLogoSegment,
+  type MotryxWordmarkSize,
+} from "../../ic-agent/motryx-logo"
 import { motryxReadinessFromEnv, type MotryxReadinessItem } from "../../ic-agent/readiness"
-import { motryxSessionModeFromEnv, shouldAutoStartOrchestrator } from "../../ic-agent/session-mode"
+import { motryxDebugViewFromEnv, motryxSessionModeFromEnv, shouldAutoStartOrchestrator } from "../../ic-agent/session-mode"
 import { readMotryxSessionHistory, type MotryxSessionHistoryItem } from "../../ic-agent/session-history"
 import { subscribeToWorkflowEvents, workflowEventsTokenFromEnv, workflowEventsURLFromEnv } from "../../ic-agent/workflow-events"
 import { resolveMotryxProjectContext } from "../../ic-agent/project-context"
@@ -25,6 +30,7 @@ import {
   projectIcTui,
   type IcArtifactSummary,
   type IcLaneBoardRow,
+  type IcLaneRole,
   type IcLaneSummary,
   type IcSessionSummary,
 } from "../../ic-agent/projection"
@@ -34,8 +40,6 @@ import { SessionSurface } from "../session"
 import { motryx, type MotryxPalette } from "./motryx-theme"
 
 const WORKFLOW_REFRESH_INTERVAL_MS = 2000
-const SIDECARD_MODES: IcSidecardMode[] = ["workflow", "detail"]
-
 export function IcAgent() {
   const renderer = useRenderer()
   const sync = useSync()
@@ -46,15 +50,20 @@ export function IcAgent() {
   const dialog = useDialog()
   const dimensions = useTerminalDimensions()
   const sessionMode = createMemo(() => motryxSessionModeFromEnv())
+  const debugView = createMemo(() => motryxDebugViewFromEnv())
+  const sidecardModes = createMemo<IcSidecardMode[]>(() => debugView() ? ["workflow", "detail", "debug"] : ["workflow", "detail"])
   const [selectedSessionID, setSelectedSessionID] = createSignal(process.env.MOTRYX_RESUME_SESSION || "")
   const [selectedLaneID, setSelectedLaneID] = createSignal("")
+  const [selectedLaneRole, setSelectedLaneRole] = createSignal<IcLaneRole | undefined>()
+  const [workflowOrchestratorSessionID, setWorkflowOrchestratorSessionID] = createSignal(process.env.MOTRYX_ORCHESTRATOR_SESSION_ID || "")
   const [sidecardMode, setSidecardMode] = createSignal<IcSidecardMode>("workflow")
   const [startingSession, setStartingSession] = createSignal(false)
   const [autoStartAttempted, setAutoStartAttempted] = createSignal(false)
   const workflowDirectory = createMemo(() => sync.path.directory || sync.path.worktree || "")
   const projectContext = createMemo(() => resolveMotryxProjectContext({
     projectDir: workflowDirectory(),
-    selectedSessionID: selectedSessionID(),
+    orchestratorSessionID: workflowOrchestratorSessionID(),
+    selectedSessionID: debugView() && selectedLaneRole() ? "" : selectedSessionID(),
   }))
   const workflowEventsURL = createMemo(() => workflowEventsURLFromEnv())
   const workflowEventsToken = createMemo(() => workflowEventsTokenFromEnv())
@@ -96,17 +105,34 @@ export function IcAgent() {
       selectedSessionID: selectedSessionID(),
       sessionMode: sessionMode(),
       selectedLaneID: selectedLaneID(),
-      selectedLaneRole: undefined,
+      selectedLaneRole: debugView() ? selectedLaneRole() : undefined,
       selectedArtifactID: "",
+      debugView: debugView(),
       workflow: workflow(),
     }),
   )
 
   const focusSessionID = createMemo(() => model().focusSessionID)
+  const conversationChrome = createMemo(() => conversationChromeForFocus(model(), debugView()))
+  const orchestratorSessionID = createMemo(() => findOrchestratorSessionID(model()))
+  createEffect(() => {
+    const sessionID = orchestratorSessionID()
+    if (sessionID && sessionID !== workflowOrchestratorSessionID()) setWorkflowOrchestratorSessionID(sessionID)
+  })
+  createEffect(() => {
+    if (!debugView()) return
+    if (selectedLaneRole()) return
+    const sessionID = selectedSessionID()
+    if (!sessionID || sessionID === orchestratorSessionID()) return
+    const laneRole = findLaneRoleForSession(model().lanes, sessionID)
+    if (!laneRole) return
+    setSelectedLaneID(laneRole.lane.id)
+    setSelectedLaneRole(laneRole.role)
+    setSidecardMode("debug")
+  })
   const compact = createMemo(() => dimensions().width < 100)
   const cockpitScrollAcceleration = createMemo(() => getScrollAcceleration(tuiConfig))
   const cockpitWidth = createMemo(() => compact() ? Math.max(30, Math.floor(dimensions().width * 0.4)) : 44)
-  const logoVariant = createMemo(() => motryxLogoVariant())
   const readiness = createMemo(() => motryxReadinessFromEnv())
   const selectedLane = createMemo(() => model().lanes.find((item) => item.id === model().laneBoard.selectedLaneID))
   const nextAttentionLane = createMemo(() => model().lanes.find((item) => item.id === model().laneBoard.nextAttentionLaneID))
@@ -141,16 +167,26 @@ export function IcAgent() {
         setSidecardMode("workflow")
         focusLane(intent.laneID)
         break
+      case "focus-lane-role": {
+        const lane = model().lanes.find((item) => item.id === intent.laneID)
+        if (lane) focusDebugLaneRole(lane, intent.role)
+        break
+      }
       case "focus-session":
+        if (debugView() && selectedLaneRole() && intent.sessionID === orchestratorSessionID()) {
+          returnToOrchestrator()
+          break
+        }
         setSidecardMode("detail")
-        focusSession(intent.sessionID)
+        focusOrchestratorSession(intent.sessionID)
         break
     }
   }
   const moveSidecardMode = (direction: 1 | -1) => {
-    const index = SIDECARD_MODES.indexOf(sidecardMode())
-    const next = index === -1 ? 0 : (index + direction + SIDECARD_MODES.length) % SIDECARD_MODES.length
-    setSidecardMode(SIDECARD_MODES[next])
+    const modes = sidecardModes()
+    const index = modes.indexOf(sidecardMode())
+    const next = index === -1 ? 0 : (index + direction + modes.length) % modes.length
+    setSidecardMode(modes[next] ?? "workflow")
   }
   const moveCockpitFocus = (direction: 1 | -1) => {
     const view = model()
@@ -165,9 +201,17 @@ export function IcAgent() {
         break
       case "detail":
         break
+      case "debug":
+        focusNeighbor({
+          items: view.laneBoard.rows,
+          selected: (item) => item.selected,
+          select: (item) => focusLaneForDebugNavigation(item.laneID),
+          direction,
+        })
+        break
     }
   }
-  const commandSpecs = createMemo(() => icCommandSpecs(model()))
+  const commandSpecs = createMemo(() => icCommandSpecs(model(), { debugView: debugView() }))
   useBindings(() => ({
     commands: [
       ...commandSpecs().map((command) => ({
@@ -224,19 +268,90 @@ export function IcAgent() {
       { key: "alt+k", desc: "Previous Motryx lane row", group: "Motryx", cmd: "ic.cockpit.focus.previous" },
     ],
   }))
+  useBindings(() => ({
+    enabled: () => debugView(),
+    bindings: [
+      { key: "alt+1", desc: "Motryx orchestrator target", group: "Motryx", cmd: () => returnToOrchestrator() },
+      { key: "alt+2", desc: "Motryx coordinator target", group: "Motryx", cmd: () => focusDebugRole("coordinator") },
+      { key: "alt+3", desc: "Motryx checker target", group: "Motryx", cmd: () => focusDebugRole("checker") },
+    ],
+  }))
 
   const clearFocus = () => {
     setSelectedLaneID("")
+    setSelectedLaneRole(undefined)
     setSelectedSessionID("")
   }
   const focusLane = (laneID: string) => {
     setSelectedLaneID(laneID)
+    setSelectedLaneRole(undefined)
     setSelectedSessionID("")
   }
-  const focusSession = (sessionID: string) => {
-    setSelectedLaneID("")
-    setSelectedSessionID(sessionID)
-    ensureBindingForSession(sessionID)
+  const focusLaneForDebugNavigation = (laneID: string) => {
+    const lane = model().lanes.find((item) => item.id === laneID)
+    const role = selectedLaneRole()
+    if (debugView() && lane && role && role !== "orchestrator" && focusDebugLaneRole(lane, role, { silent: true })) return
+    focusLane(laneID)
+  }
+  const focusOrchestratorSession = (sessionID?: string, options?: { preserveLane?: boolean }) => {
+    const targetSessionID = sessionID || orchestratorSessionID()
+    if (!targetSessionID) {
+      toast.show({
+        message: "No orchestrator session available",
+        variant: "warning",
+        duration: 2500,
+      })
+      return
+    }
+    if (!options?.preserveLane) setSelectedLaneID("")
+    setSelectedLaneRole(undefined)
+    setSelectedSessionID(targetSessionID)
+    setWorkflowOrchestratorSessionID(targetSessionID)
+    ensureBindingForSession(targetSessionID)
+    void sync.session.sync(targetSessionID).catch(() => {})
+  }
+  const focusDebugLaneRole = (
+    lane: IcLaneSummary,
+    role: Exclude<IcLaneRole, "orchestrator">,
+    options?: { silent?: boolean },
+  ) => {
+    if (!debugView()) return false
+    const roleEntry = role === "coordinator" ? lane.coordinator : lane.checker
+    if (!roleEntry.sessionID) {
+      if (!options?.silent) {
+        toast.show({
+          message: `No ${role} session for ${lane.name}`,
+          variant: "warning",
+          duration: 2500,
+        })
+      }
+      return false
+    }
+    setSelectedLaneID(lane.id)
+    setSelectedLaneRole(role)
+    setSelectedSessionID(roleEntry.sessionID)
+    setSidecardMode("debug")
+    void sync.session.sync(roleEntry.sessionID).catch(() => {})
+    return true
+  }
+  const focusDebugRole = (role: Exclude<IcLaneRole, "orchestrator">) => {
+    const entry = (lane: IcLaneSummary) => role === "coordinator" ? lane.coordinator : lane.checker
+    const lane = model().lanes.find((item) => item.selected && entry(item).available)
+      ?? model().lanes.find((item) => entry(item).available)
+      ?? inspectedLane()
+    if (!lane) {
+      toast.show({
+        message: `No ${role} session available`,
+        variant: "warning",
+        duration: 2500,
+      })
+      return false
+    }
+    return focusDebugLaneRole(lane, role)
+  }
+  const returnToOrchestrator = () => {
+    focusOrchestratorSession(undefined, { preserveLane: true })
+    setSidecardMode("debug")
   }
   const ensureBindingForSession = (sessionID: string) => {
     if (!sessionID || !workflowDirectory()) return
@@ -297,7 +412,7 @@ export function IcAgent() {
         current={focusSessionID()}
         source={source}
         onSelect={(sessionID) => {
-          focusSession(sessionID)
+          focusOrchestratorSession(sessionID)
           dialog.clear()
         }}
       />
@@ -325,7 +440,7 @@ export function IcAgent() {
       if (result.error || !result.data) {
         throw new Error(result.error ? String(result.error) : "Creating session failed")
       }
-      focusSession(result.data.id)
+      focusOrchestratorSession(result.data.id)
       await sync.session.sync(result.data.id).catch(() => {})
       toast.show({
         message: "Started orchestrator session",
@@ -356,7 +471,6 @@ export function IcAgent() {
     <box flexGrow={1} minHeight={0} flexDirection="column" backgroundColor={motryx.shell}>
       <MotryxHeader
         compact={compact()}
-        logoVariant={logoVariant()}
       />
 
       <box flexGrow={1} minHeight={0} flexDirection="row" paddingLeft={1} paddingRight={1}>
@@ -371,18 +485,32 @@ export function IcAgent() {
         >
           <box flexShrink={0} paddingBottom={0}>
             <text fg={motryx.ink} wrapMode="none">
-              <b>ORCHESTRATOR</b>
+              <b>{conversationChrome().title}</b>
             </text>
+            <text fg={conversationChrome().tone} wrapMode="none">
+              {conversationChrome().detail}
+            </text>
+            <Show when={debugView()}>
+              <ConversationTargetBar
+                compact={compact()}
+                currentTarget={conversationChrome()}
+                lane={inspectedLane()}
+                hasOrchestrator={Boolean(orchestratorSessionID())}
+                orchestratorSessionID={orchestratorSessionID()}
+                onSelectOrchestrator={returnToOrchestrator}
+                onSelectRole={focusDebugLaneRole}
+              />
+            </Show>
           </box>
           <box flexGrow={1} minHeight={0}>
             <SessionSurface
               sessionID={focusSessionID() || undefined}
               width={Math.max(24, dimensions().width - cockpitWidth() - 8)}
-              promptRight={<text fg={motryx.gold}>{focusSessionID() ? "orchestrator" : "no session"}</text>}
+              promptRight={<text fg={conversationChrome().tone}>{conversationChrome().prompt}</text>}
+              showScrollbar={true}
               empty={(
                 <EmptySessionState
                   starting={startingSession()}
-                  logoVariant={logoVariant()}
                   readiness={readiness().items}
                   onStart={() => void startOrchestratorSession()}
                 />
@@ -416,6 +544,13 @@ export function IcAgent() {
               selected={sidecardMode() === "detail"}
               onSelect={() => setSidecardMode("detail")}
             />
+            <Show when={debugView()}>
+              <SidecardButton
+                label="DEBUG"
+                selected={sidecardMode() === "debug"}
+                onSelect={() => setSidecardMode("debug")}
+              />
+            </Show>
           </box>
           <scrollbox
             flexGrow={1}
@@ -467,11 +602,26 @@ export function IcAgent() {
                   </Show>
                 </box>
               </Match>
+              <Match when={sidecardMode() === "debug" && debugView()}>
+                <DebugLaneSessions
+                  lanes={model().lanes}
+                  compact={compact()}
+                  currentTarget={conversationChrome()}
+                  hasOrchestrator={Boolean(orchestratorSessionID())}
+                  onSelectOrchestrator={returnToOrchestrator}
+                  onSelectRole={focusDebugLaneRole}
+                />
+              </Match>
             </Switch>
           </scrollbox>
         </box>
       </box>
-      <MotryxStatusBar model={model()} compact={compact()} />
+      <MotryxStatusBar
+        model={model()}
+        compact={compact()}
+        debugView={debugView()}
+        currentTarget={conversationChrome()}
+      />
     </box>
   )
 }
@@ -491,9 +641,67 @@ function focusNeighbor<T>(input: {
   if (item) input.select(item)
 }
 
+function findLaneRoleForSession(lanes: IcLaneSummary[], sessionID: string) {
+  for (const lane of lanes) {
+    if (lane.coordinator.sessionID === sessionID) return { lane, role: "coordinator" as const }
+    if (lane.checker.sessionID === sessionID) return { lane, role: "checker" as const }
+  }
+  return undefined
+}
+
+type ConversationChrome = {
+  title: string
+  detail: string
+  prompt: string
+  tone: string
+  role: IcLaneRole | string
+  sessionID?: string
+}
+
+function conversationChromeForFocus(model: ReturnType<typeof projectIcTui>, debugView: boolean): ConversationChrome {
+  const focus = model.focus
+  if (debugView && focus?.type === "lane" && focus.laneRole !== "orchestrator") {
+    return {
+      title: focus.laneRole.toUpperCase(),
+      detail: clip(`DEBUG · ${focus.name} · ${shortSessionID(focus.sessionID)}`, 44),
+      prompt: promptTargetLabel(focus.laneRole, focus.sessionID),
+      tone: focus.laneRole === "checker" ? motryx.redDark : motryx.gold,
+      role: focus.laneRole,
+      sessionID: focus.sessionID,
+    }
+  }
+  if (debugView && focus?.type === "agent" && focus.role !== "orchestrator") {
+    return {
+      title: focus.role.toUpperCase(),
+      detail: clip(`DEBUG · ${shortSessionID(focus.sessionID)}`, 44),
+      prompt: promptTargetLabel(focus.role, focus.sessionID),
+      tone: focus.role === "checker" ? motryx.redDark : motryx.gold,
+      role: focus.role,
+      sessionID: focus.sessionID,
+    }
+  }
+  return {
+    title: "ORCHESTRATOR",
+    detail: model.focusSessionID ? `primary Motryx conversation · ${shortSessionID(model.focusSessionID)}` : "no focused session",
+    prompt: model.focusSessionID ? promptTargetLabel("orchestrator", model.focusSessionID) : "no session",
+    tone: motryx.gold,
+    role: "orchestrator",
+    sessionID: model.focusSessionID || undefined,
+  }
+}
+
+function promptTargetLabel(role: string, sessionID?: string) {
+  return `${shortRoleLabel(role)}:${tinySessionID(sessionID)}`
+}
+
+function findOrchestratorSessionID(model: ReturnType<typeof projectIcTui>) {
+  return model.agents.find((agent) => agent.role === "orchestrator" && agent.sessionID)?.sessionID
+    || model.sessions.find((session) => session.role === "orchestrator")?.id
+    || ""
+}
+
 function MotryxHeader(props: {
   compact: boolean
-  logoVariant: ReturnType<typeof motryxLogoVariant>
 }) {
   return (
     <box
@@ -504,11 +712,8 @@ function MotryxHeader(props: {
     >
       <box flexDirection="row" justifyContent="space-between">
         <box flexDirection="row" gap={1}>
-          <MotryxLogo size="thumb" variant={props.logoVariant} />
-          <box flexDirection="column">
-            <text fg={motryx.shellText} wrapMode="none">
-              <b>Motryx</b>
-            </text>
+          <box flexDirection="column" paddingLeft={1} paddingRight={1}>
+            <MotryxWordmark size={props.compact ? "compact" : "full"} />
             <text fg={motryx.gold} wrapMode="none">
               {props.compact ? "VIRTUAL SILICON" : "VIRTUAL SILICON ENGINEERS"}
             </text>
@@ -519,16 +724,19 @@ function MotryxHeader(props: {
   )
 }
 
-function MotryxLogo(props: { size: MotryxLogoSize; variant: ReturnType<typeof motryxLogoVariant> }) {
-  const lines = () => motryxLogoLines(props.size, props.variant)
-  const color = (tone: MotryxLogoSegment["tone"]) => tone === "gold" ? motryx.gold : motryx.logoGreen
+function MotryxWordmark(props: { size: MotryxWordmarkSize }) {
+  const lines = () => motryxWordmarkLines(props.size)
   return (
     <box flexDirection="column" flexShrink={0}>
       <For each={lines()}>
         {(line) => (
           <box flexDirection="row">
             <For each={line}>
-              {(segment) => <text fg={color(segment.tone)} wrapMode="none">{segment.text}</text>}
+              {(segment) => (
+                <text fg={motryxLogoColor(segment.tone)} wrapMode="none">
+                  <b>{segment.text}</b>
+                </text>
+              )}
             </For>
           </box>
         )}
@@ -537,11 +745,24 @@ function MotryxLogo(props: { size: MotryxLogoSize; variant: ReturnType<typeof mo
   )
 }
 
-function MotryxStatusBar(props: { model: ReturnType<typeof projectIcTui>; compact: boolean }) {
+function motryxLogoColor(tone: MotryxLogoSegment["tone"]) {
+  return tone === "gold" ? motryx.gold : motryx.logoLight
+}
+
+function MotryxStatusBar(props: {
+  model: ReturnType<typeof projectIcTui>
+  compact: boolean
+  debugView: boolean
+  currentTarget: ConversationChrome
+}) {
   const summary = createMemo(() => {
     const counts = props.model.laneBoard.summary
     const blocked = counts.blocked > 0 ? `${counts.blocked} blocked` : "healthy"
     return `${counts.total} lanes · ${blocked}`
+  })
+  const debugHint = createMemo(() => {
+    if (!props.debugView) return ""
+    return `target ${props.currentTarget.prompt} · alt+1/2/3 · /coordinator /checker /orchestrator`
   })
   return (
     <box
@@ -554,18 +775,131 @@ function MotryxStatusBar(props: { model: ReturnType<typeof projectIcTui>; compac
     >
       <Show
         when={!props.compact}
-        fallback={<text fg={motryx.shellText} wrapMode="none">/ flow · alt+j/k lanes · {summary()}</text>}
+        fallback={<text fg={motryx.shellText} wrapMode="none">{debugHint() || "/ flow · alt+j/k lanes"} · {summary()}</text>}
       >
         <box flexDirection="row" gap={2}>
           <text fg={motryx.shellText} wrapMode="none">esc cancel</text>
           <text fg={motryx.shellText} wrapMode="none">tab focus</text>
           <text fg={motryx.shellText} wrapMode="none">/ flow</text>
           <text fg={motryx.shellText} wrapMode="none">alt+j/k lanes</text>
+          <Show when={debugHint()}>
+            <text fg={motryx.shellText} wrapMode="none">{debugHint()}</text>
+          </Show>
         </box>
         <text fg={motryx.shellText} wrapMode="none">{summary()}</text>
       </Show>
     </box>
   )
+}
+
+function ConversationTargetBar(props: {
+  compact: boolean
+  currentTarget: ConversationChrome
+  lane?: IcLaneSummary
+  hasOrchestrator: boolean
+  orchestratorSessionID?: string
+  onSelectOrchestrator: () => void
+  onSelectRole: (lane: IcLaneSummary, role: Exclude<IcLaneRole, "orchestrator">) => void | boolean
+}) {
+  const internalTarget = createMemo(() => props.currentTarget.role !== "orchestrator")
+  return (
+    <box flexDirection="row" gap={1} paddingTop={1}>
+      <ConversationTargetChip
+        label="orchestrator"
+        detail={props.hasOrchestrator ? targetSessionLabel(props.orchestratorSessionID, props.compact) : "missing"}
+        selected={!internalTarget()}
+        available={props.hasOrchestrator}
+        tone={motryx.gold}
+        compact={props.compact}
+        onSelect={props.onSelectOrchestrator}
+      />
+      <Show when={props.lane}>
+        {(lane) => (
+          <>
+            <ConversationTargetChip
+              label="coordinator"
+              detail={roleChipDetail(lane().coordinator, props.compact)}
+              selected={lane().focusedRole === "coordinator"}
+              available={lane().coordinator.available}
+              tone={motryx.gold}
+              compact={props.compact}
+              onSelect={() => props.onSelectRole(lane(), "coordinator")}
+            />
+            <ConversationTargetChip
+              label="checker"
+              detail={roleChipDetail(lane().checker, props.compact)}
+              selected={lane().focusedRole === "checker"}
+              available={lane().checker.available}
+              tone={motryx.red}
+              compact={props.compact}
+              onSelect={() => props.onSelectRole(lane(), "checker")}
+            />
+          </>
+        )}
+      </Show>
+    </box>
+  )
+}
+
+function roleChipDetail(entry: IcLaneSummary["coordinator"], compact: boolean) {
+  if (!entry.available) return "missing"
+  return compact ? `${entry.status}:${tinySessionID(entry.sessionID)}` : `${entry.status} · ${shortSessionID(entry.sessionID)}`
+}
+
+function ConversationTargetChip(props: {
+  label: string
+  detail: string
+  selected: boolean
+  available: boolean
+  tone: string
+  compact: boolean
+  onSelect: () => void | boolean
+}) {
+  const text = createMemo(() => {
+    const label = props.compact ? shortRoleLabel(props.label) : props.label
+    return `${label} · ${props.detail}`
+  })
+  return (
+    <box
+      paddingLeft={1}
+      paddingRight={1}
+      backgroundColor={props.selected ? props.tone : props.available ? motryx.panelAlt : undefined}
+      border={["bottom"]}
+      borderColor={props.selected ? props.tone : props.available ? motryx.line : motryx.panelAlt}
+      onMouseDown={props.onSelect}
+    >
+      <text fg={props.selected ? motryx.shellText : props.available ? motryx.ink : motryx.muted} wrapMode="none">
+        {clip(text(), props.compact ? 16 : 24)}
+      </text>
+    </box>
+  )
+}
+
+function shortRoleLabel(role: string) {
+  if (role === "orchestrator") return "orch"
+  if (role === "coordinator") return "coord"
+  if (role === "checker") return "check"
+  return role
+}
+
+function shortSessionID(sessionID?: string) {
+  if (!sessionID) return "unknown"
+  const raw = sessionID.trim()
+  if (!raw) return "unknown"
+  const withoutPrefix = raw.startsWith("ses_") ? raw.slice(4) : raw
+  if (withoutPrefix.length <= 8) return raw
+  return `ses_${withoutPrefix.slice(0, 4)}...${withoutPrefix.slice(-4)}`
+}
+
+function targetSessionLabel(sessionID: string | undefined, compact: boolean) {
+  return compact ? tinySessionID(sessionID) : shortSessionID(sessionID)
+}
+
+function tinySessionID(sessionID?: string) {
+  if (!sessionID) return "unknown"
+  const raw = sessionID.trim()
+  if (!raw) return "unknown"
+  return raw.slice(-4)
 }
 
 function MotryxSessionPicker(props: {
@@ -621,21 +955,21 @@ function sessionDetails(session: MotryxSessionHistoryItem) {
 
 function EmptySessionState(props: {
   starting: boolean
-  logoVariant: ReturnType<typeof motryxLogoVariant>
   readiness: MotryxReadinessItem[]
   onStart: () => void
 }) {
   return (
     <box flexDirection="column" gap={1} paddingTop={1}>
       <box flexDirection="row" gap={2}>
-        <box backgroundColor={motryx.shell} paddingLeft={1} paddingRight={1} paddingTop={1} paddingBottom={1}>
-          <MotryxLogo size="large" variant={props.logoVariant} />
-        </box>
-        <box flexDirection="column" paddingTop={1}>
-          <text fg={motryx.ink} wrapMode="none">
-            <b>Motryx</b>
-          </text>
-          <text fg={motryx.muted} wrapMode="none">VIRTUAL SILICON ENGINEERS</text>
+        <box
+          flexDirection="column"
+          paddingLeft={1}
+          paddingRight={1}
+          paddingTop={1}
+          backgroundColor={motryx.shell}
+        >
+          <MotryxWordmark size="full" />
+          <text fg={motryx.gold} wrapMode="none">VIRTUAL SILICON ENGINEERS</text>
         </box>
       </box>
       <text fg={motryx.muted} wrapMode="none">No focused orchestrator session.</text>
@@ -755,6 +1089,138 @@ function WorkflowReadyState(props: { model: ReturnType<typeof projectIcTui> }) {
             : "Start the orchestrator on the left to begin."}
         </text>
       </box>
+    </box>
+  )
+}
+
+function DebugLaneSessions(props: {
+  lanes: IcLaneSummary[]
+  compact: boolean
+  currentTarget: ConversationChrome
+  hasOrchestrator: boolean
+  onSelectOrchestrator: () => void
+  onSelectRole: (lane: IcLaneSummary, role: Exclude<IcLaneRole, "orchestrator">) => void
+}) {
+  return (
+    <box flexDirection="column" gap={1} paddingTop={1}>
+      <text fg={motryx.ink} wrapMode="none">
+        <b>DEBUG</b>
+      </text>
+      <box
+        flexDirection="column"
+        paddingLeft={1}
+        paddingRight={1}
+        backgroundColor={motryx.panelAlt}
+        border={["left"]}
+        borderColor={props.currentTarget.role === "orchestrator" ? motryx.gold : motryx.red}
+      >
+        <text fg={props.currentTarget.tone} wrapMode="none">
+          {clip(`target ${props.currentTarget.prompt}`, props.compact ? 24 : 36)}
+        </text>
+        <box
+          paddingLeft={1}
+          paddingRight={1}
+          backgroundColor={props.hasOrchestrator ? motryx.gold : undefined}
+          onMouseDown={props.onSelectOrchestrator}
+        >
+          <text fg={props.hasOrchestrator ? motryx.shell : motryx.muted} wrapMode="none">
+            {props.hasOrchestrator ? "Back to orchestrator" : "No orchestrator"}
+          </text>
+        </box>
+      </box>
+      <Show
+        when={props.lanes.length > 0}
+        fallback={<text fg={motryx.muted} wrapMode="word">No workflow lanes with internal sessions yet.</text>}
+      >
+        <For each={props.lanes}>
+          {(lane, index) => (
+            <DebugLaneSessionRow
+              lane={lane}
+              ordinal={index() + 1}
+              compact={props.compact}
+              onSelectRole={props.onSelectRole}
+            />
+          )}
+        </For>
+      </Show>
+    </box>
+  )
+}
+
+function DebugLaneSessionRow(props: {
+  lane: IcLaneSummary
+  ordinal: number
+  compact: boolean
+  onSelectRole: (lane: IcLaneSummary, role: Exclude<IcLaneRole, "orchestrator">) => void
+}) {
+  const title = createMemo(() => `${pad2(props.ordinal)} ${clip(props.lane.name, props.compact ? 18 : 26)}`)
+  return (
+    <box
+      flexDirection="column"
+      paddingLeft={1}
+      paddingRight={1}
+      backgroundColor={props.lane.selected ? motryx.panelAlt : undefined}
+      border={["left"]}
+      borderColor={props.lane.selected ? motryx.red : motryx.line}
+    >
+      <box flexDirection="row" justifyContent="space-between">
+        <text fg={motryx.ink} wrapMode="none">{title()}</text>
+        <text fg={statusTextColor(props.lane.status)} wrapMode="none">{clipStatus(props.lane.status)}</text>
+      </box>
+      <DebugRoleButton
+        label="coordinator"
+        lane={props.lane}
+        role="coordinator"
+        compact={props.compact}
+        onSelectRole={props.onSelectRole}
+      />
+      <DebugRoleButton
+        label="checker"
+        lane={props.lane}
+        role="checker"
+        compact={props.compact}
+        onSelectRole={props.onSelectRole}
+      />
+    </box>
+  )
+}
+
+function DebugRoleButton(props: {
+  label: string
+  lane: IcLaneSummary
+  role: Exclude<IcLaneRole, "orchestrator">
+  compact: boolean
+  onSelectRole: (lane: IcLaneSummary, role: Exclude<IcLaneRole, "orchestrator">) => void
+}) {
+  const entry = createMemo(() => props.role === "coordinator" ? props.lane.coordinator : props.lane.checker)
+  const selected = createMemo(() => props.lane.focusedRole === props.role)
+  const roleLabel = createMemo(() => props.compact ? shortRoleLabel(props.label) : props.label)
+  const sessionLabel = createMemo(() => entry().sessionID ? (props.compact ? tinySessionID(entry().sessionID) : shortSessionID(entry().sessionID)) : "none")
+  const compactLabel = createMemo(() => clip(`${roleLabel()} ${entry().status}:${sessionLabel()}`, 24))
+  return (
+    <box
+      flexDirection="row"
+      justifyContent={props.compact ? "flex-start" : "space-between"}
+      paddingLeft={1}
+      paddingRight={1}
+      backgroundColor={selected() ? motryx.red : undefined}
+      onMouseDown={() => props.onSelectRole(props.lane, props.role)}
+    >
+      <Show
+        when={!props.compact}
+        fallback={
+          <text fg={selected() ? motryx.shellText : entry().available ? motryx.ink : motryx.muted} wrapMode="none">
+            {compactLabel()}
+          </text>
+        }
+      >
+        <text fg={selected() ? motryx.shellText : entry().available ? motryx.ink : motryx.muted} wrapMode="none">
+          {`${props.label} · ${entry().status}`}
+        </text>
+        <text fg={selected() ? motryx.shellText : motryx.muted} wrapMode="none">
+          {sessionLabel()}
+        </text>
+      </Show>
     </box>
   )
 }
@@ -1088,7 +1554,5 @@ function shouldRefreshFromWorkflowEvent(event: string) {
 }
 
 function clip(value: string, length: number) {
-  if (value.length <= length) return value
-  if (length <= 3) return value.slice(0, length)
-  return `${value.slice(0, length - 3)}...`
+  return Locale.truncate(value, length)
 }

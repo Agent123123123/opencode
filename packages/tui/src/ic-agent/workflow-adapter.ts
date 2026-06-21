@@ -517,7 +517,10 @@ function findStateDbs(directory: string, projectContext?: MotryxProjectContext) 
   const candidates: string[] = []
   const ancestors = ancestorDirectories(directory)
   if (projectContext?.currentIcAgentDbPath) {
-    return existsSync(projectContext.currentIcAgentDbPath) ? [path.resolve(projectContext.currentIcAgentDbPath)] : []
+    if (!existsSync(projectContext.currentIcAgentDbPath)) return []
+    const current = path.resolve(projectContext.currentIcAgentDbPath)
+    const owner = ownerDbForInternalSession(directory, projectContext, current)
+    return owner ? [owner, current] : [current]
   }
   if (projectContext?.bindingStatus === "missing-binding" || projectContext?.bindingStatus === "alias-unresolved") {
     return []
@@ -525,7 +528,7 @@ function findStateDbs(directory: string, projectContext?: MotryxProjectContext) 
   const explicit = process.env.MOTRYX_IC_AGENT_DB_PATH || process.env.IC_AGENT_DB_PATH
   if (explicit) return existsSync(explicit) ? [path.resolve(explicit)] : []
   const bound = bindingStateDb(directory, projectContext)
-  const requestedSessionID = process.env.MOTRYX_ORCHESTRATOR_SESSION_ID || process.env.MOTRYX_RESUME_SESSION || ""
+  const requestedSessionID = requestedOrchestratorSessionID(projectContext)
   if (requestedSessionID && !requestedSessionID.startsWith("@")) {
     return bound && existsSync(bound) ? [bound] : []
   }
@@ -559,11 +562,73 @@ function findStateDbs(directory: string, projectContext?: MotryxProjectContext) 
   return [...new Set(candidates)]
 }
 
+function ownerDbForInternalSession(
+  directory: string,
+  projectContext: MotryxProjectContext,
+  currentDb: string,
+) {
+  const sessionID = projectContext.currentOrchestratorSessionID
+  if (!sessionID || !stateDbLooksEmpty(currentDb)) return undefined
+  for (const candidate of projectOrchestratorDbs(directory)) {
+    if (path.resolve(candidate) === path.resolve(currentDb)) continue
+    if (dbContainsInternalSession(candidate, sessionID)) return candidate
+  }
+  return undefined
+}
+
+function projectOrchestratorDbs(directory: string) {
+  const candidates: string[] = []
+  for (const item of ancestorDirectories(directory)) {
+    const projectLocal = path.join(item, ".motryx", "db", "orchestrators")
+    if (!existsSync(projectLocal)) continue
+    const latest = readdirSync(projectLocal, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => path.join(projectLocal, entry.name, "ic-agent.db"))
+      .filter((candidate) => existsSync(candidate))
+      .map((candidate) => ({ candidate, mtime: statSync(candidate).mtimeMs }))
+      .toSorted((left, right) => right.mtime - left.mtime)
+    candidates.push(...latest.map((item) => item.candidate))
+  }
+  return [...new Set(candidates)]
+}
+
+function stateDbLooksEmpty(stateDb: string) {
+  let db: Database | undefined
+  try {
+    db = new Database(stateDb, { readonly: true })
+    const workflows = tableExists(db, "workflows") ? count(db, "select count(*) as count from workflows") : 0
+    const lanes = tableExists(db, "lanes") ? count(db, "select count(*) as count from lanes") : 0
+    const agents = tableExists(db, "agent_instances") ? count(db, "select count(*) as count from agent_instances") : 0
+    return workflows + lanes + agents === 0
+  } catch {
+    return false
+  } finally {
+    db?.close()
+  }
+}
+
+function dbContainsInternalSession(stateDb: string, sessionID: string) {
+  let db: Database | undefined
+  try {
+    db = new Database(stateDb, { readonly: true })
+    if (!tableExists(db, "agent_instances")) return false
+    const row = db.query<{ role: string }, [string]>(`
+      select role
+        from agent_instances
+       where session_id = ?
+       order by rowid desc
+       limit 1
+    `).get(sessionID)
+    return Boolean(row?.role && row.role !== "orchestrator")
+  } catch {
+    return false
+  } finally {
+    db?.close()
+  }
+}
+
 function bindingStateDb(directory: string, projectContext?: MotryxProjectContext) {
-  const sessionID = projectContext?.currentOrchestratorSessionID
-    || process.env.MOTRYX_ORCHESTRATOR_SESSION_ID
-    || process.env.MOTRYX_RESUME_SESSION
-    || ""
+  const sessionID = requestedOrchestratorSessionID(projectContext)
   if (!sessionID || sessionID.startsWith("@")) return undefined
   const channelDb = projectContext?.channelDbPath
     || process.env.MOTRYX_CHANNEL_DB
@@ -592,10 +657,7 @@ function classifyStateDbSource(
   projectContext?: MotryxProjectContext,
 ): NonNullable<IcWorkflowSnapshot["stateDbSource"]> {
   const resolved = path.resolve(stateDb)
-  const requestedSessionID = projectContext?.currentOrchestratorSessionID
-    || process.env.MOTRYX_ORCHESTRATOR_SESSION_ID
-    || process.env.MOTRYX_RESUME_SESSION
-    || ""
+  const requestedSessionID = requestedOrchestratorSessionID(projectContext)
   const bound = requestedSessionID && !requestedSessionID.startsWith("@") ? bindingStateDb(directory, projectContext) : undefined
   if (bound && path.resolve(bound) === resolved) {
     return {
@@ -624,6 +686,15 @@ function classifyStateDbSource(
       productTruth: false,
       legacy: false,
       detail: "Selected by explicit IC Agent DB override.",
+    }
+  }
+
+  if (requestedSessionID && dbContainsInternalSession(resolved, requestedSessionID)) {
+    return {
+      kind: "internal-agent-owner",
+      productTruth: true,
+      legacy: false,
+      detail: "Selected the owning orchestrator DB for an internal debug agent session.",
     }
   }
 
@@ -666,6 +737,11 @@ function classifyStateDbSource(
     legacy: false,
     detail: "Selected by fallback scan.",
   }
+}
+
+function requestedOrchestratorSessionID(projectContext?: MotryxProjectContext) {
+  if (projectContext) return projectContext.currentOrchestratorSessionID || ""
+  return process.env.MOTRYX_ORCHESTRATOR_SESSION_ID || process.env.MOTRYX_RESUME_SESSION || ""
 }
 
 function projectContextDiagnostics(projectContext?: MotryxProjectContext): IcWorkflowSnapshot["diagnostics"] {
@@ -755,6 +831,16 @@ function count(db: Database, sql: string) {
     return Number(db.query<{ count: number }, []>(sql).get()?.count ?? 0)
   } catch {
     return 0
+  }
+}
+
+function tableExists(db: Database, table: string) {
+  try {
+    return Boolean(db.query<{ name: string }, [string]>(
+      "select name from sqlite_master where type = 'table' and name = ?",
+    ).get(table))
+  } catch {
+    return false
   }
 }
 

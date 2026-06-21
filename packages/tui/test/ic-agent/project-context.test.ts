@@ -57,6 +57,51 @@ test("resolves Motryx project context from selected orchestrator binding", async
   }
 })
 
+test("keeps explicit orchestrator context when the selected conversation is an internal agent", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "motryx-project-context-"))
+  try {
+    const project = path.join(root, "project")
+    const dataRoot = path.join(project, ".motryx", "db")
+    const channelDb = path.join(dataRoot, "channel.db")
+    const icAgentDb = path.join(dataRoot, "orchestrators", "ses_orch", "ic-agent.db")
+    mkdirSync(path.dirname(channelDb), { recursive: true })
+    mkdirSync(path.dirname(icAgentDb), { recursive: true })
+    const db = new Database(channelDb)
+    try {
+      db.exec(`
+        create table orchestrator_bindings (
+          project_id text not null,
+          orchestrator_session_id text not null,
+          ic_agent_db_path text not null,
+          schema_version integer not null,
+          created_at text not null,
+          updated_at text not null,
+          primary key (project_id, orchestrator_session_id)
+        );
+      `)
+      db.query("insert into orchestrator_bindings values (?, ?, ?, 1, 'now', 'now')").run(project, "ses_orch", icAgentDb)
+    } finally {
+      db.close()
+    }
+
+    const context = resolveMotryxProjectContext({
+      projectDir: project,
+      orchestratorSessionID: "ses_orch",
+      selectedSessionID: "ses_coord",
+      env: {
+        OPENCODE_DB: "motryx.db",
+        XDG_DATA_HOME: dataRoot,
+      },
+    })
+
+    expect(context.currentOrchestratorSessionID).toBe("ses_orch")
+    expect(context.currentIcAgentDbPath).toBe(icAgentDb)
+    expect(context.bindingStatus).toBe("bound")
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
 test("reports missing binding without falling back to unrelated session state", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "motryx-project-context-"))
   try {

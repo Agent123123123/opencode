@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { motryxSessionModeFromEnv, shouldAutoStartOrchestrator } from "../../src/ic-agent/session-mode"
+import { motryxDebugViewFromEnv, motryxSessionModeFromEnv, shouldAutoStartOrchestrator } from "../../src/ic-agent/session-mode"
 
 test("parses Motryx route session mode from environment values", () => {
   expect(motryxSessionModeFromEnv("new")).toBe("new")
@@ -7,6 +7,17 @@ test("parses Motryx route session mode from environment values", () => {
   expect(motryxSessionModeFromEnv("resume")).toBe("resume")
   expect(motryxSessionModeFromEnv("")).toBe("continue")
   expect(motryxSessionModeFromEnv("checker")).toBe("continue")
+})
+
+test("parses internal Motryx debug view from environment values", () => {
+  expect(motryxDebugViewFromEnv("1")).toBe(true)
+  expect(motryxDebugViewFromEnv("true")).toBe(true)
+  expect(motryxDebugViewFromEnv("yes")).toBe(true)
+  expect(motryxDebugViewFromEnv("on")).toBe(true)
+  expect(motryxDebugViewFromEnv("0")).toBe(false)
+  expect(motryxDebugViewFromEnv("false")).toBe(false)
+  expect(motryxDebugViewFromEnv("")).toBe(false)
+  expect(motryxDebugViewFromEnv(undefined)).toBe(false)
 })
 
 test("auto-starts an orchestrator only for a fresh --new route without focus", () => {
