@@ -1,5 +1,12 @@
 import { expect, test } from "bun:test"
-import { motryxDebugViewFromEnv, motryxSessionModeFromEnv, shouldAutoStartOrchestrator } from "../../src/ic-agent/session-mode"
+import {
+  motryxDebugViewFromEnv,
+  motryxSessionModeFromEnv,
+  shouldAutoStartOrchestrator,
+  shouldRunOpenCodeContinueNavigation,
+  shouldUseOpenCodeContinueStartupRoute,
+  startupRouteFromEnv,
+} from "../../src/ic-agent/session-mode"
 
 test("parses Motryx route session mode from environment values", () => {
   expect(motryxSessionModeFromEnv("new")).toBe("new")
@@ -62,4 +69,38 @@ test("auto-starts an orchestrator only for a fresh --new route without focus", (
     startingSession: false,
     autoStartAttempted: true,
   })).toBe(false)
+})
+
+test("uses Motryx startup route ahead of OpenCode continue route", () => {
+  const startupRoute = startupRouteFromEnv({
+    OPENCODE_ROUTE: '{"type":"ic-agent"}',
+    OPENCODE_IC_AGENT_TUI: undefined,
+  })
+
+  expect(startupRoute).toEqual({ type: "ic-agent" })
+  expect(shouldUseOpenCodeContinueStartupRoute({
+    startupRoute,
+    continueRequested: true,
+  })).toBe(false)
+
+  expect(shouldUseOpenCodeContinueStartupRoute({
+    startupRoute: undefined,
+    continueRequested: true,
+  })).toBe(true)
+})
+
+test("does not run OpenCode continue navigation from Motryx route", () => {
+  expect(shouldRunOpenCodeContinueNavigation({
+    currentRouteType: "ic-agent",
+    alreadyContinued: false,
+    syncStatus: "partial",
+    continueRequested: true,
+  })).toBe(false)
+
+  expect(shouldRunOpenCodeContinueNavigation({
+    currentRouteType: "home",
+    alreadyContinued: false,
+    syncStatus: "partial",
+    continueRequested: true,
+  })).toBe(true)
 })

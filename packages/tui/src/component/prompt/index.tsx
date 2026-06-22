@@ -370,7 +370,16 @@ export function Prompt(props: PromptProps) {
         run: async (ctx: CommandContext<Renderable, KeyEvent>) => {
           ctx.event.preventDefault()
           ctx.event.stopPropagation()
-          const content = await clipboard.read?.()
+          let content: Awaited<ReturnType<NonNullable<typeof clipboard.read>>>
+          try {
+            content = await clipboard.read?.()
+          } catch (error) {
+            toast.show({
+              message: `Failed to read clipboard: ${errorMessage(error)}`,
+              variant: "error",
+            })
+            return
+          }
           if (content?.mime.startsWith("image/")) {
             await pasteAttachment({
               filename: "clipboard",
@@ -381,7 +390,12 @@ export function Prompt(props: PromptProps) {
           }
           if (content?.mime === "text/plain") {
             await pasteInputText(content.data)
+            return
           }
+          toast.show({
+            message: "Clipboard unavailable; use terminal paste.",
+            variant: "warning",
+          })
         },
       },
       {

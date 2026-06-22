@@ -83,6 +83,11 @@ import * as TuiAudio from "./audio"
 import { win32DisableProcessedInput, win32FlushInputBuffer } from "./terminal-win32"
 import { destroyRenderer } from "./util/renderer"
 import { cliErrorMessage, errorFormat } from "./util/error"
+import {
+  shouldRunOpenCodeContinueNavigation,
+  shouldUseOpenCodeContinueStartupRoute,
+  startupRouteFromEnv,
+} from "./ic-agent/session-mode"
 
 const appGlobalBindingCommands = [
   "session.list",
@@ -226,6 +231,7 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
       )
       renderer.once("destroy", () => Deferred.doneUnsafe(shutdown, Effect.void))
       const pluginRuntime = createPluginRuntime()
+      const startupRoute = startupRouteFromEnv()
 
       yield* Effect.tryPromise(async () => {
         // Prewarm palette before ThemeProvider mounts so `system` theme avoids a first-paint fallback flash.
@@ -265,11 +271,7 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
                     >
                       <TuiStartupProvider
                         value={{
-                          initialRoute: process.env.OPENCODE_ROUTE
-                            ? JSON.parse(process.env.OPENCODE_ROUTE)
-                            : process.env.OPENCODE_IC_AGENT_TUI
-                              ? { type: "ic-agent" }
-                              : undefined,
+                          initialRoute: startupRoute,
                           skipInitialLoading: Boolean(process.env.OPENCODE_FAST_BOOT),
                         }}
                       >
@@ -280,7 +282,10 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
                                 <ToastProvider>
                                   <RouteProvider
                                     initialRoute={
-                                      input.args.continue
+                                      shouldUseOpenCodeContinueStartupRoute({
+                                        startupRoute,
+                                        continueRequested: Boolean(input.args.continue),
+                                      })
                                         ? {
                                             type: "session",
                                             sessionID: "dummy",
@@ -497,7 +502,12 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
   let continued = false
   createEffect(() => {
     // When using -c, session list is loaded in blocking phase, so we can navigate at "partial"
-    if (continued || sync.status === "loading" || !args.continue) return
+    if (!shouldRunOpenCodeContinueNavigation({
+      currentRouteType: route.data.type,
+      alreadyContinued: continued,
+      syncStatus: sync.status,
+      continueRequested: Boolean(args.continue),
+    })) return
     const match = sync.data.session
       .toSorted((a, b) => b.time.updated - a.time.updated)
       .find((x) => x.parentID === undefined)?.id
