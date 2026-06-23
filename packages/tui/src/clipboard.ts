@@ -5,6 +5,8 @@ import path from "node:path"
 import { promisify } from "node:util"
 
 const exec = promisify(execFile)
+export const CLIPBOARD_UNAVAILABLE_MESSAGE =
+  "Clipboard unavailable. Install wl-copy, xclip, or xsel, or use terminal selection copy."
 
 function command(command: string, args: string[] = [], input?: string) {
   return new Promise<Buffer>((resolve, reject) => {
@@ -21,9 +23,10 @@ function command(command: string, args: string[] = [], input?: string) {
 }
 
 function writeOsc52(text: string) {
-  if (!process.stdout.isTTY) return
+  if (!process.stdout.isTTY) return false
   const sequence = `\x1b]52;c;${Buffer.from(text).toString("base64")}\x07`
   process.stdout.write(process.env.TMUX || process.env.STY ? `\x1bPtmux;\x1b${sequence}\x1b\\` : sequence)
+  return true
 }
 
 export async function read() {
@@ -102,23 +105,28 @@ function getCopyMethod() {
     if (native?.[0] === "osascript") {
       return async (text: string) => {
         const escaped = text.replace(/\\/g, "\\\\").replace(/"/g, '\\"')
-        await command("osascript", ["-e", `set the clipboard to "${escaped}"`]).catch(() => undefined)
+        await command("osascript", ["-e", `set the clipboard to "${escaped}"`])
       }
     }
     if (native) {
       return async (text: string) => {
-        await command(native[0], native.slice(1), text).catch(() => undefined)
+        await command(native[0], native.slice(1), text)
       }
     }
     return async (text: string) => {
       const { default: clipboardy } = await import("clipboardy")
-      await clipboardy.write(text).catch(() => undefined)
+      await clipboardy.write(text)
     }
   })())
 }
 
 export async function write(text: string) {
-  writeOsc52(text)
+  const wroteTerminalClipboard = writeOsc52(text)
   const method = await getCopyMethod()
-  await method(text)
+  try {
+    await method(text)
+  } catch (error) {
+    if (wroteTerminalClipboard) return
+    throw new Error(CLIPBOARD_UNAVAILABLE_MESSAGE, { cause: error })
+  }
 }

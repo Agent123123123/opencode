@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createResource, createSignal, For, Match, onCleanup, Show, Switch } from "solid-js"
+import { createEffect, createMemo, createResource, createSignal, For, Match, onCleanup, Show, Switch, type JSX } from "solid-js"
 import { useRenderer, useTerminalDimensions } from "@opentui/solid"
 import { useBindings } from "../../keymap"
 import { useSync } from "../../context/sync"
@@ -20,6 +20,15 @@ import {
 import { motryxReadinessFromEnv, type MotryxReadinessItem } from "../../ic-agent/readiness"
 import { motryxDebugViewFromEnv, motryxSessionModeFromEnv, shouldAutoStartOrchestrator } from "../../ic-agent/session-mode"
 import { readMotryxSessionHistory, type MotryxSessionHistoryItem } from "../../ic-agent/session-history"
+import { sanitizeMotryxTranscriptText } from "../../ic-agent/transcript"
+import { motryxTuiLayout } from "../../ic-agent/tui-layout"
+import {
+  clipStatusLabel,
+  laneBoardToneColor,
+  laneStatusBackground,
+  laneStatusForeground,
+  statusTone,
+} from "../../ic-agent/tui-presentation"
 import { subscribeToWorkflowEvents, workflowEventsTokenFromEnv, workflowEventsURLFromEnv } from "../../ic-agent/workflow-events"
 import { resolveMotryxProjectContext } from "../../ic-agent/project-context"
 import {
@@ -37,7 +46,7 @@ import {
 import { readIcWorkflowSnapshot } from "../../ic-agent/workflow-adapter"
 import { icCommandSpecs, type IcCommandIntent, type IcSidecardMode } from "../../ic-agent/commands"
 import { SessionSurface } from "../session"
-import { motryx, type MotryxPalette } from "./motryx-theme"
+import { motryx } from "./motryx-theme"
 
 const WORKFLOW_REFRESH_INTERVAL_MS = 2000
 export function IcAgent() {
@@ -130,9 +139,13 @@ export function IcAgent() {
     setSelectedLaneRole(laneRole.role)
     setSidecardMode("debug")
   })
-  const compact = createMemo(() => dimensions().width < 100)
+  const layout = createMemo(() => motryxTuiLayout(dimensions()))
+  const narrow = createMemo(() => layout().narrow)
+  const compact = createMemo(() => layout().compact)
   const cockpitScrollAcceleration = createMemo(() => getScrollAcceleration(tuiConfig))
-  const cockpitWidth = createMemo(() => compact() ? Math.max(30, Math.floor(dimensions().width * 0.4)) : 44)
+  const cockpitWidth = createMemo(() => layout().cockpitWidth)
+  const cockpitHeight = createMemo(() => layout().cockpitHeight)
+  const conversationWidth = createMemo(() => layout().conversationWidth)
   const readiness = createMemo(() => motryxReadinessFromEnv())
   const selectedLane = createMemo(() => model().lanes.find((item) => item.id === model().laneBoard.selectedLaneID))
   const nextAttentionLane = createMemo(() => model().lanes.find((item) => item.id === model().laneBoard.nextAttentionLaneID))
@@ -473,7 +486,13 @@ export function IcAgent() {
         compact={compact()}
       />
 
-      <box flexGrow={1} minHeight={0} flexDirection="row" paddingLeft={1} paddingRight={1}>
+      <box
+        flexGrow={1}
+        minHeight={0}
+        flexDirection={narrow() ? "column" : "row"}
+        paddingLeft={1}
+        paddingRight={1}
+      >
         <box
           flexGrow={1}
           minWidth={0}
@@ -483,13 +502,17 @@ export function IcAgent() {
           paddingRight={1}
           backgroundColor={motryx.panel}
         >
-          <box flexShrink={0} paddingBottom={0}>
-            <text fg={motryx.ink} wrapMode="none">
-              <b>{conversationChrome().title}</b>
-            </text>
-            <text fg={conversationChrome().tone} wrapMode="none">
-              {conversationChrome().detail}
-            </text>
+          <box flexShrink={0} flexDirection="column" paddingBottom={0}>
+            <Line>
+              <text fg={motryx.ink} wrapMode="none">
+                <b>{conversationChrome().title}</b>
+              </text>
+            </Line>
+            <Line>
+              <text fg={conversationChrome().tone} wrapMode="none">
+                {clearDisplayLine(conversationChrome().detail, conversationWidth() - 2)}
+              </text>
+            </Line>
             <Show when={debugView()}>
               <ConversationTargetBar
                 compact={compact()}
@@ -505,9 +528,10 @@ export function IcAgent() {
           <box flexGrow={1} minHeight={0}>
             <SessionSurface
               sessionID={focusSessionID() || undefined}
-              width={Math.max(24, dimensions().width - cockpitWidth() - 8)}
+              width={conversationWidth()}
               promptRight={<text fg={conversationChrome().tone}>{conversationChrome().prompt}</text>}
               showScrollbar={true}
+              transformTextPart={sanitizeMotryxTranscriptText}
               empty={(
                 <EmptySessionState
                   starting={startingSession()}
@@ -521,15 +545,16 @@ export function IcAgent() {
         </box>
 
         <box
-          width={cockpitWidth()}
+          width={narrow() ? undefined : cockpitWidth()}
+          height={narrow() ? cockpitHeight() : undefined}
           flexShrink={0}
           minHeight={0}
           flexDirection="column"
           backgroundColor={motryx.panel}
           paddingLeft={1}
           paddingRight={1}
-          border={["left"]}
-          borderColor={motryx.line}
+          border={narrow() ? ["top"] : ["left"]}
+          borderColor={narrow() ? motryx.goldDark : motryx.line}
           customBorderChars={SplitBorder.customBorderChars}
         >
           <CockpitHeader summary={cockpitSummary(model())} compact={compact()} />
@@ -559,7 +584,7 @@ export function IcAgent() {
             verticalScrollbarOptions={{
               trackOptions: {
                 backgroundColor: motryx.panelAlt,
-                foregroundColor: motryx.red,
+                foregroundColor: motryx.goldDark,
               },
             }}
           >
@@ -682,8 +707,8 @@ function conversationChromeForFocus(model: ReturnType<typeof projectIcTui>, debu
   }
   return {
     title: "ORCHESTRATOR",
-    detail: model.focusSessionID ? `primary Motryx conversation · ${shortSessionID(model.focusSessionID)}` : "no focused session",
-    prompt: model.focusSessionID ? promptTargetLabel("orchestrator", model.focusSessionID) : "no session",
+    detail: model.focusSessionID ? clip(model.workflow.detail || "Motryx workspace ready", 72) : "start or resume a Motryx session",
+    prompt: model.focusSessionID ? "orchestrator" : "no session",
     tone: motryx.gold,
     role: "orchestrator",
     sessionID: model.focusSessionID || undefined,
@@ -757,12 +782,15 @@ function MotryxStatusBar(props: {
 }) {
   const summary = createMemo(() => {
     const counts = props.model.laneBoard.summary
-    const blocked = counts.blocked > 0 ? `${counts.blocked} blocked` : "healthy"
-    return `${counts.total} lanes · ${blocked}`
+    if (counts.total === 0) return "no workflow"
+    const blocked = counts.blocked > 0 ? ` · ${counts.blocked} blocked` : ""
+    const active = counts.active > 0 ? `${counts.active} active` : "idle"
+    return `${active}${blocked} · ${counts.done}/${counts.total} done`
   })
   const debugHint = createMemo(() => {
     if (!props.debugView) return ""
-    return `target ${props.currentTarget.prompt} · alt+1/2/3 · /coordinator /checker /orchestrator`
+    if (props.currentTarget.role === "orchestrator") return "target orchestrator"
+    return `target ${shortRoleLabel(String(props.currentTarget.role))}`
   })
   return (
     <box
@@ -771,17 +799,17 @@ function MotryxStatusBar(props: {
       justifyContent="space-between"
       paddingLeft={3}
       paddingRight={3}
-      backgroundColor={motryx.red}
+      backgroundColor={motryx.shell}
     >
       <Show
         when={!props.compact}
-        fallback={<text fg={motryx.shellText} wrapMode="none">{debugHint() || "/ flow · alt+j/k lanes"} · {summary()}</text>}
+        fallback={<text fg={motryx.shellText} wrapMode="none">{debugHint() || "flow"} · {summary()}</text>}
       >
         <box flexDirection="row" gap={2}>
           <text fg={motryx.shellText} wrapMode="none">esc cancel</text>
           <text fg={motryx.shellText} wrapMode="none">tab focus</text>
-          <text fg={motryx.shellText} wrapMode="none">/ flow</text>
-          <text fg={motryx.shellText} wrapMode="none">alt+j/k lanes</text>
+          <text fg={motryx.shellText} wrapMode="none">alt+[/] view</text>
+          <text fg={motryx.shellText} wrapMode="none">alt+j/k lane</text>
           <Show when={debugHint()}>
             <text fg={motryx.shellText} wrapMode="none">{debugHint()}</text>
           </Show>
@@ -843,7 +871,7 @@ function ConversationTargetBar(props: {
 
 function roleChipDetail(entry: IcLaneSummary["coordinator"], compact: boolean) {
   if (!entry.available) return "missing"
-  return compact ? `${entry.status}:${tinySessionID(entry.sessionID)}` : `${entry.status} · ${shortSessionID(entry.sessionID)}`
+  return compact ? entry.status : `${entry.status} · ${shortSessionID(entry.sessionID)}`
 }
 
 function ConversationTargetChip(props: {
@@ -863,12 +891,12 @@ function ConversationTargetChip(props: {
     <box
       paddingLeft={1}
       paddingRight={1}
-      backgroundColor={props.selected ? props.tone : props.available ? motryx.panelAlt : undefined}
+      backgroundColor={props.selected ? motryx.gold : props.available ? motryx.panelAlt : undefined}
       border={["bottom"]}
-      borderColor={props.selected ? props.tone : props.available ? motryx.line : motryx.panelAlt}
+      borderColor={props.selected ? motryx.goldDark : props.available ? motryx.line : motryx.panelAlt}
       onMouseDown={props.onSelect}
     >
-      <text fg={props.selected ? motryx.shellText : props.available ? motryx.ink : motryx.muted} wrapMode="none">
+      <text fg={props.selected ? motryx.shell : props.available ? motryx.ink : motryx.muted} wrapMode="none">
         {clip(text(), props.compact ? 16 : 24)}
       </text>
     </box>
@@ -882,6 +910,13 @@ function shortRoleLabel(role: string) {
   return role
 }
 
+function humanTargetLabel(role: string) {
+  if (role === "orchestrator") return "orchestrator"
+  if (role === "coordinator") return "coordinator"
+  if (role === "checker") return "checker"
+  return role
+}
+
 function shortSessionID(sessionID?: string) {
   if (!sessionID) return "unknown"
   const raw = sessionID.trim()
@@ -891,8 +926,9 @@ function shortSessionID(sessionID?: string) {
   return `ses_${withoutPrefix.slice(0, 4)}...${withoutPrefix.slice(-4)}`
 }
 
-function targetSessionLabel(sessionID: string | undefined, compact: boolean) {
-  return compact ? tinySessionID(sessionID) : shortSessionID(sessionID)
+function targetSessionLabel(sessionID: string | undefined, _compact: boolean) {
+  if (!sessionID) return "missing"
+  return "ready"
 }
 
 function tinySessionID(sessionID?: string) {
@@ -919,7 +955,7 @@ function MotryxSessionPicker(props: {
   )
   return (
     <DialogSelect
-      title="Motryx sessions"
+      title="Motryx orchestrators"
       options={options()}
       current={props.current}
       onSelect={(option) => props.onSelect(option.value)}
@@ -958,29 +994,39 @@ function EmptySessionState(props: {
   readiness: MotryxReadinessItem[]
   onStart: () => void
 }) {
-  return (
-    <box flexDirection="column" gap={1} paddingTop={1}>
-      <box flexDirection="row" gap={2}>
-        <box
-          flexDirection="column"
-          paddingLeft={1}
-          paddingRight={1}
-          paddingTop={1}
-          backgroundColor={motryx.shell}
-        >
-          <MotryxWordmark size="full" />
-          <text fg={motryx.gold} wrapMode="none">VIRTUAL SILICON ENGINEERS</text>
-        </box>
+  const setupSummary = createMemo(() => {
+    const warn = props.readiness.filter((item) => item.tone === "warn").length
+    if (warn > 0) return `${warn} setup item${warn === 1 ? "" : "s"} need attention`
+    return "Setup ready"
+  })
+  if (props.starting) {
+    return (
+      <box paddingTop={1} paddingLeft={1}>
+        <Line>
+          <text fg={motryx.muted} wrapMode="none">Starting Motryx orchestrator...</text>
+        </Line>
       </box>
-      <text fg={motryx.muted} wrapMode="none">No focused orchestrator session.</text>
+    )
+  }
+  return (
+    <box flexDirection="column" gap={1} paddingTop={1} paddingLeft={1}>
       <box flexDirection="column">
-        <For each={props.readiness.slice(0, 3)}>
-          {(item) => (
-            <text fg={readinessColor(item)} wrapMode="none">
-              {`${item.label}: ${item.detail}`}
-            </text>
-          )}
-        </For>
+        <Line>
+          <text fg={motryx.ink} wrapMode="none">Ready to start a Motryx run</text>
+        </Line>
+        <Line>
+          <text fg={motryx.muted} wrapMode="none">Describe the verification goal.</text>
+        </Line>
+        <Line>
+          <text fg={motryx.muted} wrapMode="none">Resume a session or open the command menu.</text>
+        </Line>
+      </box>
+      <box flexDirection="column">
+        <Line>
+          <text fg={props.readiness.some((item) => item.tone === "warn") ? motryx.redDark : motryx.logoGreen} wrapMode="none">
+            {setupSummary()}
+          </text>
+        </Line>
       </box>
       <box
         flexDirection="column"
@@ -989,14 +1035,14 @@ function EmptySessionState(props: {
         paddingTop={1}
         paddingBottom={1}
         backgroundColor={motryx.panelAlt}
-        border={["left"]}
-        borderColor={motryx.red}
         onMouseDown={props.onStart}
       >
-        <text fg={motryx.ink} wrapMode="none">
-          {props.starting ? "Starting Motryx orchestrator..." : "Start Motryx orchestrator"}
-        </text>
-        <text fg={motryx.muted} wrapMode="none">or type /orchestrator from the command menu</text>
+        <Line>
+          <text fg={motryx.ink} wrapMode="none">Start Motryx orchestrator</text>
+        </Line>
+        <Line>
+          <text fg={motryx.muted} wrapMode="none">Command menu: /orchestrator</text>
+        </Line>
       </box>
     </box>
   )
@@ -1026,25 +1072,23 @@ function formatPickerTime(updated: number) {
   return `${month}-${day} ${hour}:${minute}`
 }
 
-function readinessColor(item: MotryxReadinessItem) {
-  if (item.tone === "ok") return motryx.logoGreen
-  if (item.tone === "warn") return motryx.redDark
-  return motryx.muted
-}
-
 function SidecardButton(props: { label: string; selected: boolean; onSelect: () => void }) {
   return (
     <box
       paddingLeft={1}
       paddingRight={1}
-      backgroundColor={props.selected ? motryx.red : undefined}
+      backgroundColor={props.selected ? motryx.gold : undefined}
       border={["bottom"]}
-      borderColor={props.selected ? motryx.red : motryx.line}
+      borderColor={props.selected ? motryx.goldDark : motryx.line}
       onMouseDown={props.onSelect}
     >
-      <text fg={props.selected ? motryx.shellText : motryx.muted} wrapMode="none">{props.label}</text>
+      <text fg={props.selected ? motryx.shell : motryx.muted} wrapMode="none">{props.label}</text>
     </box>
   )
+}
+
+function Line(props: { children: JSX.Element }) {
+  return <box height={1}>{props.children}</box>
 }
 
 function CockpitHeader(props: { summary: string; compact: boolean }) {
@@ -1072,22 +1116,30 @@ function WorkflowReadyState(props: { model: ReturnType<typeof projectIcTui> }) {
       gap={1}
     >
       <box flexDirection="column" border={["left"]} borderColor={motryx.gold} paddingLeft={1}>
-        <text fg={motryx.ink} wrapMode="none">
-          <b>No workflow yet</b>
-        </text>
-        <text fg={motryx.muted} wrapMode="word">
-          Motryx will show lanes here when the orchestrator starts a workflow.
-        </text>
+        <Line>
+          <text fg={motryx.ink} wrapMode="none">
+            <b>No workflow yet</b>
+          </text>
+        </Line>
+        <Line>
+          <text fg={motryx.muted} wrapMode="none">
+            Ask Motryx to plan a verification workflow; lanes will appear here.
+          </text>
+        </Line>
       </box>
       <box flexDirection="column" border={["left"]} borderColor={hasSession() ? motryx.logoGreen : motryx.red} paddingLeft={1}>
-        <text fg={hasSession() ? motryx.logoGreen : motryx.redDark} wrapMode="none">
-          {hasSession() ? "Orchestrator ready" : "No orchestrator session"}
-        </text>
-        <text fg={motryx.muted} wrapMode="word">
-          {hasSession()
-            ? "Continue the conversation on the left."
-            : "Start the orchestrator on the left to begin."}
-        </text>
+        <Line>
+          <text fg={hasSession() ? motryx.logoGreen : motryx.redDark} wrapMode="none">
+            {hasSession() ? "Orchestrator ready" : "No orchestrator session"}
+          </text>
+        </Line>
+        <Line>
+          <text fg={motryx.muted} wrapMode="none">
+            {hasSession()
+              ? "Continue on the left and describe the goal."
+              : "Start Motryx on the left to begin."}
+          </text>
+        </Line>
       </box>
     </box>
   )
@@ -1103,20 +1155,27 @@ function DebugLaneSessions(props: {
 }) {
   return (
     <box flexDirection="column" gap={1} paddingTop={1}>
-      <text fg={motryx.ink} wrapMode="none">
-        <b>DEBUG</b>
-      </text>
+      <Line>
+        <text fg={motryx.ink} wrapMode="none">
+          <b>INTERNAL SESSIONS</b>
+        </text>
+      </Line>
+      <Line>
+        <text fg={motryx.muted} wrapMode="none">Developer view for coordinator and checker sessions.</text>
+      </Line>
       <box
         flexDirection="column"
         paddingLeft={1}
         paddingRight={1}
         backgroundColor={motryx.panelAlt}
         border={["left"]}
-        borderColor={props.currentTarget.role === "orchestrator" ? motryx.gold : motryx.red}
+        borderColor={props.currentTarget.role === "orchestrator" ? motryx.gold : motryx.blue}
       >
-        <text fg={props.currentTarget.tone} wrapMode="none">
-          {clip(`target ${props.currentTarget.prompt}`, props.compact ? 24 : 36)}
-        </text>
+        <Line>
+          <text fg={props.currentTarget.tone} wrapMode="none">
+            {clip(`Current target: ${humanTargetLabel(props.currentTarget.role)}`, props.compact ? 28 : 42)}
+          </text>
+        </Line>
         <box
           paddingLeft={1}
           paddingRight={1}
@@ -1130,7 +1189,11 @@ function DebugLaneSessions(props: {
       </box>
       <Show
         when={props.lanes.length > 0}
-        fallback={<text fg={motryx.muted} wrapMode="word">No workflow lanes with internal sessions yet.</text>}
+        fallback={
+          <Line>
+            <text fg={motryx.muted} wrapMode="none">No workflow lanes with internal sessions yet.</text>
+          </Line>
+        }
       >
         <For each={props.lanes}>
           {(lane, index) => (
@@ -1161,7 +1224,7 @@ function DebugLaneSessionRow(props: {
       paddingRight={1}
       backgroundColor={props.lane.selected ? motryx.panelAlt : undefined}
       border={["left"]}
-      borderColor={props.lane.selected ? motryx.red : motryx.line}
+      borderColor={props.lane.selected ? motryx.goldDark : motryx.line}
     >
       <box flexDirection="row" justifyContent="space-between">
         <text fg={motryx.ink} wrapMode="none">{title()}</text>
@@ -1203,21 +1266,21 @@ function DebugRoleButton(props: {
       justifyContent={props.compact ? "flex-start" : "space-between"}
       paddingLeft={1}
       paddingRight={1}
-      backgroundColor={selected() ? motryx.red : undefined}
+      backgroundColor={selected() ? motryx.gold : undefined}
       onMouseDown={() => props.onSelectRole(props.lane, props.role)}
     >
       <Show
         when={!props.compact}
         fallback={
-          <text fg={selected() ? motryx.shellText : entry().available ? motryx.ink : motryx.muted} wrapMode="none">
+          <text fg={selected() ? motryx.shell : entry().available ? motryx.ink : motryx.muted} wrapMode="none">
             {compactLabel()}
           </text>
         }
       >
-        <text fg={selected() ? motryx.shellText : entry().available ? motryx.ink : motryx.muted} wrapMode="none">
+        <text fg={selected() ? motryx.shell : entry().available ? motryx.ink : motryx.muted} wrapMode="none">
           {`${props.label} · ${entry().status}`}
         </text>
-        <text fg={selected() ? motryx.shellText : motryx.muted} wrapMode="none">
+        <text fg={selected() ? motryx.shell : motryx.muted} wrapMode="none">
           {sessionLabel()}
         </text>
       </Show>
@@ -1226,9 +1289,10 @@ function DebugRoleButton(props: {
 }
 
 function cockpitSummary(model: ReturnType<typeof projectIcTui>) {
-  const counts = model.cockpit.counts
-  const blocked = model.laneBoard.summary.blocked > 0 ? ` · ${model.laneBoard.summary.blocked} blocked` : ""
-  return `${counts.lanes} lanes${blocked}`
+  const counts = model.laneBoard.summary
+  if (counts.total === 0) return "no workflow"
+  const blocked = counts.blocked ? ` · ${counts.blocked} blocked` : ""
+  return `${counts.active} active · ${counts.done}/${counts.total} done${blocked}`
 }
 
 function AttentionLaneHint(props: { lane?: IcLaneSummary; onSelect: (lane: IcLaneSummary) => void }) {
@@ -1241,18 +1305,22 @@ function AttentionLaneHint(props: { lane?: IcLaneSummary; onSelect: (lane: IcLan
           paddingRight={1}
           backgroundColor={motryx.panelAlt}
           border={["left"]}
-          borderColor={laneNeedsAttention(lane()) ? motryx.red : motryx.gold}
+          borderColor={laneBlockedForRoute(lane()) ? motryx.redDark : motryx.gold}
           onMouseDown={() => props.onSelect(lane())}
         >
-          <text fg={laneNeedsAttention(lane()) ? motryx.redDark : motryx.muted} wrapMode="none">
-            {laneBlockedForRoute(lane())
-              ? `Blocked: ${clip(lane().name, 22)}`
-              : `Next: ${clip(lane().status.toLowerCase(), 8)} ${clip(lane().name, 18)}`}
-          </text>
-          <Show when={lane().pendingCheckSummary}>
-            <text fg={motryx.muted} wrapMode="none">
-              {clip(lane().pendingCheckSummary || "", 34)}
+          <Line>
+            <text fg={laneBlockedForRoute(lane()) ? motryx.redDark : motryx.muted} wrapMode="none">
+              {laneBlockedForRoute(lane())
+                ? `Blocked: ${clip(lane().name, 22)}`
+                : `Next: ${clip(lane().status.toLowerCase(), 8)} ${clip(lane().name, 20)}`}
             </text>
+          </Line>
+          <Show when={lane().pendingCheckSummary}>
+            <Line>
+              <text fg={motryx.muted} wrapMode="none">
+                {clip(lane().pendingCheckSummary || "", 34)}
+              </text>
+            </Line>
           </Show>
         </box>
       )}
@@ -1296,22 +1364,22 @@ function LaneBoardRow(props: {
   compact: boolean
   onSelectLane: () => void
 }) {
-  const left = createMemo(() => `${pad2(props.row.ordinal)} ${clip(props.row.label, props.compact ? 17 : 25)}`)
+  const left = createMemo(() => `${pad2(props.row.ordinal)} ${clip(props.row.label, props.compact ? 22 : 28)}`)
   const status = createMemo(() => clipStatus(props.row.statusLabel))
   return (
     <box
       flexDirection="column"
       paddingLeft={1}
       paddingRight={1}
-      backgroundColor={props.row.selected ? motryx.panelAlt : undefined}
+      backgroundColor={props.row.selected ? motryx.panelSoft : undefined}
       border={["left"]}
-      borderColor={props.row.selected ? motryx.red : motryx.panel}
+      borderColor={props.row.selected ? motryx.goldDark : motryx.panel}
       onMouseDown={props.onSelectLane}
     >
       <box flexDirection="row" justifyContent="space-between">
         <text fg={props.row.selected ? motryx.ink : motryx.ink} wrapMode="none">{left()}</text>
-        <box paddingLeft={1} paddingRight={1} backgroundColor={laneStatusBackground(props.row)}>
-          <text fg={laneStatusForeground(props.row)} wrapMode="none">{props.row.attention ? `${status()} !` : status()}</text>
+        <box paddingLeft={1} paddingRight={1} backgroundColor={laneStatusBackground(props.row.tone, motryx)}>
+          <text fg={laneStatusForeground(props.row.tone, motryx)} wrapMode="none">{props.row.attention ? `${status()} !` : status()}</text>
         </box>
       </box>
       <Show when={props.row.selected && props.lane}>
@@ -1327,65 +1395,36 @@ function LaneBoardRow(props: {
   )
 }
 
-function laneBoardToneColor(row: IcLaneBoardRow, palette: MotryxPalette) {
-  if (row.tone === "blocked") return palette.redDark
-  if (row.tone === "checking") return palette.gold
-  if (row.tone === "active") return palette.red
-  if (row.tone === "done") return palette.green
-  return palette.muted
-}
-
-function laneStatusBackground(row: IcLaneBoardRow) {
-  if (row.tone === "open") return motryx.panelAlt
-  return laneBoardToneColor(row, motryx)
-}
-
-function laneStatusForeground(row: IcLaneBoardRow) {
-  if (row.tone === "open" || row.tone === "checking") return motryx.ink
-  return motryx.shellText
-}
-
 function clipStatus(status: string) {
-  const value = status.toLowerCase().replace(/_/g, "-")
-  if (value.includes("block") || value.includes("fail")) return "blocked"
-  if (value.includes("work") || value.includes("active") || value.includes("progress")) return "active"
-  if (value.includes("check") || value.includes("review")) return "check"
-  if (value.includes("done") || value.includes("pass") || value.includes("complete")) return "done"
-  if (value.includes("open")) return "open"
-  return clip(value, 7)
+  return clipStatusLabel(status, clip)
 }
 
 function statusTextColor(status: string) {
-  return laneBoardToneColor({ tone: statusTone(status) } as IcLaneBoardRow, motryx)
-}
-
-function statusTone(status: string): IcLaneBoardRow["tone"] {
-  const value = status.toLowerCase()
-  if (/block|fail|error/.test(value)) return "blocked"
-  if (/check|review/.test(value)) return "checking"
-  if (/work|active|progress/.test(value)) return "active"
-  if (/done|pass|complete/.test(value)) return "done"
-  return "open"
+  return laneBoardToneColor(statusTone(status), motryx)
 }
 
 function laneBoardDetailLine(row: IcLaneBoardRow, lane: IcLaneSummary) {
-  const dep = row.needs.length ? `dep:${row.needs.join("/")}` : "dep:-"
-  const reopen = `reopen:${lane.reopenCount ?? 0}`
-  const last = `last:${formatLaneBoardTime(lane.updatedAt)}`
+  const dep = row.needs.length ? `depends ${row.needs.join("/")}` : "no dependencies"
+  const reopen = `reopened ${lane.reopenCount ?? 0}`
+  const last = `updated ${formatLaneBoardTime(lane.updatedAt)}`
   return `${dep} · ${reopen} · ${last}`
 }
 
 function LaneMetricLines(props: { row: IcLaneBoardRow; lane: IcLaneSummary; compact: boolean }) {
-  const dep = () => props.row.needs.length ? `dep:${props.row.needs.join("/")}` : "dep:-"
-  const reopen = () => `reopen:${props.lane.reopenCount ?? 0}`
-  const last = () => `last:${formatLaneBoardTime(props.lane.updatedAt)}`
+  const dep = () => props.row.needs.length ? `depends ${props.row.needs.join("/")}` : "no dependencies"
+  const reopen = () => `reopened ${props.lane.reopenCount ?? 0}`
+  const last = () => `updated ${formatLaneBoardTime(props.lane.updatedAt)}`
   return (
     <Show
       when={!props.compact}
       fallback={
         <box flexDirection="column">
-          <text fg={motryx.muted} wrapMode="none">{`${dep()} · ${reopen()}`}</text>
-          <text fg={motryx.muted} wrapMode="none">{last()}</text>
+          <Line>
+            <text fg={motryx.muted} wrapMode="none">{`${dep()} · ${reopen()}`}</text>
+          </Line>
+          <Line>
+            <text fg={motryx.muted} wrapMode="none">{last()}</text>
+          </Line>
         </box>
       }
     >
@@ -1449,7 +1488,7 @@ function LaneDetail(props: {
             paddingBottom={1}
             backgroundColor={motryx.panelAlt}
             border={["left"]}
-            borderColor={motryx.red}
+            borderColor={statusTone(lane().status) === "blocked" ? motryx.redDark : motryx.goldDark}
           >
             <box flexDirection="row" justifyContent="space-between">
               <text fg={motryx.ink} wrapMode="none">
@@ -1469,7 +1508,7 @@ function LaneDetail(props: {
                 </text>
               }
             >
-              {(summary) => <text fg={motryx.redDark} wrapMode="none">{clip(summary(), props.compact ? 30 : 42)}</text>}
+                {(summary) => <text fg={motryx.redDark} wrapMode="word">{clip(summary(), props.compact ? 54 : 72)}</text>}
             </Show>
           </box>
           <Show when={outputs().length > 0}>
@@ -1495,7 +1534,7 @@ function laneDetailFallback(lane: IcLaneSummary) {
 function laneNeedsAttention(lane: IcLaneSummary) {
   const status = lane.status.toLowerCase()
   const result = lane.lastCheckResult?.toLowerCase() ?? ""
-  return /block|check|rework|fail|open|work/.test(status)
+  return /block|check|rework|fail|work|active|progress/.test(status)
     || Boolean(lane.pendingCheckSummary)
     || Boolean(result && !["pass", "passed", "done", "ok", "clean"].includes(result))
 }
@@ -1555,4 +1594,10 @@ function shouldRefreshFromWorkflowEvent(event: string) {
 
 function clip(value: string, length: number) {
   return Locale.truncate(value, length)
+}
+
+function clearDisplayLine(value: string, width: number) {
+  const length = Math.max(0, width)
+  const clipped = clip(value, length)
+  return clipped.padEnd(length, " ")
 }

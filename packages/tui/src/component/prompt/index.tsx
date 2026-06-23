@@ -19,6 +19,7 @@ import { tint, useTheme } from "../../context/theme"
 import { EmptyBorder, SplitBorder } from "../../ui/border"
 import { useTuiPaths, useTuiTerminalEnvironment } from "../../context/runtime"
 import { useClipboard } from "../../context/clipboard"
+import { CLIPBOARD_UNAVAILABLE_MESSAGE } from "../../clipboard"
 import { Spinner } from "../spinner"
 import { useSDK } from "../../context/sdk"
 import { useRoute } from "../../context/route"
@@ -393,7 +394,7 @@ export function Prompt(props: PromptProps) {
             return
           }
           toast.show({
-            message: "Clipboard unavailable; use terminal paste.",
+            message: CLIPBOARD_UNAVAILABLE_MESSAGE,
             variant: "warning",
           })
         },

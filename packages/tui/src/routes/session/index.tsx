@@ -165,6 +165,7 @@ const context = createContext<{
   providers: () => ReadonlyMap<string, Provider>
   sync: ReturnType<typeof useSync>
   tui: ReturnType<typeof useTuiConfig>
+  transformTextPart?: (text: string) => string | undefined
 }>()
 
 function use() {
@@ -1354,6 +1355,7 @@ export function SessionSurface(props: {
   promptRight?: JSX.Element
   showScrollbar?: boolean
   empty?: JSX.Element
+  transformTextPart?: (text: string) => string | undefined
 }) {
   const sync = useSync()
   const sdk = useSDK()
@@ -1593,6 +1595,7 @@ export function SessionSurface(props: {
           providers,
           sync,
           tui: tuiConfig,
+          transformTextPart: props.transformTextPart,
         }}
       >
         <box flexGrow={1} minHeight={0} flexDirection="column" gap={1}>
@@ -2049,14 +2052,15 @@ function ReasoningHeader(props: {
 function TextPart(props: { last: boolean; part: TextPart; message: AssistantMessage }) {
   const ctx = use()
   const { theme, syntax } = useTheme()
+  const content = createMemo(() => ctx.transformTextPart?.(props.part.text) ?? props.part.text.trim())
   return (
-    <Show when={props.part.text.trim()}>
+    <Show when={content()}>
       <box id={"text-" + props.part.id} paddingLeft={3} marginTop={1} flexShrink={0}>
         <markdown
           syntaxStyle={syntax()}
           streaming={true}
           internalBlockMode="top-level"
-          content={props.part.text.trim()}
+          content={content() || ""}
           tableOptions={{ style: "grid" }}
           conceal={ctx.conceal()}
           fg={theme.markdownText}

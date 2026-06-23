@@ -435,7 +435,7 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
 
     await clipboard
       .write?.(text)
-      .then(() => toast.show({ message: "Copied to clipboard", variant: "info" }))
+      .then(() => toast.show({ message: "Copied to terminal/system clipboard", variant: "info" }))
       .catch(toast.error)
 
     renderer.clearSelection()

@@ -186,7 +186,7 @@ export function DialogProvider(props: ParentProps) {
     const text = renderer.getSelection()?.getSelectedText()
     if (!text || !clipboard.write) return false
     void clipboard.write(text).then(
-      () => toast.show({ message: "Copied to clipboard", variant: "info" }),
+      () => toast.show({ message: "Copied to terminal/system clipboard", variant: "info" }),
       (error) => toast.error(error),
     )
     renderer.clearSelection()

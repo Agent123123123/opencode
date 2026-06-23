@@ -69,8 +69,8 @@ const RICH_LOGOS = {
 } satisfies Record<MotryxLogoSize, readonly (readonly MotryxLogoSegment[])[]>
 
 const WORDMARKS = {
-  compact: [[{ text: "Motry", tone: "light" }, { text: "X", tone: "gold" }]],
-  full: [[{ text: "Motry", tone: "light" }, { text: "X", tone: "gold" }]],
+  compact: [[{ text: "MOTRY", tone: "light" }, { text: "X", tone: "gold" }]],
+  full: [[{ text: "MOTRY", tone: "light" }, { text: "X", tone: "gold" }]],
 } satisfies Record<MotryxWordmarkSize, readonly (readonly MotryxLogoSegment[])[]>
 
 export function motryxLogoLines(size: MotryxLogoSize, variant: MotryxLogoVariant) {

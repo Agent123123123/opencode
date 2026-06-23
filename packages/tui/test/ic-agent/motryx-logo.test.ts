@@ -15,11 +15,11 @@ test("enables the rich Motryx logo only when explicitly requested", () => {
   expect(motryxLogoVariant({ MOTRYX_TUI_LOGO: "ascii" })).toBe("ascii")
 })
 
-test("uses a MotryX wordmark with the traced gold X accent", () => {
-  expect(motryxWordmarkPlainLines()).toEqual(["MotryX"])
-  expect(motryxWordmarkPlainLines("compact")).toEqual(["MotryX"])
+test("uses a clean MotryX wordmark with the traced gold X accent", () => {
+  expect(motryxWordmarkPlainLines()).toEqual(["MOTRYX"])
+  expect(motryxWordmarkPlainLines("compact")).toEqual(["MOTRYX"])
 
   const [motry, x] = motryxWordmarkLines()[0]!
-  expect(motry).toEqual({ text: "Motry", tone: "light" })
+  expect(motry).toEqual({ text: "MOTRY", tone: "light" })
   expect(x).toEqual({ text: "X", tone: "gold" })
 })
