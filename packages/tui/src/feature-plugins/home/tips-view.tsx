@@ -2,6 +2,7 @@ import type { TuiPluginApi } from "@opencode-ai/plugin/tui"
 import { createMemo, For, type Accessor } from "solid-js"
 import { DEFAULT_THEMES, useTheme } from "../../context/theme"
 import { useCommandShortcut } from "../../keymap"
+import { isMotryxProductMode } from "../../ic-agent/product-agent"
 
 const themeCount = Object.keys(DEFAULT_THEMES).length
 
@@ -134,10 +135,13 @@ export function Tips(props: { api: TuiPluginApi; connected?: boolean }) {
   }
   const tip = createMemo(() => {
     if (props.connected === false) return NO_MODELS_TIP
-    const tips = [...TIPS, process.platform !== "win32" ? TERMINAL_SUSPEND_TIP : INPUT_UNDO_TIP].flatMap((item) => {
-      const value = typeof item === "string" ? item : item(shortcuts)
-      return value ? [value] : []
-    })
+    const productTips = isMotryxProductMode() ? TIPS.filter((item) => !MOTRYX_HIDDEN_TIPS.has(item)) : TIPS
+    const tips = [...productTips, process.platform !== "win32" ? TERMINAL_SUSPEND_TIP : INPUT_UNDO_TIP].flatMap(
+      (item) => {
+        const value = typeof item === "string" ? item : item(shortcuts)
+        return value ? [value] : []
+      },
+    )
     return tips[Math.floor(tipOffset * tips.length)] ?? NO_MODELS_TIP
   }, NO_MODELS_TIP)
   // Solid can expose a memo's initial value while a pure computation is pending.
@@ -161,10 +165,14 @@ export function Tips(props: { api: TuiPluginApi; connected?: boolean }) {
   )
 }
 
+const AGENT_CYCLE_TIP: Tip = (shortcuts) => press(shortcuts.agentCycle(), "to cycle between Build and Plan agents")
+const PLAN_AGENT_TIP: Tip = "Switch to {highlight}Plan{/highlight} agent to get suggestions without making actual changes"
+const MOTRYX_HIDDEN_TIPS = new Set<Tip>([AGENT_CYCLE_TIP, PLAN_AGENT_TIP])
+
 const TIPS: Tip[] = [
   "Type {highlight}@{/highlight} followed by a filename to fuzzy search and attach files",
   "Start a message with {highlight}!{/highlight} to run shell commands directly (e.g., {highlight}!ls -la{/highlight})",
-  (shortcuts) => press(shortcuts.agentCycle(), "to cycle between Build and Plan agents"),
+  AGENT_CYCLE_TIP,
   "Use {highlight}/undo{/highlight} to revert the last message and file changes",
   "Use {highlight}/redo{/highlight} to restore previously undone messages and file changes",
   "Run {highlight}/share{/highlight} to create a public link to your conversation at opencode.ai",
@@ -198,7 +206,7 @@ const TIPS: Tip[] = [
   (shortcuts) => press(shortcuts.inputNewline(), "to add newlines in your prompt"),
   (shortcuts) => press(shortcuts.inputClear(), "when typing to clear the input field"),
   (shortcuts) => press(shortcuts.sessionInterrupt(), "to stop the AI mid-response"),
-  "Switch to {highlight}Plan{/highlight} agent to get suggestions without making actual changes",
+  PLAN_AGENT_TIP,
   "Use {highlight}@agent-name{/highlight} in prompts to invoke specialized subagents",
   (shortcuts) => {
     const items = [

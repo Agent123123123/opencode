@@ -104,6 +104,18 @@ describe("transcript", () => {
       const result = formatAssistantHeader(msg, true)
       expect(result).toContain("Plan")
     })
+
+    test("maps hidden native agents in Motryx product mode", () => {
+      const original = process.env.OPENCODE_IC_AGENT_TUI
+      process.env.OPENCODE_IC_AGENT_TUI = "1"
+      try {
+        const result = formatAssistantHeader(baseMsg, true, providers)
+        expect(result).toBe("## Assistant (Orchestrator · Claude Sonnet 4 · 5.4s)\n\n")
+      } finally {
+        if (original === undefined) delete process.env.OPENCODE_IC_AGENT_TUI
+        else process.env.OPENCODE_IC_AGENT_TUI = original
+      }
+    })
   })
 
   describe("formatPart", () => {

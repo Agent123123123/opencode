@@ -78,6 +78,11 @@ import { getScrollAcceleration } from "../../util/scroll"
 import { collapseToolOutput } from "../../util/collapse-tool-output"
 import { usePluginRuntime } from "../../plugin/runtime"
 import { DialogRetryAction } from "../../component/dialog-retry-action"
+import {
+  MOTRYX_DEFAULT_AGENT,
+  isMotryxProductMode,
+  motryxProductAgentDisplayName,
+} from "../../ic-agent/product-agent"
 import { getRevertDiffFiles } from "../../util/revert-diff"
 import { OPENCODE_BASE_MODE, useBindings, useCommandShortcut, useOpencodeKeymap } from "../../keymap"
 import { PathFormatterProvider, usePathFormatter } from "../../context/path-format"
@@ -326,10 +331,10 @@ export function Session() {
     if (part.id === lastSwitch) return
 
     if (part.tool === "plan_exit") {
-      local.agent.set("build")
+      local.agent.set(isMotryxProductMode() ? MOTRYX_DEFAULT_AGENT : "build")
       lastSwitch = part.id
     } else if (part.tool === "plan_enter") {
-      local.agent.set("plan")
+      local.agent.set(isMotryxProductMode() ? MOTRYX_DEFAULT_AGENT : "plan")
       lastSwitch = part.id
     }
   })
@@ -1924,7 +1929,11 @@ function AssistantMessage(props: { message: AssistantMessage; parts: Part[]; las
               >
                 ▣{" "}
               </span>{" "}
-              <span style={{ fg: theme.text }}>{Locale.titlecase(props.message.mode)}</span>
+              <span style={{ fg: theme.text }}>
+                {Locale.titlecase(
+                  isMotryxProductMode() ? motryxProductAgentDisplayName(props.message.mode) : props.message.mode,
+                )}
+              </span>
               <span style={{ fg: theme.textMuted }}> · {model()}</span>
               <Show when={duration()}>
                 <span style={{ fg: theme.textMuted }}> · {Locale.duration(duration())}</span>

@@ -57,6 +57,7 @@ import { useTuiConfig } from "../../config"
 import { usePromptWorkspace } from "./workspace"
 import { usePromptMove } from "./move"
 import { readLocalAttachment } from "./local-attachment"
+import { isMotryxProductMode, motryxProductAgentDisplayName } from "../../ic-agent/product-agent"
 
 export type PromptProps = {
   sessionID?: string
@@ -1454,7 +1455,11 @@ export function Prompt(props: PromptProps) {
                   {(agent) => (
                     <>
                       <text fg={fadeColor(highlight(), agentMetaAlpha())}>
-                        {store.mode === "shell" ? "Shell" : Locale.titlecase(agent().name)}
+                        {store.mode === "shell"
+                          ? "Shell"
+                          : Locale.titlecase(
+                              isMotryxProductMode() ? motryxProductAgentDisplayName(agent().name) : agent().name,
+                            )}
                       </text>
                       <Show when={store.mode === "normal"}>
                         <box flexDirection="row" gap={1}>

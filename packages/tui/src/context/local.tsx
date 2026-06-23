@@ -12,6 +12,12 @@ import { readJson, writeJsonAtomic } from "../util/persistence"
 import { useTheme } from "./theme"
 import { useToast } from "../ui/toast"
 import { useRoute } from "./route"
+import {
+  MOTRYX_DEFAULT_AGENT,
+  isMotryxHiddenNativeAgent,
+  isMotryxProductMode,
+  motryxProductAgentName,
+} from "../ic-agent/product-agent"
 
 export type LocalTheme = {
   secondary: RGBA
@@ -71,8 +77,11 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
     }
 
     function createAgent() {
-      const agents = createMemo(() => sync.data.agent.filter((agent) => agent.mode !== "subagent" && !agent.hidden))
-      const visibleAgents = createMemo(() => sync.data.agent.filter((agent) => !agent.hidden))
+      const motryxProductMode = isMotryxProductMode()
+      const isProductVisible = (agent: { name: string; hidden?: boolean }) =>
+        !agent.hidden && (!motryxProductMode || !isMotryxHiddenNativeAgent(agent.name))
+      const agents = createMemo(() => sync.data.agent.filter((agent) => agent.mode !== "subagent" && isProductVisible(agent)))
+      const visibleAgents = createMemo(() => sync.data.agent.filter((agent) => isProductVisible(agent)))
       const [agentStore, setAgentStore] = createStore({
         current: undefined as string | undefined,
       })
@@ -90,16 +99,18 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
           return agents()
         },
         current() {
-          return agents().find((x) => x.name === agentStore.current) ?? agents().at(0)
+          const currentName = motryxProductMode ? motryxProductAgentName(agentStore.current) : agentStore.current
+          return agents().find((x) => x.name === currentName) ?? agents().at(0)
         },
         set(name: string) {
-          if (!agents().some((x) => x.name === name))
+          const next = motryxProductMode && isMotryxHiddenNativeAgent(name) ? MOTRYX_DEFAULT_AGENT : name
+          if (!agents().some((x) => x.name === next))
             return toast.show({
               variant: "warning",
-              message: `Agent not found: ${name}`,
+              message: `Agent not found: ${next}`,
               duration: 3000,
             })
-          setAgentStore("current", name)
+          setAgentStore("current", next)
         },
         move(direction: 1 | -1) {
           batch(() => {
@@ -113,7 +124,8 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
           })
         },
         color(name: string) {
-          const index = visibleAgents().findIndex((x) => x.name === name)
+          const productName = motryxProductMode ? motryxProductAgentName(name) : name
+          const index = visibleAgents().findIndex((x) => x.name === productName)
           if (index === -1) return colors()[0]
           const agent = visibleAgents()[index]
 

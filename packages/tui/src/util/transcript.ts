@@ -1,6 +1,7 @@
 import type { AssistantMessage, Part, Provider, UserMessage } from "@opencode-ai/sdk/v2"
 import { Locale } from "./locale"
 import * as Model from "./model"
+import { isMotryxProductMode, motryxProductAgentDisplayName } from "../ic-agent/product-agent"
 
 export type TranscriptOptions = {
   thinking: boolean
@@ -78,7 +79,8 @@ export function formatAssistantHeader(
 
   const modelName = Model.name(providers, msg.providerID, msg.modelID)
 
-  return `## Assistant (${Locale.titlecase(msg.agent)} · ${modelName}${duration ? ` · ${duration}` : ""})\n\n`
+  const agentName = isMotryxProductMode() ? motryxProductAgentDisplayName(msg.agent) : msg.agent
+  return `## Assistant (${Locale.titlecase(agentName)} · ${modelName}${duration ? ` · ${duration}` : ""})\n\n`
 }
 
 export function formatPart(part: Part, options: TranscriptOptions): string {
