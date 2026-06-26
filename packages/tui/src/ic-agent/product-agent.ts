@@ -10,7 +10,7 @@ type MotryxProductEnv = {
 
 export function isMotryxProductMode(env: MotryxProductEnv = process.env as MotryxProductEnv): boolean {
   if (env.OPENCODE_IC_AGENT_TUI === "1" || env.OPENCODE_IC_AGENT_TUI === "true") return true
-  if (env.OPENCODE_IC_AGENT_THEME === "motryx") return true
+  if (env.OPENCODE_IC_AGENT_THEME?.startsWith("motryx")) return true
   return env.OPENCODE_ROUTE?.includes('"ic-agent"') ?? false
 }
 

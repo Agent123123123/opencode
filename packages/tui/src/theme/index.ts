@@ -18,7 +18,8 @@ import material from "./assets/material.json" with { type: "json" }
 import matrix from "./assets/matrix.json" with { type: "json" }
 import mercury from "./assets/mercury.json" with { type: "json" }
 import monokai from "./assets/monokai.json" with { type: "json" }
-import motryx from "./assets/motryx.json" with { type: "json" }
+import motryxDark from "./assets/motryx_dark.json" with { type: "json" }
+import motryxLight from "./assets/motryx_light.json" with { type: "json" }
 import nightowl from "./assets/nightowl.json" with { type: "json" }
 import nord from "./assets/nord.json" with { type: "json" }
 import onedark from "./assets/one-dark.json" with { type: "json" }
@@ -146,7 +147,9 @@ export const DEFAULT_THEMES: Record<string, ThemeJson> = {
   matrix,
   mercury,
   monokai,
-  motryx,
+  motryx: motryxLight,
+  motryx_dark: motryxDark,
+  motryx_light: motryxLight,
   nightowl,
   nord,
   ["one-dark"]: onedark,
@@ -163,6 +166,28 @@ export const DEFAULT_THEMES: Record<string, ThemeJson> = {
   vercel,
   zenburn,
   carbonfox,
+}
+
+export const MOTRYX_THEME_NAMES = ["motryx_light", "motryx_dark"] as const
+export type MotryxThemeName = typeof MOTRYX_THEME_NAMES[number]
+export const MOTRYX_DEFAULT_THEME: MotryxThemeName = "motryx_light"
+
+export function normalizeMotryxThemeName(theme: unknown): MotryxThemeName | undefined {
+  if (theme === "motryx" || theme === "motryx_light" || theme === "light") return "motryx_light"
+  if (theme === "motryx_dark" || theme === "dark") return "motryx_dark"
+  return undefined
+}
+
+export function isMotryxThemeName(theme: unknown): theme is MotryxThemeName {
+  return theme === "motryx_light" || theme === "motryx_dark"
+}
+
+export function motryxVisibleThemes(themes: Record<string, ThemeJson>) {
+  return MOTRYX_THEME_NAMES.reduce<Record<string, ThemeJson>>((result, name) => {
+    const theme = themes[name]
+    if (theme) result[name] = theme
+    return result
+  }, {})
 }
 
 const pluginThemes: Record<string, ThemeJson> = {}

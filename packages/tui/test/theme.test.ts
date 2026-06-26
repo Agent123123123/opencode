@@ -2,7 +2,16 @@ import { expect, test } from "bun:test"
 import { mkdir, writeFile } from "node:fs/promises"
 import path from "node:path"
 import type { TerminalColors } from "@opentui/core"
-import { DEFAULT_THEMES, addTheme, allThemes, hasTheme, resolveTheme, terminalMode } from "../src/theme"
+import {
+  DEFAULT_THEMES,
+  addTheme,
+  allThemes,
+  hasTheme,
+  motryxVisibleThemes,
+  normalizeMotryxThemeName,
+  resolveTheme,
+  terminalMode,
+} from "../src/theme"
 import { discoverThemes } from "../src/context/theme"
 import { tmpdir } from "./fixture/fixture"
 
@@ -43,6 +52,33 @@ test("resolveTheme rejects circular color refs", () => {
   item.theme.primary = "one"
   expect(() => resolveTheme(item, "dark")).toThrow("Circular color reference")
 })
+
+test("Motryx ships only light and dark visible product themes", () => {
+  expect(normalizeMotryxThemeName("motryx")).toBe("motryx_light")
+  expect(normalizeMotryxThemeName("light")).toBe("motryx_light")
+  expect(normalizeMotryxThemeName("dark")).toBe("motryx_dark")
+  expect(normalizeMotryxThemeName("tokyonight")).toBeUndefined()
+
+  const visible = motryxVisibleThemes({
+    ...DEFAULT_THEMES,
+    custom: DEFAULT_THEMES.opencode,
+  })
+  expect(Object.keys(visible).sort()).toEqual(["motryx_dark", "motryx_light"])
+})
+
+test("Motryx light and dark themes resolve to PPT palettes", () => {
+  const light = resolveTheme(DEFAULT_THEMES.motryx_light!, "light")
+  const dark = resolveTheme(DEFAULT_THEMES.motryx_dark!, "dark")
+  expect(rgbaHex(light.background)).toBe("#f8faf6")
+  expect(rgbaHex(light.primary)).toBe("#007d65")
+  expect(rgbaHex(dark.background)).toBe("#08100e")
+  expect(rgbaHex(dark.primary)).toBe("#52e0b7")
+})
+
+function rgbaHex(color: { r: number; g: number; b: number }) {
+  const channel = (value: number) => Math.round(value * 255).toString(16).padStart(2, "0")
+  return `#${channel(color.r)}${channel(color.g)}${channel(color.b)}`
+}
 
 function terminalColors(defaultBackground: string | null, palette: Array<string | null> = []): TerminalColors {
   return {

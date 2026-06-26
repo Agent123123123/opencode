@@ -4,6 +4,7 @@ import { useBindings } from "../../keymap"
 import { useSync } from "../../context/sync"
 import { useSDK } from "../../context/sdk"
 import { useLocal } from "../../context/local"
+import { useTheme } from "../../context/theme"
 import { useTuiConfig } from "../../config"
 import { Locale } from "../../util/locale"
 import { getScrollAcceleration } from "../../util/scroll"
@@ -46,7 +47,7 @@ import {
 import { readIcWorkflowSnapshot } from "../../ic-agent/workflow-adapter"
 import { icCommandSpecs, type IcCommandIntent, type IcSidecardMode } from "../../ic-agent/commands"
 import { SessionSurface } from "../session"
-import { motryx } from "./motryx-theme"
+import { motryx, setMotryxPaletteTheme } from "./motryx-theme"
 
 const WORKFLOW_REFRESH_INTERVAL_MS = 2000
 export function IcAgent() {
@@ -54,6 +55,7 @@ export function IcAgent() {
   const sync = useSync()
   const sdk = useSDK()
   const local = useLocal()
+  const theme = useTheme()
   const tuiConfig = useTuiConfig()
   const toast = useToast()
   const dialog = useDialog()
@@ -147,6 +149,8 @@ export function IcAgent() {
   const cockpitHeight = createMemo(() => layout().cockpitHeight)
   const conversationWidth = createMemo(() => layout().conversationWidth)
   const readiness = createMemo(() => motryxReadinessFromEnv())
+  createEffect(() => setMotryxPaletteTheme(theme.selected))
+  onCleanup(() => setMotryxPaletteTheme(undefined))
   const selectedLane = createMemo(() => model().lanes.find((item) => item.id === model().laneBoard.selectedLaneID))
   const nextAttentionLane = createMemo(() => model().lanes.find((item) => item.id === model().laneBoard.nextAttentionLaneID))
   const boardLayout = createMemo(() => laneBoardLayout({
@@ -1077,12 +1081,12 @@ function SidecardButton(props: { label: string; selected: boolean; onSelect: () 
     <box
       paddingLeft={1}
       paddingRight={1}
-      backgroundColor={props.selected ? motryx.gold : undefined}
+      backgroundColor={props.selected ? motryx.panel : undefined}
       border={["bottom"]}
       borderColor={props.selected ? motryx.goldDark : motryx.line}
       onMouseDown={props.onSelect}
     >
-      <text fg={props.selected ? motryx.shell : motryx.muted} wrapMode="none">{props.label}</text>
+      <text fg={props.selected ? motryx.gold : motryx.muted} wrapMode="none">{props.label}</text>
     </box>
   )
 }

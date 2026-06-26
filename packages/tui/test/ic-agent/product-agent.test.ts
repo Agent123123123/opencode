@@ -10,6 +10,8 @@ import {
 test("detects Motryx product mode from launcher environment", () => {
   expect(isMotryxProductMode({ OPENCODE_IC_AGENT_TUI: "1" })).toBe(true)
   expect(isMotryxProductMode({ OPENCODE_IC_AGENT_THEME: "motryx" })).toBe(true)
+  expect(isMotryxProductMode({ OPENCODE_IC_AGENT_THEME: "motryx_light" })).toBe(true)
+  expect(isMotryxProductMode({ OPENCODE_IC_AGENT_THEME: "motryx_dark" })).toBe(true)
   expect(isMotryxProductMode({ OPENCODE_ROUTE: '{"type":"ic-agent"}' })).toBe(true)
   expect(isMotryxProductMode({ OPENCODE_IC_AGENT_TUI: undefined, OPENCODE_ROUTE: '{"type":"session"}' })).toBe(false)
 })
