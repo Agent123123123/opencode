@@ -61,6 +61,15 @@ function normalizeLoadedConfig(data: unknown) {
   return copy
 }
 
+function pluginDependencyVersion(): string | undefined {
+  if (InstallationLocal) return undefined
+  // Only pin @opencode-ai/plugin for upstream stable releases that are expected
+  // to exist on npm. Product/dev builds may carry prerelease or build metadata
+  // that is valid semver but not a published plugin package version.
+  if (!/^\d+\.\d+\.\d+$/.test(InstallationVersion)) return undefined
+  return InstallationVersion
+}
+
 async function substituteWellKnownRemoteConfig(input: {
   value: unknown
   dir: string
@@ -439,7 +448,7 @@ export const layer = Layer.effect(
               add: [
                 {
                   name: "@opencode-ai/plugin",
-                  version: InstallationLocal ? undefined : InstallationVersion,
+                  version: pluginDependencyVersion(),
                 },
               ],
             })

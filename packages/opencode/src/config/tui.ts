@@ -44,6 +44,15 @@ export interface Interface {
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/TuiConfig") {}
 
+function pluginDependencyVersion(): string | undefined {
+  if (InstallationLocal) return undefined
+  // Only pin @opencode-ai/plugin for upstream stable releases that are expected
+  // to exist on npm. Product/dev builds may carry prerelease or build metadata
+  // that is valid semver but not a published plugin package version.
+  if (!/^\d+\.\d+\.\d+$/.test(InstallationVersion)) return undefined
+  return InstallationVersion
+}
+
 function pluginScope(file: string, ctx: { directory: string }): ConfigPlugin.Scope {
   if (Filesystem.contains(ctx.directory, file)) return "local"
   // if (ctx.worktree !== "/" && Filesystem.contains(ctx.worktree, file)) return "local"
@@ -237,7 +246,7 @@ export const layer = Layer.effect(
             add: [
               {
                 name: "@opencode-ai/plugin",
-                version: InstallationLocal ? undefined : InstallationVersion,
+                version: pluginDependencyVersion(),
               },
             ],
           })
