@@ -875,7 +875,7 @@ test("debug view can focus an internal lane session without changing product def
   const debugCommands = icCommandSpecs(debugModel, { debugView: true })
   expect(debugCommands.map((command) => command.slashName)).toEqual([
     "orchestrator",
-    "orchestrators",
+    "sessions",
     "refresh",
     "workflow",
     "lane",
@@ -1206,7 +1206,7 @@ test("builds IC slash command intents from the current view model", () => {
 
   expect(commands.map((command) => command.slashName)).toEqual([
     "orchestrator",
-    "orchestrators",
+    "sessions",
     "refresh",
     "workflow",
     "lane",
@@ -1223,7 +1223,12 @@ test("builds IC slash command intents from the current view model", () => {
   expect(commands.find((command) => command.id === "ic.orchestrator.sessions")?.intent).toEqual({
     type: "open-sessions",
   })
-  expect(commands.find((command) => command.id === "ic.orchestrator.sessions")?.slashAliases).toContain("sessions")
+  expect(commands.find((command) => command.id === "ic.orchestrator.sessions")?.slashAliases).toEqual([
+    "resume",
+    "continue",
+    "orchestrators",
+    "history",
+  ])
   expect(commands.find((command) => command.id === "ic.orchestrator.sessions")?.description).toContain("Coordinator and checker")
   expect(commands.find((command) => command.id === "ic.workflow.refresh")?.intent).toEqual({
     type: "refresh-workflow",
