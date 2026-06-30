@@ -17,6 +17,7 @@ import { Spinner } from "./spinner"
 import { errorMessage } from "../util/error"
 import { DialogSessionDeleteFailed } from "./dialog-session-delete-failed"
 import { useCommandShortcut } from "../keymap"
+import { isMotryxProductMode, isMotryxVisibleSession } from "../ic-agent/product-agent"
 
 export function DialogSessionList() {
   const dialog = useDialog()
@@ -32,6 +33,7 @@ export function DialogSessionList() {
   const deleteHint = useCommandShortcut("session.delete")
   const quickSwitch1 = useCommandShortcut("session.quick_switch.1")
   const quickSwitch9 = useCommandShortcut("session.quick_switch.9")
+  const motryxProductMode = createMemo(() => isMotryxProductMode())
 
   const [searchResults, { refetch }] = createResource(
     () => ({ query: search(), filter: sync.session.query() }),
@@ -44,6 +46,9 @@ export function DialogSessionList() {
 
   const currentSessionID = createMemo(() => (route.data.type === "session" ? route.data.sessionID : undefined))
   const sessions = createMemo(() => searchResults() ?? sync.data.session)
+  const visibleSessions = createMemo(() =>
+    sessions().filter((session) => !motryxProductMode() || isMotryxVisibleSession(session)),
+  )
 
   function recover(session: NonNullable<ReturnType<typeof sessions>[number]>) {
     const workspace = project.workspace.get(session.workspaceID!)
@@ -133,6 +138,7 @@ export function DialogSessionList() {
 
   function orderByRecency(sessionsList: NonNullable<ReturnType<typeof sessions>>) {
     return sessionsList
+      .filter((x) => !motryxProductMode() || isMotryxVisibleSession(x))
       .filter((x) => x.parentID === undefined)
       .toSorted((a, b) => b.time.updated - a.time.updated)
       .map((x) => x.id)
@@ -154,7 +160,7 @@ export function DialogSessionList() {
   const options = createMemo(() => {
     const today = new Date().toDateString()
     const sessionMap = new Map(
-      sessions()
+      visibleSessions()
         .filter((x) => x.parentID === undefined)
         .map((x) => [x.id, x]),
     )

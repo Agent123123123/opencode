@@ -88,6 +88,7 @@ import {
   shouldUseOpenCodeContinueStartupRoute,
   startupRouteFromEnv,
 } from "./ic-agent/session-mode"
+import { isMotryxProductMode } from "./ic-agent/product-agent"
 
 const appGlobalBindingCommands = [
   "session.list",
@@ -555,6 +556,7 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
   )
 
   const connected = useConnected()
+  const motryxProductMode = createMemo(() => isMotryxProductMode())
   const currentWorktreeWorkspace = createMemo(() => {
     const workspaceID = project.workspace.current()
     if (!workspaceID) return
@@ -577,9 +579,10 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
         name: "session.list",
         title: "Switch session",
         category: "Session",
-        suggested: sync.data.session.length > 0,
-        slashName: "sessions",
-        slashAliases: ["resume", "continue"],
+        hidden: motryxProductMode(),
+        suggested: !motryxProductMode() && sync.data.session.length > 0,
+        slashName: motryxProductMode() ? undefined : "sessions",
+        slashAliases: motryxProductMode() ? undefined : ["resume", "continue"],
         run: () => {
           dialog.replace(() => <DialogSessionList />)
         },
@@ -956,7 +959,12 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
   }))
 
   useBindings(() => ({
-    bindings: tuiConfig.keybinds.gather("app.global", appGlobalBindingCommands),
+    bindings: tuiConfig.keybinds.gather(
+      "app.global",
+      motryxProductMode()
+        ? appGlobalBindingCommands.filter((command) => command !== "session.list")
+        : appGlobalBindingCommands,
+    ),
   }))
 
   useBindings(() => ({
