@@ -8,6 +8,7 @@ import {
   createMotryxOrchestratorSessionID,
   ensureMotryxOrchestratorBinding,
   motryxBindingExists,
+  readMotryxOrchestratorBinding,
   resolveMotryxRuntimePaths,
 } from "../../src/ic-agent/orchestrator-binding"
 
@@ -82,6 +83,85 @@ test("honors explicit Motryx runtime roots from the environment", async () => {
     expect(binding.icAgentDbPath).toBe(path.join(dataRoot, "orchestrators", "ses_ext", "ic-agent.db"))
     expect(env.MOTRYX_CHANNEL_DB).toBe(channelDb)
   } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test("reads a headless-created orchestrator binding as the same TUI product truth", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "motryx-headless-binding-"))
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    async fetch(request) {
+      const url = new URL(request.url)
+      if (request.method === "POST" && url.pathname === "/session") {
+        return Response.json({
+          data: {
+            id: "ses_headless_tui_equiv",
+            agent: "orchestrator",
+            title: "Motryx orchestrator",
+            directory: url.searchParams.get("directory"),
+          },
+        })
+      }
+      return new Response("not found", { status: 404 })
+    },
+  })
+  try {
+    const project = path.join(root, "project")
+    const stateRoot = path.join(root, "state")
+    const dataRoot = path.join(root, "data")
+    const channelDb = path.join(dataRoot, "channel.db")
+    const sessionDb = path.join(dataRoot, "opencode", "motryx.db")
+    mkdirSync(project, { recursive: true })
+    const helper = path.resolve(import.meta.dir, "../../../../../scripts/motryx-headless.mjs")
+    const proc = Bun.spawn([
+      "bun",
+      helper,
+      "serve",
+      "--project",
+      project,
+      "--state-root",
+      stateRoot,
+      "--data-root",
+      dataRoot,
+      "--channel-db",
+      channelDb,
+      "--session-db",
+      sessionDb,
+      "--mode",
+      "new",
+      "--server-url",
+      `http://127.0.0.1:${server.port}`,
+      "--json",
+    ], {
+      stdout: "pipe",
+      stderr: "pipe",
+    })
+    const [exitCode, stdout, stderr] = await Promise.all([
+      proc.exited,
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+    ])
+
+    expect({ exitCode, stdout, stderr }).toMatchObject({ exitCode: 0 })
+    const binding = readMotryxOrchestratorBinding({
+      projectDir: project,
+      sessionID: "ses_headless_tui_equiv",
+      env: {
+        MOTRYX_DATA_ROOT: dataRoot,
+        MOTRYX_CHANNEL_DB: channelDb,
+      },
+    })
+
+    expect(binding).toMatchObject({
+      projectID: project,
+      orchestratorSessionID: "ses_headless_tui_equiv",
+      icAgentDbPath: path.join(dataRoot, "orchestrators", "ses_headless_tui_equiv", "ic-agent.db"),
+      schemaVersion: 1,
+    })
+  } finally {
+    server.stop(true)
     rmSync(root, { recursive: true, force: true })
   }
 })
