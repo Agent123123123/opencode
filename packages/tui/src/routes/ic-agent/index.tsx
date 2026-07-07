@@ -42,6 +42,7 @@ import {
   type IcLaneBoardRow,
   type IcLaneRole,
   type IcLaneSummary,
+  type IcResourceBlock,
   type IcSessionSummary,
 } from "../../ic-agent/projection"
 import { readIcWorkflowSnapshot } from "../../ic-agent/workflow-adapter"
@@ -599,6 +600,11 @@ export function IcAgent() {
                   fallback={<WorkflowReadyState model={model()} />}
                 >
                   <box flexDirection="column">
+                    <ResourceBlockBanner
+                      blocks={model().resourceBlocks}
+                      compact={compact()}
+                      onSelectLane={(laneID) => focusLane(laneID)}
+                    />
                     <AttentionLaneHint lane={nextAttentionLane()} onSelect={(lane) => focusLane(lane.id)} />
                     <LaneBoard
                       rows={model().laneBoard.rows}
@@ -786,10 +792,12 @@ function MotryxStatusBar(props: {
 }) {
   const summary = createMemo(() => {
     const counts = props.model.laneBoard.summary
+    const resourceBlocks = props.model.resourceBlocks.length
     if (counts.total === 0) return "no workflow"
+    const resource = resourceBlocks > 0 ? ` · ${resourceBlocks} resource` : ""
     const blocked = counts.blocked > 0 ? ` · ${counts.blocked} blocked` : ""
     const active = counts.active > 0 ? `${counts.active} active` : "idle"
-    return `${active}${blocked} · ${counts.done}/${counts.total} done`
+    return `${active}${blocked}${resource} · ${counts.done}/${counts.total} done`
   })
   const debugHint = createMemo(() => {
     if (!props.debugView) return ""
@@ -1342,6 +1350,42 @@ function AttentionLaneHint(props: { lane?: IcLaneSummary; onSelect: (lane: IcLan
   )
 }
 
+function ResourceBlockBanner(props: {
+  blocks: IcResourceBlock[]
+  compact: boolean
+  onSelectLane: (laneID: string) => void
+}) {
+  const first = createMemo(() => props.blocks[0])
+  return (
+    <Show when={first()}>
+      {(block) => (
+        <box
+          flexDirection="column"
+          paddingLeft={1}
+          paddingRight={1}
+          backgroundColor={motryx.panelAlt}
+          border={["left"]}
+          borderColor={motryx.redDark}
+          onMouseDown={() => block().laneID && props.onSelectLane(block().laneID!)}
+        >
+          <Line>
+            <text fg={motryx.redDark} wrapMode="none">
+              {props.compact
+                ? `Quota: ${clip(block().laneName || block().laneID || "workflow", 22)}`
+                : `LLM resource blocked: ${clip(block().providerID || "provider", 14)} / ${clip(block().modelID || "model", 18)}`}
+            </text>
+          </Line>
+          <Line>
+            <text fg={motryx.muted} wrapMode="none">
+              {clip(block().errorMessage || block().impactSummary || "Human confirmation required before resume.", props.compact ? 34 : 54)}
+            </text>
+          </Line>
+        </box>
+      )}
+    </Show>
+  )
+}
+
 function LaneBoard(props: {
   rows: IcLaneBoardRow[]
   lanes: IcLaneSummary[]
@@ -1603,6 +1647,8 @@ function shouldRefreshFromWorkflowEvent(event: string) {
     || event === "heartbeat"
     || event.startsWith("workflow.")
     || event.startsWith("lane.")
+    || event === "agent.provider_resource_exhausted"
+    || event.startsWith("agent.provider_")
     || event.startsWith("diagnostic.")
 }
 

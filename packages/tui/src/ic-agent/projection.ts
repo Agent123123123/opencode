@@ -73,6 +73,8 @@ export type IcDiagnostic = {
   selected?: boolean
 }
 
+export type IcResourceBlock = NonNullable<IcWorkflowSnapshot["resourceBlocks"]>[number]
+
 export type IcLaneSummary = {
   id: string
   name: string
@@ -85,6 +87,7 @@ export type IcLaneSummary = {
   dependsOnLaneIDs?: string[]
   coordinatorSessionID?: string
   checkerSessionID?: string
+  resourceBlock?: IcResourceBlock
   recommendedRole: IcLaneRole
   focusedRole?: IcLaneRole
   coordinator: IcLaneRoleEntry
@@ -198,6 +201,7 @@ export type IcTuiViewModel = {
   sessions: IcSessionSummary[]
   agents: IcAgentSummary[]
   artifacts: IcArtifactSummary[]
+  resourceBlocks: IcResourceBlock[]
   diagnostics: IcDiagnostic[]
   transcript: IcTranscriptItem[]
   cockpit: IcCockpitSummary
@@ -330,6 +334,7 @@ export function projectIcTui(input: {
     sessions: summaries,
     agents,
     artifacts,
+    resourceBlocks: input.workflow?.resourceBlocks ?? [],
     diagnostics,
     transcript: selectedSession ? transcriptForSession(selectedSession.id, input.messages, input.parts) : [],
     cockpit: summarizeCockpit({
@@ -417,8 +422,10 @@ function summarizeLane(input: {
 }): IcLaneSummary {
   const recommendedRole = recommendedLaneRole(input.lane)
   const focusedRole = input.selected ? input.focusedRole : undefined
+  const resourceBlock = (input.workflow?.resourceBlocks ?? []).find((block) => block.laneID === input.lane.id)
   return {
     ...input.lane,
+    resourceBlock,
     recommendedRole,
     focusedRole,
     coordinator: laneRoleEntry({
@@ -560,14 +567,16 @@ function uniqueGraphEdges(edges: IcWorkflowGraphEdge[]) {
 }
 
 function laneNeedsAttentionForGraph(lane: IcLaneSummary) {
-  return laneBlocked(lane)
+  return Boolean(lane.resourceBlock)
+    || laneBlocked(lane)
     || laneChecking(lane)
     || Boolean(lane.pendingCheckSummary)
     || Boolean(lane.lastCheckResult && !laneCheckClean(lane.lastCheckResult))
 }
 
 function laneBlocked(lane: IcLaneSummary) {
-  return /block|fail|rework|error|dead/.test(lane.status.toLowerCase())
+  return Boolean(lane.resourceBlock)
+    || /block|fail|rework|error|dead/.test(lane.status.toLowerCase())
 }
 
 function laneChecking(lane: IcLaneSummary) {
@@ -593,6 +602,7 @@ function laneCheckClean(result: string) {
 }
 
 function laneWhyNow(lane: IcLaneSummary) {
+  if (lane.resourceBlock) return "LLM quota or provider resource is blocked"
   if (lane.pendingCheckSummary) return lane.pendingCheckSummary
   if (laneBlocked(lane)) return "blocking downstream workflow progress"
   if (laneChecking(lane)) return "waiting for checker or signoff attention"
@@ -603,6 +613,7 @@ function laneWhyNow(lane: IcLaneSummary) {
 
 function laneCheckSummary(lane: IcLaneSummary) {
   const parts = []
+  if (lane.resourceBlock) parts.push("resource blocked")
   if (lane.lastCheckResult) parts.push(`check ${lane.lastCheckResult}`)
   if (lane.reopenCount) parts.push(`reopen ${lane.reopenCount}`)
   if (lane.repairCycle) parts.push(`repair ${lane.repairCycle}`)

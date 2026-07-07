@@ -1254,6 +1254,58 @@ test("documents IC feature policy for native escape hatches and hidden command l
   })
 })
 
+test("projects provider resource blocks as lane attention without switching focus", () => {
+  const view = projectIcTui({
+    sessions: [session("ses_orchestrator", "orchestrator", 10)],
+    messages: {},
+    parts: {},
+    statuses: {},
+    selectedSessionID: "ses_orchestrator",
+    workflow: {
+      stateDb: "/run/.motryx/db/orchestrators/ses/ic-agent.db",
+      workflow: {
+        id: "wf_1",
+        status: "active",
+        goal: "quota recovery",
+      },
+      lanes: [{
+        id: "lane_1",
+        name: "review",
+        status: "PENDING",
+        coordinatorSessionID: "ses_coord",
+      }],
+      agents: [{
+        instanceID: "inst_orch",
+        role: "orchestrator",
+        sessionID: "ses_orchestrator",
+        status: "ALIVE",
+        laneIDs: [],
+      }],
+      artifacts: [],
+      resourceBlocks: [{
+        id: "resource-block:fact_1",
+        factID: "fact_1",
+        factKey: "resource.llm.openai.gpt-5.5.provider_resource_exhausted",
+        laneID: "lane_1",
+        laneName: "review",
+        providerID: "openai",
+        modelID: "gpt-5.5",
+        errorMessage: "quota exhausted",
+        humanActionRequired: true,
+        automaticProviderFallback: false,
+      }],
+      diagnostics: [],
+    },
+  })
+
+  expect(view.focus?.type).toBe("orchestrator")
+  expect(view.resourceBlocks).toHaveLength(1)
+  expect(view.lanes[0]!.resourceBlock?.providerID).toBe("openai")
+  expect(view.laneBoard.summary.blocked).toBe(1)
+  expect(view.laneBoard.nextAttentionLaneID).toBe("lane_1")
+  expect(view.graph.selected?.whyNow).toBe("LLM quota or provider resource is blocked")
+})
+
 function session(id: string, title: string, updated: number, parentID?: string): Session {
   return {
     id,

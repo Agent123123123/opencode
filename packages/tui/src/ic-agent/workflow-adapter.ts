@@ -48,6 +48,23 @@ export type IcWorkflowSnapshot = {
     detail: string
     mtime: number
   }>
+  resourceBlocks?: Array<{
+    id: string
+    factID?: string
+    factKey?: string
+    laneID?: string
+    laneName?: string
+    laneStatus?: string
+    providerID?: string
+    modelID?: string
+    sessionID?: string
+    messageID?: string
+    errorMessage?: string
+    impactSummary?: string
+    humanActionRequired: boolean
+    automaticProviderFallback: boolean
+    lastEventAt?: number
+  }>
   diagnostics: Array<{
     id: string
     severity: "info" | "warn" | "error"
@@ -90,6 +107,7 @@ function readLocalWorkflowSnapshot(directory: string, projectContext?: MotryxPro
     lanes: [],
     agents: [],
     artifacts: [],
+    resourceBlocks: [],
     diagnostics: projectContextDiagnostics(projectContext),
   }
 }
@@ -143,6 +161,7 @@ function normalizeApiWorkflowSnapshot(data: unknown, apiURL: string): IcWorkflow
     lanes: normalizeApiLanes(value.lanes),
     agents: normalizeApiAgents(value.agents),
     artifacts: [],
+    resourceBlocks: normalizeApiResourceBlocks(value.resourceBlocks ?? value.resource_blocks),
     diagnostics: normalizeApiDiagnostics(value.diagnostics, apiURL),
   }
 }
@@ -244,6 +263,34 @@ function normalizeApiDiagnostics(value: unknown, apiURL: string): IcWorkflowSnap
   }).filter((item): item is IcWorkflowSnapshot["diagnostics"][number] => Boolean(item))
 }
 
+function normalizeApiResourceBlocks(value: unknown): NonNullable<IcWorkflowSnapshot["resourceBlocks"]> {
+  if (!Array.isArray(value)) return []
+  const blocks: NonNullable<IcWorkflowSnapshot["resourceBlocks"]> = []
+  value.forEach((item, index) => {
+    const block = objectRecord(item)
+    if (!block) return
+    const id = optionalString(block.id) ?? optionalString(block.fact_id) ?? `resource-block-${index + 1}`
+    blocks.push({
+      id,
+      factID: optionalString(block.factID) ?? optionalString(block.fact_id),
+      factKey: optionalString(block.factKey) ?? optionalString(block.fact_key),
+      laneID: optionalString(block.laneID) ?? optionalString(block.lane_id),
+      laneName: optionalString(block.laneName) ?? optionalString(block.lane_name),
+      laneStatus: optionalString(block.laneStatus) ?? optionalString(block.lane_status),
+      providerID: optionalString(block.providerID) ?? optionalString(block.provider_id),
+      modelID: optionalString(block.modelID) ?? optionalString(block.model_id),
+      sessionID: optionalString(block.sessionID) ?? optionalString(block.session_id),
+      messageID: optionalString(block.messageID) ?? optionalString(block.message_id),
+      errorMessage: optionalString(block.errorMessage) ?? optionalString(block.error_message),
+      impactSummary: optionalString(block.impactSummary) ?? optionalString(block.impact_summary),
+      humanActionRequired: block.humanActionRequired !== false && block.human_action_required !== false,
+      automaticProviderFallback: block.automaticProviderFallback === true || block.automatic_provider_fallback === true,
+      lastEventAt: optionalNumber(block.lastEventAt) ?? optionalNumber(block.last_event_at),
+    })
+  })
+  return blocks
+}
+
 function withApiFallbackDiagnostic(snapshot: IcWorkflowSnapshot, apiURL: string, error: unknown): IcWorkflowSnapshot {
   return {
     ...snapshot,
@@ -331,6 +378,7 @@ function readStateDb(stateDb: string, directory: string, projectContext?: Motryx
     const failedOutbox = count(db, "select count(*) as count from transactional_outbox where status in ('FAILED','DEAD_LETTER')")
     const pendingDelivery = count(db, "select count(*) as count from messages where delivery_status='PENDING_DELIVERY'")
     const pendingWake = count(db, "select count(*) as count from wake_queue where status='PENDING'")
+    const resourceBlocks = activeResourceBlocks(db, workflow?.id, lanes)
     const diagnostics = [
       legacyFallbackDiagnostic(stateDbSource, stateDb),
       schemaStale
@@ -389,6 +437,19 @@ function readStateDb(stateDb: string, directory: string, projectContext?: Motryx
             readonly: true,
           }
         : undefined,
+      ...resourceBlocks.map((block) => ({
+        id: `resource-block:${block.id}`,
+        severity: "error" as const,
+        title: "LLM resource blocked",
+        detail: block.errorMessage || block.impactSummary || "Provider quota/resource exhaustion requires human confirmation before resume.",
+        source: "ic.state_db.workflow_facts",
+        targetType: block.laneID ? "lane" as const : "runtime" as const,
+        targetID: block.laneID || block.sessionID || block.factID || block.id,
+        recommendation: "Tell the human which provider/model is exhausted. Resume affected lanes only after restored API/quota is confirmed.",
+        evidence: block.factID,
+        readonly: true,
+        sessionID: block.sessionID,
+      })),
     ].filter((item): item is NonNullable<typeof item> => Boolean(item))
 
     return {
@@ -404,6 +465,7 @@ function readStateDb(stateDb: string, directory: string, projectContext?: Motryx
       lanes,
       agents,
       artifacts: artifactSummaries(stateDb),
+      resourceBlocks,
       diagnostics,
     }
   } finally {
@@ -425,6 +487,58 @@ function legacyFallbackDiagnostic(source: NonNullable<IcWorkflowSnapshot["stateD
     evidence: stateDb,
     readonly: true,
   }
+}
+
+function activeResourceBlocks(
+  db: Database,
+  workflowID: string | undefined,
+  lanes: IcWorkflowSnapshot["lanes"],
+): NonNullable<IcWorkflowSnapshot["resourceBlocks"]> {
+  if (!workflowID || !tableExists(db, "workflow_facts")) return []
+  const laneById = new Map(lanes.map((lane) => [lane.id, lane]))
+  const blocks: NonNullable<IcWorkflowSnapshot["resourceBlocks"]> = []
+  all<ResourceFactRow>(
+    db,
+    `select fact_id as factID,
+            fact_key as factKey,
+            kind,
+            content_json as contentJson,
+            impact_summary as impactSummary,
+            created_at as createdAt
+       from workflow_facts
+      where workflow_id = '${escapeSqlLiteral(workflowID)}'
+        and status = 'ACTIVE'
+       and kind = 'resource'
+      order by created_at desc`,
+  ).forEach((row) => {
+    const content = parseJsonObject(row.contentJson)
+    if (
+      content.resource_error_kind !== "provider_resource_exhausted" &&
+      !row.factKey.includes("provider_resource_exhausted")
+    ) {
+      return
+    }
+    const laneID = optionalString(content.lane_id)
+    const lane = laneID ? laneById.get(laneID) : undefined
+    blocks.push({
+      id: `resource-block:${row.factID}`,
+      factID: row.factID,
+      factKey: row.factKey,
+      laneID,
+      laneName: lane?.name ?? optionalString(content.lane_name),
+      laneStatus: lane?.status ?? optionalString(content.lane_status),
+      providerID: optionalString(content.provider_id),
+      modelID: optionalString(content.model_id),
+      sessionID: optionalString(content.session_id),
+      messageID: optionalString(content.message_id),
+      errorMessage: optionalString(content.error_message),
+      impactSummary: row.impactSummary,
+      humanActionRequired: true,
+      automaticProviderFallback: false,
+      lastEventAt: optionalNumber(content.last_seen_at) ?? row.createdAt,
+    })
+  })
+  return blocks
 }
 
 function artifactSummaries(stateDb: string): IcWorkflowSnapshot["artifacts"] {
@@ -917,6 +1031,22 @@ function parseStringArray(value: string | undefined) {
   }
 }
 
+function parseJsonObject(value: string | undefined) {
+  if (!value) return {}
+  try {
+    const parsed = JSON.parse(value)
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : {}
+  } catch {
+    return {}
+  }
+}
+
+function escapeSqlLiteral(value: string) {
+  return value.replace(/'/g, "''")
+}
+
 function objectRecord(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined
 }
@@ -1020,4 +1150,13 @@ type AgentRow = {
   sessionID: string
   orchestratorSessionID?: string | null
   status: string
+}
+
+type ResourceFactRow = {
+  factID: string
+  factKey: string
+  kind: string
+  contentJson?: string
+  impactSummary?: string
+  createdAt: number
 }
