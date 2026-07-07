@@ -952,8 +952,9 @@ function MotryxSessionPicker(props: {
     props.sessions.map((session) => ({
       title: session.title,
       value: session.id,
-      description: `${session.updatedText} · msg:${session.messageCount} · ${session.bindingStatus} · ${sessionWorkflowLabel(session)}`,
+      description: `${sessionWorkflowLabel(session)} · ${session.updatedText}`,
       details: sessionDetails(session),
+      titleWidth: 28,
       category: "Orchestrator",
     })),
   )
@@ -983,7 +984,8 @@ function sessionWorkflowLabel(session: MotryxSessionHistoryItem) {
 }
 
 function sessionDetails(session: MotryxSessionHistoryItem) {
-  const details = [session.icAgentDbPath ? `${session.handle} · ${session.icAgentDbPath}` : `${session.handle} · ${session.id}`]
+  const details = [`${session.handle} · msg:${session.messageCount} · ${session.bindingStatus}${session.createdText ? ` · ${session.createdText}` : ""}`]
+  details.push(session.icAgentDbPath ? session.icAgentDbPath : session.id)
   if (session.requiredMigration) {
     details.push(`schema migration required · ${session.requiredMigration}`)
   }
@@ -1056,24 +1058,32 @@ function historyItemFromSession(session: IcSessionSummary, index: number): Motry
   return {
     handle: `@${index + 1}`,
     id: session.id,
-    title: session.title,
+    title: productSessionTitle(session.title),
     agent: "orchestrator",
     updated: session.updated,
-    updatedText: formatPickerTime(session.updated),
+    updatedText: session.updated ? `updated ${formatPickerTime(session.updated)}` : "updated unknown",
     messageCount: session.messageCount,
     bindingStatus: "missing-ic-db",
   }
+}
+
+function productSessionTitle(title: string) {
+  if (/^(?:New session|Child session) - \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(title.trim())) {
+    return "Untitled orchestrator"
+  }
+  return title.replace(/\s+/g, " ").trim() || "Untitled orchestrator"
 }
 
 function formatPickerTime(updated: number) {
   if (!updated) return "unknown-time"
   const date = new Date(updated)
   if (Number.isNaN(date.getTime())) return "unknown-time"
+  const year = `${date.getFullYear()}`
   const month = `${date.getMonth() + 1}`.padStart(2, "0")
   const day = `${date.getDate()}`.padStart(2, "0")
   const hour = `${date.getHours()}`.padStart(2, "0")
   const minute = `${date.getMinutes()}`.padStart(2, "0")
-  return `${month}-${day} ${hour}:${minute}`
+  return `${year}-${month}-${day} ${hour}:${minute}`
 }
 
 function SidecardButton(props: { label: string; selected: boolean; onSelect: () => void }) {
@@ -1127,7 +1137,7 @@ function WorkflowReadyState(props: { model: ReturnType<typeof projectIcTui> }) {
         </Line>
         <Line>
           <text fg={motryx.muted} wrapMode="none">
-            Ask Motryx to plan a verification workflow; lanes will appear here.
+            {clip("Plan workflow; lanes appear here.", 34)}
           </text>
         </Line>
       </box>
@@ -1140,7 +1150,7 @@ function WorkflowReadyState(props: { model: ReturnType<typeof projectIcTui> }) {
         <Line>
           <text fg={motryx.muted} wrapMode="none">
             {hasSession()
-              ? "Continue on the left and describe the goal."
+              ? clip("Continue left with the goal.", 34)
               : "Start Motryx on the left to begin."}
           </text>
         </Line>

@@ -346,6 +346,67 @@ test("prefers the current Motryx orchestrator binding over legacy project state"
   }
 })
 
+test("reads latest Motryx channel binding when no orchestrator is selected", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "ic-agent-tui-"))
+  try {
+    const project = path.join(root, "project")
+    const dataRoot = path.join(root, "dev-home", "data")
+    const channelDb = path.join(dataRoot, "channel.db")
+    const staleDb = path.join(dataRoot, "orchestrators", "ses_old", "ic-agent.db")
+    const latestDb = path.join(dataRoot, "orchestrators", "ses_latest", "ic-agent.db")
+    const legacyDb = path.join(project, ".ic-agent", "state.db")
+    mkdirSync(project, { recursive: true })
+    mkdirSync(path.join(project, ".motryx"), { recursive: true })
+    writeFileSync(path.join(project, ".motryx", "project.json"), "{}\n")
+    createTinyWorkflowDb(staleDb, "wf_old")
+    createTinyWorkflowDb(latestDb, "wf_latest")
+    createTinyWorkflowDb(legacyDb, "wf_legacy")
+
+    const channel = new Database(channelDb)
+    try {
+      channel.exec(`
+        create table orchestrator_bindings (
+          project_id text not null,
+          orchestrator_session_id text not null,
+          ic_agent_db_path text not null,
+          schema_version integer not null,
+          created_at text not null,
+          updated_at text not null,
+          primary key (project_id, orchestrator_session_id)
+        );
+      `)
+      const insert = channel.query("insert into orchestrator_bindings values (?, ?, ?, 1, ?, ?)")
+      insert.run(project, "ses_old", staleDb, "2026-07-07T00:00:00.000Z", "2026-07-07T00:00:00.000Z")
+      insert.run(project, "ses_latest", latestDb, "2026-07-07T01:00:00.000Z", "2026-07-07T01:00:00.000Z")
+    } finally {
+      channel.close()
+    }
+
+    const context = resolveMotryxProjectContext({
+      projectDir: project,
+      env: {
+        MOTRYX_DATA_ROOT: dataRoot,
+        MOTRYX_CHANNEL_DB: channelDb,
+        XDG_DATA_HOME: dataRoot,
+        OPENCODE_DB: "motryx.db",
+      },
+    })
+    const snapshot = await readIcWorkflowSnapshot(project, { projectContext: context })
+
+    expect(context.bindingStatus).toBe("none")
+    expect(snapshot.stateDb).toBe(latestDb)
+    expect(snapshot.stateDbSource).toMatchObject({
+      kind: "orchestrator-binding-latest",
+      productTruth: true,
+      legacy: false,
+    })
+    expect(snapshot.workflow?.id).toBe("wf_latest")
+    expect(snapshot.workflow?.id).not.toBe("wf_legacy")
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
 test("switches workflow snapshot when the selected Motryx orchestrator changes", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "ic-agent-tui-"))
   try {

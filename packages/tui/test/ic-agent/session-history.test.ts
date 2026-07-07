@@ -33,11 +33,55 @@ test("reads project-scoped orchestrator session history from Motryx DB", async (
       id: "ses_orch",
       title: "Top orchestrator",
       agent: "orchestrator",
+      created: Date.UTC(2026, 5, 16, 8, 30, 0),
+      createdText: `started ${localTimeLabel(Date.UTC(2026, 5, 16, 8, 30, 0))}`,
       updated: Date.UTC(2026, 5, 16, 9, 0, 0),
-      updatedText: "2026-06-16 09:00",
+      updatedText: `updated ${localTimeLabel(Date.UTC(2026, 5, 16, 9, 0, 0))}`,
       messageCount: 2,
       bindingStatus: "missing-ic-db",
     }])
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test("cleans default UTC session titles and exposes local started and updated labels", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "motryx-session-history-"))
+  try {
+    const project = path.join(root, "project")
+    const dataHome = path.join(root, "home", "data")
+    const dbPath = path.join(dataHome, "opencode", "motryx.db")
+    mkdirSync(path.dirname(dbPath), { recursive: true })
+    mkdirSync(project, { recursive: true })
+    seedSessionDb(dbPath, project)
+    const db = new Database(dbPath)
+    try {
+      db.query("update session set title = ?, time_created = ?, time_updated = ? where id = ?").run(
+        "New session - 2026-07-07T00:34:53.900Z",
+        Date.UTC(2026, 6, 7, 0, 34, 53, 900),
+        Date.UTC(2026, 6, 7, 1, 16, 24),
+        "ses_orch",
+      )
+    } finally {
+      db.close()
+    }
+
+    const history = await readMotryxSessionHistory({
+      projectDir: project,
+      env: {
+        XDG_DATA_HOME: dataHome,
+        OPENCODE_DB: "motryx.db",
+      },
+    })
+
+    expect(history.sessions[0]).toMatchObject({
+      id: "ses_orch",
+      title: "Untitled orchestrator",
+      createdText: `started ${localTimeLabel(Date.UTC(2026, 6, 7, 0, 34, 53, 900))}`,
+      updatedText: `updated ${localTimeLabel(Date.UTC(2026, 6, 7, 1, 16, 24))}`,
+    })
+    expect(history.sessions[0]?.title).not.toContain("2026-07-07T00:34:53.900Z")
+    expect(history.sessions[0]?.updatedText).not.toContain("T")
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
@@ -252,6 +296,7 @@ function seedSessionDb(dbPath: string, project: string) {
         agent TEXT,
         directory TEXT,
         parent_id TEXT,
+        time_created INTEGER,
         time_updated INTEGER
       );
       CREATE TABLE message (
@@ -261,8 +306,8 @@ function seedSessionDb(dbPath: string, project: string) {
       );
     `)
     const insert = db.query(`
-      INSERT INTO session (id, title, agent, directory, parent_id, time_updated)
-      VALUES ($id, $title, $agent, $directory, $parent, $time)
+      INSERT INTO session (id, title, agent, directory, parent_id, time_created, time_updated)
+      VALUES ($id, $title, $agent, $directory, $parent, $created, $time)
     `)
     insert.run({
       $id: "ses_checker",
@@ -270,6 +315,7 @@ function seedSessionDb(dbPath: string, project: string) {
       $agent: "checker",
       $directory: project,
       $parent: null,
+      $created: Date.UTC(2026, 5, 16, 9, 30, 0),
       $time: Date.UTC(2026, 5, 16, 10, 0, 0),
     })
     insert.run({
@@ -278,6 +324,7 @@ function seedSessionDb(dbPath: string, project: string) {
       $agent: "orchestrator",
       $directory: project,
       $parent: null,
+      $created: Date.UTC(2026, 5, 16, 8, 30, 0),
       $time: Date.UTC(2026, 5, 16, 9, 0, 0),
     })
     insert.run({
@@ -286,6 +333,7 @@ function seedSessionDb(dbPath: string, project: string) {
       $agent: "orchestrator",
       $directory: `${project}-other`,
       $parent: null,
+      $created: Date.UTC(2026, 5, 16, 10, 30, 0),
       $time: Date.UTC(2026, 5, 16, 11, 0, 0),
     })
     const insertMessage = db.query(`
@@ -297,6 +345,16 @@ function seedSessionDb(dbPath: string, project: string) {
   } finally {
     db.close()
   }
+}
+
+function localTimeLabel(value: number) {
+  const date = new Date(value)
+  const year = date.getFullYear()
+  const month = `${date.getMonth() + 1}`.padStart(2, "0")
+  const day = `${date.getDate()}`.padStart(2, "0")
+  const hour = `${date.getHours()}`.padStart(2, "0")
+  const minute = `${date.getMinutes()}`.padStart(2, "0")
+  return `${year}-${month}-${day} ${hour}:${minute}`
 }
 
 function seedBindingDb(dbPath: string, project: string, sessionID: string, icAgentDbPath: string) {

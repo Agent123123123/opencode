@@ -532,6 +532,7 @@ function findStateDbs(directory: string, projectContext?: MotryxProjectContext) 
   if (requestedSessionID && !requestedSessionID.startsWith("@")) {
     return bound && existsSync(bound) ? [bound] : []
   }
+  candidates.push(...channelBindingStateDbs(directory, projectContext))
   for (const item of ancestors) {
     const projectLocal = path.join(item, ".motryx", "db", "orchestrators")
     if (!existsSync(projectLocal)) continue
@@ -543,6 +544,7 @@ function findStateDbs(directory: string, projectContext?: MotryxProjectContext) 
       .toSorted((left, right) => right.mtime - left.mtime)
     candidates.push(...latest.map((item) => item.candidate))
   }
+  if (ancestors.some((item) => isMotryxProjectRoot(item))) return [...new Set(candidates)]
   for (const item of ancestors) {
     const candidate = path.join(item, ".ic-agent", "state.db")
     if (existsSync(candidate)) candidates.push(candidate)
@@ -560,6 +562,35 @@ function findStateDbs(directory: string, projectContext?: MotryxProjectContext) 
     candidates.push(...latest.map((item) => item.candidate))
   }
   return [...new Set(candidates)]
+}
+
+function channelBindingStateDbs(directory: string, projectContext?: MotryxProjectContext) {
+  const channelDb = projectContext?.channelDbPath
+    || process.env.MOTRYX_CHANNEL_DB
+    || path.join(path.resolve(directory), ".motryx", "db", "channel.db")
+  if (!existsSync(channelDb)) return []
+  let db: Database | undefined
+  try {
+    db = new Database(channelDb, { readonly: true })
+    const rows = db.query<{ icAgentDbPath: string }, [string]>(`
+      select ic_agent_db_path as icAgentDbPath
+        from orchestrator_bindings
+       where project_id = ?
+       order by updated_at desc, created_at desc
+    `).all(projectContext?.projectDir ?? path.resolve(directory))
+    return rows
+      .map((row) => path.resolve(String(row.icAgentDbPath)))
+      .filter((candidate) => existsSync(candidate))
+  } catch {
+    return []
+  } finally {
+    db?.close()
+  }
+}
+
+function isMotryxProjectRoot(directory: string) {
+  return existsSync(path.join(directory, ".motryx", "project.json"))
+    || existsSync(path.join(directory, ".motryx", "db", "channel.db"))
 }
 
 function ownerDbForInternalSession(
@@ -665,6 +696,15 @@ function classifyStateDbSource(
       productTruth: true,
       legacy: false,
       detail: "Selected by orchestrator binding from channel.db.",
+    }
+  }
+
+  if (channelBindingStateDbs(directory, projectContext).some((candidate) => path.resolve(candidate) === resolved)) {
+    return {
+      kind: "orchestrator-binding-latest",
+      productTruth: true,
+      legacy: false,
+      detail: "Selected from Motryx channel.db orchestrator bindings without an explicit orchestrator.",
     }
   }
 

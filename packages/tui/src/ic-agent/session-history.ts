@@ -9,6 +9,8 @@ export type MotryxSessionHistoryItem = {
   id: string
   title: string
   agent: string
+  created?: number
+  createdText?: string
   updated: number
   updatedText: string
   messageCount: number
@@ -133,13 +135,17 @@ function sessionSummary(db: Database, input: {
 }): MotryxSessionHistoryItem {
   const id = String(input.row.id)
   const updated = Number(input.row.time_updated || 0)
+  const defaultStarted = defaultSessionStartedAt(String(input.row.title || ""))
+  const created = Number(input.row.time_created || 0) || defaultStarted || undefined
   const item: MotryxSessionHistoryItem = {
     handle: `@${input.index + 1}`,
     id,
     title: cleanTitle(String(input.row.title || id)),
     agent: input.row.agent ? String(input.row.agent) : "orchestrator",
+    created,
+    createdText: created ? `started ${formatLocalTime(created)}` : undefined,
     updated,
-    updatedText: formatTime(updated),
+    updatedText: updated ? `updated ${formatLocalTime(updated)}` : "updated unknown",
     messageCount: input.hasMessage ? messageCount(db, id) : 0,
     bindingStatus: bindingStatus(input.binding?.icAgentDbPath),
   }
@@ -255,6 +261,7 @@ function readSessions(db: Database, input: {
   const hasParent = columns.has("parent_id")
   const hasDirectory = columns.has("directory")
   const hasUpdated = columns.has("time_updated")
+  const hasCreated = columns.has("time_created")
   const hasTitle = columns.has("title")
   const hasMessage = tableExists(db, "message")
   const agentExpr = hasAgent ? "agent" : "NULL AS agent"
@@ -264,7 +271,11 @@ function readSessions(db: Database, input: {
   const titleExpr = hasTitle ? "title" : "id AS title"
 
   const rows = db.query(`
-    SELECT id, ${titleExpr}, ${agentExpr}, ${hasUpdated ? "time_updated" : "0 AS time_updated"}
+    SELECT id,
+           ${titleExpr},
+           ${agentExpr},
+           ${hasUpdated ? "time_updated" : "0 AS time_updated"},
+           ${hasCreated ? "time_created" : "0 AS time_created"}
     FROM session
     WHERE 1=1 ${directoryFilter} ${parentFilter}
     ORDER BY ${orderExpr}
@@ -280,6 +291,7 @@ type SessionRow = {
   id: unknown
   title?: unknown
   agent?: unknown
+  time_created?: unknown
   time_updated?: unknown
 }
 
@@ -307,7 +319,9 @@ function isOrchestratorLike(row: SessionRow) {
 }
 
 function cleanTitle(value: string) {
-  return value.replace(/\s+/g, " ").trim() || "(untitled)"
+  const title = value.replace(/\s+/g, " ").trim()
+  if (defaultSessionStartedAt(title)) return "Untitled orchestrator"
+  return title || "Untitled orchestrator"
 }
 
 function compactText(value: string, max: number) {
@@ -316,9 +330,21 @@ function compactText(value: string, max: number) {
   return `${text.slice(0, Math.max(0, max - 3)).trimEnd()}...`
 }
 
-function formatTime(value: number) {
+function defaultSessionStartedAt(title: string) {
+  const match = /^(?:New session|Child session) - (\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z)$/.exec(title.trim())
+  if (!match) return undefined
+  const timestamp = Date.parse(match[1]!)
+  return Number.isNaN(timestamp) ? undefined : timestamp
+}
+
+function formatLocalTime(value: number) {
   if (!value) return "unknown-time"
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return "unknown-time"
-  return date.toISOString().replace("T", " ").slice(0, 16)
+  const year = date.getFullYear()
+  const month = `${date.getMonth() + 1}`.padStart(2, "0")
+  const day = `${date.getDate()}`.padStart(2, "0")
+  const hour = `${date.getHours()}`.padStart(2, "0")
+  const minute = `${date.getMinutes()}`.padStart(2, "0")
+  return `${year}-${month}-${day} ${hour}:${minute}`
 }
