@@ -7,7 +7,7 @@ import { FSUtil } from "@opencode-ai/core/fs-util"
 
 export const OAUTH_DUMMY_KEY = "opencode-oauth-dummy-key"
 
-const file = path.join(Global.Path.data, "auth.json")
+const file = () => process.env.MOTRYX_AUTH_FILE ?? path.join(Global.Path.data, "auth.json")
 
 const fail = (message: string) => (cause: unknown) => new AuthError({ message, cause })
 
@@ -56,14 +56,19 @@ export const layer = Layer.effect(
     const decode = Schema.decodeUnknownOption(Info)
 
     const all = Effect.fn("Auth.all")(function* () {
+      const authFile = file()
+      const data = (yield* fsys.readJson(authFile).pipe(Effect.orElseSucceed(() => undefined))) as
+        | Record<string, unknown>
+        | undefined
+      if (data) return Record.filterMap(data, (value) => Result.fromOption(decode(value), () => undefined))
+
       if (process.env.OPENCODE_AUTH_CONTENT) {
         try {
           return JSON.parse(process.env.OPENCODE_AUTH_CONTENT)
         } catch (err) {}
       }
 
-      const data = (yield* fsys.readJson(file).pipe(Effect.orElseSucceed(() => ({})))) as Record<string, unknown>
-      return Record.filterMap(data, (value) => Result.fromOption(decode(value), () => undefined))
+      return {}
     })
 
     const get = Effect.fn("Auth.get")(function* (providerID: string) {
@@ -75,8 +80,9 @@ export const layer = Layer.effect(
       const data = yield* all()
       if (norm !== key) delete data[key]
       delete data[norm + "/"]
+      yield* fsys.ensureDir(path.dirname(file())).pipe(Effect.mapError(fail("Failed to write auth data")))
       yield* fsys
-        .writeJson(file, { ...data, [norm]: info }, 0o600)
+        .writeJson(file(), { ...data, [norm]: info }, 0o600)
         .pipe(Effect.mapError(fail("Failed to write auth data")))
     })
 
@@ -85,7 +91,8 @@ export const layer = Layer.effect(
       const data = yield* all()
       delete data[key]
       delete data[norm]
-      yield* fsys.writeJson(file, data, 0o600).pipe(Effect.mapError(fail("Failed to write auth data")))
+      yield* fsys.ensureDir(path.dirname(file())).pipe(Effect.mapError(fail("Failed to write auth data")))
+      yield* fsys.writeJson(file(), data, 0o600).pipe(Effect.mapError(fail("Failed to write auth data")))
     })
 
     return Service.of({ get, all, set, remove })

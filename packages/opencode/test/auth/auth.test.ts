@@ -3,10 +3,27 @@ import { Effect, Layer } from "effect"
 import { Auth } from "../../src/auth"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
 import { testEffect } from "../lib/effect"
+import { TestInstance } from "../fixture/fixture"
+import path from "path"
+import fs from "fs/promises"
 
 const node = CrossSpawnSpawner.defaultLayer
 
 const it = testEffect(Layer.mergeAll(Auth.defaultLayer, node))
+
+const setEnvScoped = (key: string, value: string) =>
+  Effect.acquireRelease(
+    Effect.sync(() => {
+      const previous = process.env[key]
+      process.env[key] = value
+      return previous
+    }),
+    (previous) =>
+      Effect.sync(() => {
+        if (previous === undefined) delete process.env[key]
+        else process.env[key] = previous
+      }),
+  )
 
 describe("Auth", () => {
   it.instance("set normalizes trailing slashes in keys", () =>
@@ -72,6 +89,40 @@ describe("Auth", () => {
       yield* auth.remove("anthropic")
       const after = yield* auth.all()
       expect(after["anthropic"]).toBeUndefined()
+    }),
+  )
+
+  it.instance("Motryx auth file is the writable source ahead of injected auth content", () =>
+    Effect.gen(function* () {
+      const directory = (yield* TestInstance).directory
+      const motryxAuthFile = path.join(directory, "motryx-user-data", "auth.json")
+      yield* setEnvScoped("MOTRYX_AUTH_FILE", motryxAuthFile)
+      yield* setEnvScoped(
+        "OPENCODE_AUTH_CONTENT",
+        JSON.stringify({
+          "legacy-project": {
+            type: "api",
+            key: "legacy-token",
+          },
+        }),
+      )
+
+      const auth = yield* Auth.Service
+      const before = yield* auth.all()
+      expect(before["legacy-project"]?.type).toBe("api")
+
+      yield* auth.set("openai", {
+        type: "api",
+        key: "fresh-token",
+      })
+
+      const written = JSON.parse(yield* Effect.promise(() => fs.readFile(motryxAuthFile, "utf8")))
+      expect(written["legacy-project"].key).toBe("legacy-token")
+      expect(written.openai.key).toBe("fresh-token")
+
+      const after = yield* auth.all()
+      expect(after.openai?.type).toBe("api")
+      if (after.openai?.type === "api") expect(after.openai.key).toBe("fresh-token")
     }),
   )
 })
