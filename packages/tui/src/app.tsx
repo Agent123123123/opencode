@@ -89,6 +89,7 @@ import {
   startupRouteFromEnv,
 } from "./ic-agent/session-mode"
 import { isMotryxProductMode } from "./ic-agent/product-agent"
+import { isMotryxStartupReady, shouldShowStartupLoading } from "./ic-agent/motryx-startup"
 
 const appGlobalBindingCommands = [
   "session.list",
@@ -1124,8 +1125,14 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
         </box>
         <pluginRuntime.Slot name="app" />
       </Show>
-      <Show when={!startup.skipInitialLoading}>
-        <StartupLoading ready={ready} />
+      <Show when={shouldShowStartupLoading(motryxProductMode(), startup.skipInitialLoading)}>
+        <StartupLoading
+          product={motryxProductMode()}
+          ready={() =>
+            motryxProductMode() ? isMotryxStartupReady(ready(), sync.status) : ready()
+          }
+          status={() => (ready() ? "Connecting workspace..." : "Loading extensions...")}
+        />
       </Show>
     </box>
   )
