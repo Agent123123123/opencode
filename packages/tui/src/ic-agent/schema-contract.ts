@@ -1,0 +1,1 @@
+export const REQUIRED_IC_AGENT_MIGRATION = "v2_0022_runtime_identity_lease_recovery"

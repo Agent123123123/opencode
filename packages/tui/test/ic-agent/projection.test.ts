@@ -98,7 +98,7 @@ test("resolves focus from IC workflow agents before OpenCode sessions are hydrat
     },
   })
 
-  expect(model.surfaceLevel).toBe("workflow_active")
+  expect(model.surfaceLevel).toBe("workflow_attention")
   expect(model.focus).toEqual({ type: "orchestrator", sessionID: "ses_orch" })
   expect(model.focusSessionID).toBe("ses_orch")
   expect(model.lanes[0]).toMatchObject({
@@ -115,7 +115,7 @@ test("resolves focus from IC workflow agents before OpenCode sessions are hydrat
     agents: 1,
     sessions: 1,
     diagnostics: 0,
-    attention: 0,
+    attention: 1,
     evidence: 1,
   })
   expect(model.cockpit.laneStatus).toEqual([{ status: "WORKING", count: 1 }])
@@ -230,7 +230,7 @@ test("includes workflow-bound child sessions in the cockpit without using them a
   expect(laneFocused.laneBoard.selectedLaneID).toBe("lane_1")
   expect(laneFocused.laneBoard.rows[0]).toMatchObject({
     laneID: "lane_1",
-    statusLabel: "CHECKING",
+    statusLabel: "checking",
     tone: "checking",
     selected: true,
   })
@@ -357,7 +357,7 @@ test("selects lane board row without switching to checker or coordinator session
   expect(model.laneBoard.rows[0]).toMatchObject({
     laneID: "lane_1",
     label: "coverage",
-    statusLabel: "CHECKING",
+    statusLabel: "checking",
     tone: "checking",
     selected: true,
   })
@@ -414,6 +414,47 @@ test("projects lane dependencies into sequential lane board rows", () => {
     { laneID: "lint", depth: 0, branch: "root", needs: ["01"] },
     { laneID: "signoff", depth: 0, branch: "root", needs: ["02", "03"] },
   ])
+})
+
+test("projects every framework lane state without fuzzy aliases", () => {
+  const statuses = ["OPEN", "WORKING", "AWAITING_CHECK", "CHECKING", "PENDING", "BLOCKED", "DONE", "WAIVED"]
+  const model = projectIcTui({
+    sessions: [],
+    messages: {},
+    parts: {},
+    statuses: {},
+    workflow: {
+      workflow: { id: "wf_states", status: "active", goal: "show exact lane truth" },
+      lanes: statuses.map((status, index) => ({ id: `lane_${index}`, name: status.toLowerCase(), status })),
+      agents: [],
+      artifacts: [],
+      diagnostics: [],
+    },
+  })
+
+  expect(model.laneBoard.summary).toEqual({
+    total: 8,
+    done: 2,
+    active: 1,
+    checking: 2,
+    pending: 1,
+    blocked: 1,
+    open: 1,
+    waived: 1,
+    unknown: 0,
+  })
+  expect(model.laneBoard.rows.map((lane) => [lane.phase, lane.tone])).toEqual([
+    ["open", "open"],
+    ["active", "active"],
+    ["checking", "checking"],
+    ["checking", "checking"],
+    ["pending", "pending"],
+    ["blocked", "blocked"],
+    ["terminal", "done"],
+    ["terminal", "waived"],
+  ])
+  expect(model.attention.flatMap((item) => item.laneID ? [item.laneID] : [])).toEqual(["lane_5", "lane_4"])
+  expect(model.attention.some((item) => item.laneID === "lane_2" || item.laneID === "lane_3")).toBe(false)
 })
 
 test("ignores lane role navigation and keeps orchestrator as the product entry", () => {
@@ -1273,6 +1314,10 @@ test("projects provider resource blocks as lane attention without switching focu
         name: "review",
         status: "PENDING",
         coordinatorSessionID: "ses_coord",
+      }, {
+        id: "lane_2",
+        name: "signoff",
+        status: "PENDING",
       }],
       agents: [{
         instanceID: "inst_orch",
@@ -1293,15 +1338,34 @@ test("projects provider resource blocks as lane attention without switching focu
         errorMessage: "quota exhausted",
         humanActionRequired: true,
         automaticProviderFallback: false,
+      }, {
+        id: "resource-block:fact_2",
+        factID: "fact_2",
+        laneID: "lane_2",
+        laneName: "signoff",
+        providerID: "minimax",
+        modelID: "MiniMax-M3",
+        errorMessage: "subscription expired",
+        humanActionRequired: true,
+        automaticProviderFallback: false,
       }],
       diagnostics: [],
     },
   })
 
   expect(view.focus?.type).toBe("orchestrator")
-  expect(view.resourceBlocks).toHaveLength(1)
+  expect(view.resourceBlocks).toHaveLength(2)
+  expect(view.attention).toEqual([expect.objectContaining({
+    severity: "error",
+    laneID: "lane_1",
+    detail: "quota exhausted",
+  }), expect.objectContaining({
+    severity: "error",
+    laneID: "lane_2",
+    detail: "subscription expired",
+  })])
   expect(view.lanes[0]!.resourceBlock?.providerID).toBe("openai")
-  expect(view.laneBoard.summary.blocked).toBe(1)
+  expect(view.laneBoard.summary.blocked).toBe(2)
   expect(view.laneBoard.nextAttentionLaneID).toBe("lane_1")
   expect(view.graph.selected?.whyNow).toBe("LLM quota or provider resource is blocked")
 })

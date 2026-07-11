@@ -55,3 +55,26 @@ test("marks large artifact previews as truncated", async () => {
     rmSync(root, { recursive: true, force: true })
   }
 })
+
+test("does not render binary artifacts as terminal text", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "ic-agent-artifact-"))
+  try {
+    const file = path.join(root, "wave.bin")
+    writeFileSync(file, Buffer.from([0x41, 0x00, 0x42]))
+
+    const preview = await readArtifactPreview({ path: file, title: "wave.bin" })
+
+    expect(preview.available).toBe(false)
+    expect(preview.binary).toBe(true)
+    expect(preview.error).toContain("Binary")
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test("explains why non-file locators need API preview support", async () => {
+  const preview = await readArtifactPreview({ path: "", title: "remote report" })
+
+  expect(preview.available).toBe(false)
+  expect(preview.error).toContain("workflow API")
+})

@@ -1,5 +1,13 @@
 import type { Message, Part, Session, SessionStatus } from "@opencode-ai/sdk/v2"
 import type { IcWorkflowSnapshot } from "./workflow-adapter"
+import {
+  lanePresentation,
+  type IcLaneActionability,
+  type IcLaneBoardTone,
+  type IcLanePhase,
+} from "./lane-state"
+
+export type { IcLaneBoardTone } from "./lane-state"
 
 export type IcLaneRole = "coordinator" | "checker" | "orchestrator"
 
@@ -88,6 +96,11 @@ export type IcLaneSummary = {
   coordinatorSessionID?: string
   checkerSessionID?: string
   resourceBlock?: IcResourceBlock
+  phase: IcLanePhase
+  displayStatus: string
+  tone: IcLaneBoardTone
+  actionability: IcLaneActionability
+  terminal: boolean
   recommendedRole: IcLaneRole
   focusedRole?: IcLaneRole
   coordinator: IcLaneRoleEntry
@@ -124,13 +137,12 @@ export type IcSelectedLaneSummary = {
   checkSummary: string
 }
 
-export type IcLaneBoardTone = "done" | "active" | "blocked" | "checking" | "open"
-
 export type IcLaneBoardRow = {
   laneID: string
   ordinal: number
   label: string
   statusLabel: string
+  phase: IcLanePhase
   tone: IcLaneBoardTone
   depth: number
   branch: "root" | "mid" | "last" | "leaf"
@@ -146,8 +158,12 @@ export type IcLaneBoardView = {
     total: number
     done: number
     active: number
+    checking: number
+    pending: number
     blocked: number
     open: number
+    waived: number
+    unknown: number
   }
   rows: IcLaneBoardRow[]
   selectedLaneID?: string
@@ -156,9 +172,15 @@ export type IcLaneBoardView = {
 
 export type IcArtifactSummary = {
   id: string
-  kind: "doc" | "log" | "data" | "report"
+  workflowID?: string
+  producedByLaneID?: string
+  kind: string
   title: string
   path: string
+  locatorRef?: string
+  version?: number
+  status?: string
+  snapshotError?: string
   detail: string
   mtime: number
   selected?: boolean
@@ -187,6 +209,15 @@ export type IcCockpitSummary = {
   }>
 }
 
+export type IcAttentionItem = {
+  id: string
+  severity: "warn" | "error"
+  title: string
+  detail: string
+  source: string
+  laneID?: string
+}
+
 export type IcTuiViewModel = {
   surfaceLevel: "single_agent" | "workflow_hint" | "workflow_active" | "multi_agent_active" | "workflow_attention"
   focus: IcFocus | null
@@ -203,6 +234,7 @@ export type IcTuiViewModel = {
   artifacts: IcArtifactSummary[]
   resourceBlocks: IcResourceBlock[]
   diagnostics: IcDiagnostic[]
+  attention: IcAttentionItem[]
   transcript: IcTranscriptItem[]
   cockpit: IcCockpitSummary
   graph: {
@@ -292,9 +324,14 @@ export function projectIcTui(input: {
     ...item,
     selected: item.id === requestedArtifact?.id ? true : undefined,
   }))
+  const attention = summarizeAttention({
+    lanes,
+    diagnostics,
+    resourceBlocks: input.workflow?.resourceBlocks ?? [],
+  })
   const hasAgentRoles = agents.some((agent) => agent.role !== "orchestrator")
   const active = hasWorkflowState || primarySessions.length > 0
-  const surfaceLevel = diagnostics.some((item) => item.severity !== "info")
+  const surfaceLevel = attention.length > 0
     ? "workflow_attention"
     : hasAgentRoles
       ? "multi_agent_active"
@@ -336,12 +373,14 @@ export function projectIcTui(input: {
     artifacts,
     resourceBlocks: input.workflow?.resourceBlocks ?? [],
     diagnostics,
+    attention,
     transcript: selectedSession ? transcriptForSession(selectedSession.id, input.messages, input.parts) : [],
     cockpit: summarizeCockpit({
       lanes,
       agents,
       sessions: summaries,
       diagnostics,
+      attention,
       artifacts,
     }),
     graph: summarizeWorkflowGraph({
@@ -368,7 +407,8 @@ function summarizeLaneBoard(input: {
       laneID: lane.id,
       ordinal: index + 1,
       label: lane.name || lane.id,
-      statusLabel: lane.status,
+      statusLabel: lane.displayStatus,
+      phase: lane.phase,
       tone: laneBoardTone(lane),
       depth: 0,
       branch: "root",
@@ -385,8 +425,12 @@ function summarizeLaneBoard(input: {
       total: input.lanes.length,
       done: input.lanes.filter(laneDone).length,
       active: input.lanes.filter(laneActive).length,
+      checking: input.lanes.filter(laneChecking).length,
+      pending: input.lanes.filter((lane) => lane.phase === "pending").length,
       blocked: input.lanes.filter(laneBlocked).length,
       open: input.lanes.filter(laneOpen).length,
+      waived: input.lanes.filter((lane) => lane.status === "WAIVED").length,
+      unknown: input.lanes.filter((lane) => lane.phase === "unknown").length,
     },
     rows,
     selectedLaneID: selectedLane?.id,
@@ -399,16 +443,13 @@ function validLaneDependencies(lane: IcLaneSummary, laneIDs: Set<string>) {
 }
 
 function laneBoardTone(lane: IcLaneSummary): IcLaneBoardTone {
-  if (laneBlocked(lane)) return "blocked"
-  if (laneChecking(lane)) return "checking"
-  if (laneActive(lane)) return "active"
-  if (laneDone(lane)) return "done"
-  return "open"
+  if (lane.resourceBlock) return "blocked"
+  return lane.tone
 }
 
 function laneBoardAttention(lane: IcLaneSummary): IcLaneBoardRow["attention"] {
   if (laneBlocked(lane)) return "blocked"
-  if (lane.pendingCheckSummary) return "pending-message"
+  if (lane.phase === "pending") return "pending-message"
   if (lane.lastCheckResult && !laneCheckClean(lane.lastCheckResult)) return "check-result"
   return undefined
 }
@@ -423,9 +464,15 @@ function summarizeLane(input: {
   const recommendedRole = recommendedLaneRole(input.lane)
   const focusedRole = input.selected ? input.focusedRole : undefined
   const resourceBlock = (input.workflow?.resourceBlocks ?? []).find((block) => block.laneID === input.lane.id)
+  const presentation = lanePresentation(input.lane.status)
   return {
     ...input.lane,
     resourceBlock,
+    phase: presentation.phase,
+    displayStatus: presentation.label,
+    tone: resourceBlock ? "blocked" : presentation.tone,
+    actionability: resourceBlock ? "human" : presentation.actionability,
+    terminal: presentation.terminal,
     recommendedRole,
     focusedRole,
     coordinator: laneRoleEntry({
@@ -473,6 +520,7 @@ function summarizeCockpit(input: {
   agents: IcAgentSummary[]
   sessions: IcSessionSummary[]
   diagnostics: IcDiagnostic[]
+  attention: IcAttentionItem[]
   artifacts: IcArtifactSummary[]
 }): IcCockpitSummary {
   const laneStatus = new Map<string, number>()
@@ -485,13 +533,83 @@ function summarizeCockpit(input: {
       agents: input.agents.length,
       sessions: input.sessions.length,
       diagnostics: input.diagnostics.length,
-      attention: input.diagnostics.filter((item) => item.severity !== "info").length,
+      attention: input.attention.length,
       evidence: input.artifacts.length,
     },
     laneStatus: [...laneStatus.entries()]
       .map(([status, count]) => ({ status, count }))
       .sort((left, right) => right.count - left.count || left.status.localeCompare(right.status)),
   }
+}
+
+function summarizeAttention(input: {
+  lanes: IcLaneSummary[]
+  diagnostics: IcDiagnostic[]
+  resourceBlocks: IcResourceBlock[]
+}): IcAttentionItem[] {
+  const items: IcAttentionItem[] = input.diagnostics.flatMap((diagnostic): IcAttentionItem[] => diagnostic.severity === "info" ? [] : [{
+      id: `diagnostic:${diagnostic.id}`,
+      severity: diagnostic.severity,
+      title: diagnostic.title,
+      detail: diagnostic.detail,
+      source: diagnostic.source,
+      laneID: diagnostic.targetType === "lane" ? diagnostic.targetID : undefined,
+    }])
+  const laneIDs = new Set(items.flatMap((item) => item.laneID ? [item.laneID] : []))
+  input.lanes.forEach((lane) => {
+    if (laneIDs.has(lane.id)) return
+    if (lane.resourceBlock) {
+      items.push({
+        id: `resource:${lane.resourceBlock.id}`,
+        severity: "error",
+        title: `Resource blocked: ${lane.name}`,
+        detail: lane.resourceBlock.errorMessage ?? lane.resourceBlock.impactSummary ?? "Provider access must be restored before resume.",
+        source: "workflow.resource",
+        laneID: lane.id,
+      })
+      laneIDs.add(lane.id)
+      return
+    }
+    if (lane.phase === "blocked" || lane.phase === "pending" || lane.phase === "unknown") {
+      items.push({
+        id: `lane:${lane.id}:${lane.phase}`,
+        severity: lane.phase === "blocked" || lane.phase === "unknown" ? "error" : "warn",
+        title: lane.phase === "pending" ? `Decision needed: ${lane.name}` : `${lane.displayStatus}: ${lane.name}`,
+        detail: lane.pendingCheckSummary ?? lane.lastCheckResult ?? "Inspect the lane before continuing.",
+        source: "workflow.lane",
+        laneID: lane.id,
+      })
+      laneIDs.add(lane.id)
+      return
+    }
+    if (lane.lastCheckResult && !laneCheckClean(lane.lastCheckResult)) {
+      items.push({
+        id: `lane:${lane.id}:check-result`,
+        severity: "warn",
+        title: `Check result: ${lane.name}`,
+        detail: lane.lastCheckResult,
+        source: "workflow.check",
+        laneID: lane.id,
+      })
+    }
+  })
+  input.resourceBlocks.forEach((block) => {
+    if (block.laneID && laneIDs.has(block.laneID)) return
+    if (items.some((item) => item.id === `resource:${block.id}`)) return
+    items.push({
+      id: `resource:${block.id}`,
+      severity: "error",
+      title: block.laneName ? `Resource blocked: ${block.laneName}` : "Workflow resource blocked",
+      detail: block.errorMessage ?? block.impactSummary ?? "Provider access must be restored before resume.",
+      source: "workflow.resource",
+      laneID: block.laneID,
+    })
+  })
+  return items.toSorted((left, right) => severityRank(right.severity) - severityRank(left.severity))
+}
+
+function severityRank(severity: IcAttentionItem["severity"]) {
+  return severity === "error" ? 2 : 1
 }
 
 function summarizeWorkflowGraph(input: {
@@ -568,33 +686,29 @@ function uniqueGraphEdges(edges: IcWorkflowGraphEdge[]) {
 
 function laneNeedsAttentionForGraph(lane: IcLaneSummary) {
   return Boolean(lane.resourceBlock)
-    || laneBlocked(lane)
-    || laneChecking(lane)
-    || Boolean(lane.pendingCheckSummary)
+    || lane.actionability !== "none"
     || Boolean(lane.lastCheckResult && !laneCheckClean(lane.lastCheckResult))
 }
 
 function laneBlocked(lane: IcLaneSummary) {
   return Boolean(lane.resourceBlock)
-    || /block|fail|rework|error|dead/.test(lane.status.toLowerCase())
+    || lane.phase === "blocked"
 }
 
 function laneChecking(lane: IcLaneSummary) {
-  return /check|review|signoff/.test(lane.status.toLowerCase())
+  return lane.phase === "checking"
 }
 
 function laneDone(lane: IcLaneSummary) {
-  return /done|pass|complete|closed|signoff/.test(lane.status.toLowerCase())
-    || Boolean(lane.lastCheckResult && laneCheckClean(lane.lastCheckResult))
+  return lane.terminal
 }
 
 function laneActive(lane: IcLaneSummary) {
-  return /work|run|active|progress|busy/.test(lane.status.toLowerCase())
-    || Boolean(lane.pendingCheckSummary)
+  return lane.phase === "active"
 }
 
 function laneOpen(lane: IcLaneSummary) {
-  return !laneDone(lane) && !laneBlocked(lane) && !laneActive(lane) && !laneChecking(lane)
+  return lane.phase === "open"
 }
 
 function laneCheckClean(result: string) {
@@ -603,11 +717,12 @@ function laneCheckClean(result: string) {
 
 function laneWhyNow(lane: IcLaneSummary) {
   if (lane.resourceBlock) return "LLM quota or provider resource is blocked"
-  if (lane.pendingCheckSummary) return lane.pendingCheckSummary
+  if (lane.phase === "pending") return lane.pendingCheckSummary || "Orchestrator or human decision required"
   if (laneBlocked(lane)) return "blocking downstream workflow progress"
   if (laneChecking(lane)) return "waiting for checker or signoff attention"
   if (lane.lastCheckResult && !laneCheckClean(lane.lastCheckResult)) return `last check ${lane.lastCheckResult}`
   if (laneDone(lane)) return "completed or clean"
+  if (lane.phase === "unknown") return `unknown lane state ${lane.status}`
   return "next visible workflow lane"
 }
 
@@ -719,9 +834,9 @@ function summarizeSessions(input: {
 
 function recommendedLaneRole(lane: IcWorkflowSnapshot["lanes"][number]): IcLaneRole {
   const result = lane.lastCheckResult?.trim().toLowerCase()
-  const status = lane.status.toLowerCase()
+  const presentation = lanePresentation(lane.status)
   const resultNeedsChecker = Boolean(result && !["pass", "passed", "done", "ok", "clean"].includes(result))
-  const statusNeedsChecker = /check|block|rework|fail|review|signoff/.test(status)
+  const statusNeedsChecker = presentation.phase === "checking"
   const hasPendingCheck = Boolean(lane.pendingCheckSummary?.trim())
   if (lane.checkerSessionID && (statusNeedsChecker || resultNeedsChecker || hasPendingCheck)) return "checker"
   if (lane.coordinatorSessionID) return "coordinator"

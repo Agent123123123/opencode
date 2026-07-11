@@ -1361,6 +1361,7 @@ export function SessionSurface(props: {
   showScrollbar?: boolean
   empty?: JSX.Element
   transformTextPart?: (text: string) => string | undefined
+  showPromptHints?: boolean
 }) {
   const sync = useSync()
   const sdk = useSDK()
@@ -1710,6 +1711,7 @@ export function SessionSurface(props: {
                         disabled={disabled()}
                         onSubmit={toBottom}
                         sessionID={props.sessionID}
+                        showFooterHints={props.showPromptHints}
                         right={props.promptRight ?? <pluginRuntime.Slot name="session_prompt_right" session_id={props.sessionID!} />}
                       />
                     </pluginRuntime.Slot>

@@ -39,4 +39,10 @@ describe("util.locale display width", () => {
     expect(output).toBe("Lane 中文…")
     expect(Locale.displayWidth(output)).toBeLessThanOrEqual(10)
   })
+
+  test("pads clipped CJK text to an exact terminal display width", () => {
+    for (const width of [4, 6, 8]) {
+      expect(Locale.displayWidth(Locale.padDisplayEnd("编排器状态", width))).toBe(width)
+    }
+  })
 })

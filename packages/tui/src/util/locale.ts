@@ -109,6 +109,11 @@ export function truncate(str: string, len: number): string {
   return takeStartByDisplayWidth(str, len - ellipsisWidth) + ellipsis
 }
 
+export function padDisplayEnd(str: string, width: number): string {
+  const clipped = truncate(str, Math.max(0, width))
+  return clipped + " ".repeat(Math.max(0, width - displayWidth(clipped)))
+}
+
 export function truncateLeft(str: string, len: number): string {
   if (displayWidth(str) <= len) return str
   if (len <= 0) return ""

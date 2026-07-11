@@ -2,9 +2,9 @@ import { Database } from "bun:sqlite"
 import { existsSync, readdirSync, statSync } from "node:fs"
 import type { Dirent } from "node:fs"
 import path from "node:path"
+import { fileURLToPath } from "node:url"
 import type { MotryxProjectContext } from "./project-context"
-
-const REQUIRED_IC_AGENT_MIGRATION = "v2_0019_agent_orchestrator_binding"
+import { REQUIRED_IC_AGENT_MIGRATION } from "./schema-contract"
 
 export type IcWorkflowSnapshot = {
   stateDb?: string
@@ -42,9 +42,15 @@ export type IcWorkflowSnapshot = {
   }>
   artifacts: Array<{
     id: string
-    kind: "doc" | "log" | "data" | "report"
+    workflowID?: string
+    producedByLaneID?: string
+    kind: string
     title: string
     path: string
+    locatorRef?: string
+    version?: number
+    status?: string
+    snapshotError?: string
     detail: string
     mtime: number
   }>
@@ -160,7 +166,7 @@ function normalizeApiWorkflowSnapshot(data: unknown, apiURL: string): IcWorkflow
     workflow: normalizeApiWorkflow(value.workflow),
     lanes: normalizeApiLanes(value.lanes),
     agents: normalizeApiAgents(value.agents),
-    artifacts: [],
+    artifacts: normalizeApiArtifacts(value.artifacts),
     resourceBlocks: normalizeApiResourceBlocks(value.resourceBlocks ?? value.resource_blocks),
     diagnostics: normalizeApiDiagnostics(value.diagnostics, apiURL),
   }
@@ -238,6 +244,36 @@ function normalizeApiAgents(value: unknown): IcWorkflowSnapshot["agents"] {
     if (orchestratorSessionID) normalized.orchestratorSessionID = orchestratorSessionID
     return normalized
   }).filter((item): item is IcWorkflowSnapshot["agents"][number] => Boolean(item?.instanceID))
+}
+
+function normalizeApiArtifacts(value: unknown): IcWorkflowSnapshot["artifacts"] {
+  if (!Array.isArray(value)) return []
+  return value.flatMap((item): IcWorkflowSnapshot["artifacts"] => {
+    const artifact = objectRecord(item)
+    if (!artifact) return []
+    const id = optionalString(artifact.id)
+    if (!id) return []
+    const locatorRef = optionalString(artifact.locatorRef) ?? optionalString(artifact.locator_ref) ?? ""
+    const title = optionalString(artifact.title) ?? optionalString(artifact.name) ?? id
+    const mtime = optionalNumber(artifact.mtime)
+      ?? optionalNumber(artifact.contentMtimeMs)
+      ?? optionalNumber(artifact.content_mtime_ms)
+      ?? 0
+    return [{
+      id,
+      workflowID: optionalString(artifact.workflowID) ?? optionalString(artifact.workflow_id),
+      producedByLaneID: optionalString(artifact.producedByLaneID) ?? optionalString(artifact.produced_by_lane_id),
+      kind: optionalString(artifact.kind) ?? "file",
+      title,
+      path: optionalString(artifact.path) ?? locatorPath(locatorRef, process.cwd()),
+      locatorRef,
+      version: optionalNumber(artifact.version) ?? 1,
+      status: optionalString(artifact.status) ?? "active",
+      snapshotError: optionalString(artifact.snapshotError) ?? optionalString(artifact.snapshot_error),
+      detail: optionalString(artifact.detail) ?? locatorRef,
+      mtime,
+    }]
+  })
 }
 
 function normalizeApiDiagnostics(value: unknown, apiURL: string): IcWorkflowSnapshot["diagnostics"] {
@@ -464,7 +500,7 @@ function readStateDb(stateDb: string, directory: string, projectContext?: Motryx
         : undefined,
       lanes,
       agents,
-      artifacts: artifactSummaries(stateDb),
+      artifacts: artifactSummaries(db, workflow?.id, directory, stateDb, stateDbSource),
       resourceBlocks,
       diagnostics,
     }
@@ -541,7 +577,77 @@ function activeResourceBlocks(
   return blocks
 }
 
-function artifactSummaries(stateDb: string): IcWorkflowSnapshot["artifacts"] {
+function artifactSummaries(
+  db: Database,
+  workflowID: string | undefined,
+  directory: string,
+  stateDb: string,
+  source: NonNullable<IcWorkflowSnapshot["stateDbSource"]>,
+): IcWorkflowSnapshot["artifacts"] {
+  const durable = durableArtifactSummaries(db, workflowID, directory)
+  if (durable.length > 0 || !source.legacy) return durable
+  return legacyArtifactSummaries(stateDb)
+}
+
+function durableArtifactSummaries(
+  db: Database,
+  workflowID: string | undefined,
+  directory: string,
+): IcWorkflowSnapshot["artifacts"] {
+  if (!workflowID || !tableExists(db, "artifacts")) return []
+  const contentSize = hasColumn(db, "artifacts", "content_size") ? "content_size as contentSize" : "NULL as contentSize"
+  const contentMtime = hasColumn(db, "artifacts", "content_mtime_ms") ? "content_mtime_ms as contentMtime" : "NULL as contentMtime"
+  const snapshotError = hasColumn(db, "artifacts", "snapshot_error") ? "snapshot_error as snapshotError" : "NULL as snapshotError"
+  const rows = all<ArtifactRow>(db, `
+    select id,
+           workflow_id as workflowID,
+           produced_by_lane_id as producedByLaneID,
+           name,
+           kind,
+           locator_ref as locatorRef,
+           version,
+           status,
+           ${contentSize},
+           ${contentMtime},
+           ${snapshotError},
+           updated_at as updatedAt
+      from artifacts
+     where workflow_id = '${escapeSqlLiteral(workflowID)}'
+       and lower(status) = 'active'
+     order by updated_at desc, rowid desc
+  `)
+  return rows.map((row) => {
+    const artifactPath = locatorPath(row.locatorRef, directory)
+    const location = artifactPath ? path.relative(directory, artifactPath) || path.basename(artifactPath) : row.locatorRef
+    return {
+      id: row.id,
+      workflowID: row.workflowID,
+      producedByLaneID: row.producedByLaneID,
+      kind: row.kind,
+      title: row.name,
+      path: artifactPath,
+      locatorRef: row.locatorRef,
+      version: row.version,
+      status: row.status,
+      snapshotError: row.snapshotError ?? undefined,
+      detail: `${location}${row.contentSize === undefined || row.contentSize === null ? "" : ` · ${formatBytes(row.contentSize)}`}`,
+      mtime: row.contentMtime ?? (Date.parse(row.updatedAt) || 0),
+    }
+  })
+}
+
+function locatorPath(locatorRef: string, directory: string) {
+  if (!locatorRef) return ""
+  try {
+    if (locatorRef.startsWith("file:")) return fileURLToPath(locatorRef)
+  } catch {
+    return ""
+  }
+  if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(locatorRef)) return ""
+  return path.isAbsolute(locatorRef) ? path.normalize(locatorRef) : path.resolve(directory, locatorRef)
+}
+
+function legacyArtifactSummaries(stateDb: string): IcWorkflowSnapshot["artifacts"] {
   const runDirectory = path.dirname(path.dirname(stateDb))
   const roots = [
     path.join(runDirectory, "docs"),
@@ -557,6 +663,9 @@ function artifactSummaries(stateDb: string): IcWorkflowSnapshot["artifacts"] {
       kind: item.kind,
       title: item.title,
       path: item.file,
+      locatorRef: item.file,
+      version: 1,
+      status: "legacy",
       detail: `${item.relative} · ${formatBytes(item.size)}`,
       mtime: item.mtime,
     }))
@@ -1159,4 +1268,19 @@ type ResourceFactRow = {
   contentJson?: string
   impactSummary?: string
   createdAt: number
+}
+
+type ArtifactRow = {
+  id: string
+  workflowID: string
+  producedByLaneID: string
+  name: string
+  kind: string
+  locatorRef: string
+  version: number
+  status: string
+  contentSize?: number | null
+  contentMtime?: number | null
+  snapshotError?: string | null
+  updatedAt: string
 }

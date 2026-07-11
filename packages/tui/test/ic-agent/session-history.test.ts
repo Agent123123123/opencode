@@ -5,8 +5,7 @@ import { mkdtemp } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { readMotryxSessionHistory } from "../../src/ic-agent/session-history"
-
-const REQUIRED_IC_AGENT_MIGRATION = "v2_0019_agent_orchestrator_binding"
+import { REQUIRED_IC_AGENT_MIGRATION } from "../../src/ic-agent/schema-contract"
 
 test("reads project-scoped orchestrator session history from Motryx DB", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "motryx-session-history-"))

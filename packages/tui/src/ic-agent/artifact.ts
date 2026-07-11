@@ -8,11 +8,23 @@ export type IcArtifactPreview = {
   available: boolean
   content: string
   truncated: boolean
+  binary?: boolean
   size: number
   error?: string
 }
 
 export async function readArtifactPreview(input: { path: string; title: string }): Promise<IcArtifactPreview> {
+  if (!input.path) {
+    return {
+      path: input.path,
+      title: input.title,
+      available: false,
+      content: "",
+      truncated: false,
+      size: 0,
+      error: "Remote or non-file artifact preview requires workflow API support.",
+    }
+  }
   try {
     const file = await open(input.path, "r")
     try {
@@ -20,8 +32,21 @@ export async function readArtifactPreview(input: { path: string; title: string }
       const limit = Math.min(stat.size, MAX_PREVIEW_BYTES)
       const buffer = Buffer.alloc(limit)
       const result = await file.read(buffer, 0, limit, 0)
+      const bytes = buffer.subarray(0, result.bytesRead)
+      if (bytes.includes(0)) {
+        return {
+          path: input.path,
+          title: input.title,
+          available: false,
+          content: "",
+          truncated: false,
+          binary: true,
+          size: stat.size,
+          error: "Binary artifact preview is not available inline.",
+        }
+      }
       const truncated = stat.size > result.bytesRead
-      const content = buffer.subarray(0, result.bytesRead).toString("utf8")
+      const content = bytes.toString("utf8")
       return {
         path: input.path,
         title: input.title,

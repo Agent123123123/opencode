@@ -6,8 +6,7 @@ import os from "node:os"
 import path from "node:path"
 import { resolveMotryxProjectContext } from "../../src/ic-agent/project-context"
 import { readIcWorkflowSnapshot } from "../../src/ic-agent/workflow-adapter"
-
-const REQUIRED_IC_AGENT_MIGRATION = "v2_0019_agent_orchestrator_binding"
+import { REQUIRED_IC_AGENT_MIGRATION } from "../../src/ic-agent/schema-contract"
 
 test("reads IC workflow state from a local state.db fallback", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "ic-agent-tui-"))
@@ -346,6 +345,75 @@ test("prefers the current Motryx orchestrator binding over legacy project state"
   }
 })
 
+test("reads durable workflow artifacts with exact lane ownership and no directory guesses", async () => {
+  const previousDbPath = process.env.MOTRYX_IC_AGENT_DB_PATH
+  const root = await mkdtemp(path.join(os.tmpdir(), "ic-agent-tui-artifacts-"))
+  try {
+    const project = path.join(root, "project")
+    const stateDb = path.join(project, ".motryx", "db", "orchestrators", "ses_orch", "ic-agent.db")
+    const evidencePath = path.join(project, "evidence", "owned.log")
+    mkdirSync(path.dirname(evidencePath), { recursive: true })
+    mkdirSync(path.join(project, "docs"), { recursive: true })
+    writeFileSync(evidencePath, "owned evidence\n")
+    writeFileSync(path.join(project, "docs", "unregistered.md"), "must not appear\n")
+    createTinyWorkflowDb(stateDb, "wf_artifacts")
+    const db = new Database(stateDb)
+    try {
+      db.exec(`
+        create table artifacts (
+          id text primary key,
+          workflow_id text not null,
+          produced_by_lane_id text not null,
+          name text not null,
+          kind text not null,
+          locator_ref text not null,
+          version integer not null,
+          status text not null,
+          content_size integer,
+          content_mtime_ms integer,
+          snapshot_error text,
+          updated_at text not null
+        );
+      `)
+      db.query("insert into artifacts values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(
+        "artifact_owned",
+        "wf_artifacts",
+        "lane_wf_artifacts",
+        "owned evidence",
+        "log",
+        "evidence/owned.log",
+        3,
+        "active",
+        15,
+        1234,
+        null,
+        "2026-07-11T01:00:00.000Z",
+      )
+    } finally {
+      db.close()
+    }
+    process.env.MOTRYX_IC_AGENT_DB_PATH = stateDb
+
+    const snapshot = await readIcWorkflowSnapshot(project)
+
+    expect(snapshot.artifacts).toEqual([expect.objectContaining({
+      id: "artifact_owned",
+      workflowID: "wf_artifacts",
+      producedByLaneID: "lane_wf_artifacts",
+      title: "owned evidence",
+      path: evidencePath,
+      locatorRef: "evidence/owned.log",
+      version: 3,
+      status: "active",
+      mtime: 1234,
+    })])
+    expect(snapshot.artifacts.some((artifact) => artifact.title === "unregistered.md")).toBe(false)
+  } finally {
+    restoreEnv("MOTRYX_IC_AGENT_DB_PATH", previousDbPath)
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
 test("reads latest Motryx channel binding when no orchestrator is selected", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "ic-agent-tui-"))
   try {
@@ -666,6 +734,17 @@ test("prefers the Motryx workflow read API when configured", async () => {
           status: "BUSY",
           laneIDs: ["lane_api"],
         }],
+        artifacts: [{
+          id: "artifact_api",
+          workflow_id: "wf_api",
+          produced_by_lane_id: "lane_api",
+          name: "API report",
+          kind: "report",
+          locator_ref: "s3://bucket/report.html",
+          version: 2,
+          status: "active",
+          snapshot_error: "non_file_locator",
+        }],
         diagnostics: [{
           id: "api-diagnostic",
           severity: "warn",
@@ -718,7 +797,16 @@ test("prefers the Motryx workflow read API when configured", async () => {
       status: "BUSY",
       laneIDs: ["lane_api"],
     }])
-    expect(snapshot.artifacts).toEqual([])
+    expect(snapshot.artifacts).toEqual([expect.objectContaining({
+      id: "artifact_api",
+      workflowID: "wf_api",
+      producedByLaneID: "lane_api",
+      title: "API report",
+      locatorRef: "s3://bucket/report.html",
+      path: "",
+      version: 2,
+      snapshotError: "non_file_locator",
+    })])
     expect(snapshot.diagnostics[0]).toMatchObject({
       id: "api-diagnostic",
       severity: "warn",

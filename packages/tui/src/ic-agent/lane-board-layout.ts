@@ -1,25 +1,23 @@
 export type LaneBoardLayout = {
   gap: 0 | 1
   showScrollHint: boolean
+  availableRows: number
 }
 
-const SIDE_CARD_CHROME_ROWS = 11
-const SELECTED_ROW_EXTRA_ROWS = 1
+const COCKPIT_HEADER_AND_TABS = 2
 
 export function laneBoardLayout(input: {
-  terminalHeight: number
+  viewportHeight: number
   laneCount: number
-  hasAttentionHint: boolean
-  selectedLaneVisible: boolean
+  attentionRows: number
 }): LaneBoardLayout {
-  const availableRows = Math.max(6, input.terminalHeight - SIDE_CARD_CHROME_ROWS)
-  const fixedRows = input.hasAttentionHint ? 2 : 0
-  const selectedExtraRows = input.selectedLaneVisible ? SELECTED_ROW_EXTRA_ROWS : 0
-  const compactContentRows = input.laneCount + fixedRows + selectedExtraRows
-  const roomyContentRows = compactContentRows + Math.max(0, input.laneCount - 1)
-  const gap = roomyContentRows <= availableRows ? 1 : 0
+  const availableRows = Math.max(0, input.viewportHeight - COCKPIT_HEADER_AND_TABS - input.attentionRows)
+  const roomyRows = input.laneCount === 0 ? 0 : input.laneCount * 2 - 1
+  const gap = roomyRows <= availableRows ? 1 : 0
+  const usedRows = gap === 1 ? roomyRows : input.laneCount
   return {
     gap,
-    showScrollHint: (gap === 1 ? roomyContentRows : compactContentRows) > availableRows,
+    showScrollHint: usedRows > availableRows,
+    availableRows,
   }
 }

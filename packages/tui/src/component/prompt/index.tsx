@@ -68,6 +68,7 @@ export type PromptProps = {
   hint?: JSX.Element
   right?: JSX.Element
   showPlaceholder?: boolean
+  showFooterHints?: boolean
   placeholders?: {
     normal?: string[]
     shell?: string[]
@@ -1653,7 +1654,7 @@ export function Prompt(props: PromptProps) {
             </Match>
             <Match when={true}>{props.hint ?? <text />}</Match>
           </Switch>
-          <Show when={status().type !== "retry"}>
+          <Show when={status().type !== "retry" && props.showFooterHints !== false}>
             <box gap={2} flexDirection="row">
               <Show when={editorContextLabelState() !== "none" ? editorFileLabelDisplay() : undefined}>
                 {(file) => (

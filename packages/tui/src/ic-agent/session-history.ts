@@ -1,8 +1,8 @@
 import { Database } from "bun:sqlite"
 import { existsSync } from "node:fs"
 import { isAbsolute, join, resolve } from "node:path"
-
-const REQUIRED_IC_AGENT_MIGRATION = "v2_0019_agent_orchestrator_binding"
+import { lanePresentation } from "./lane-state"
+import { REQUIRED_IC_AGENT_MIGRATION } from "./schema-contract"
 
 export type MotryxSessionHistoryItem = {
   handle: string
@@ -29,7 +29,9 @@ export type MotryxWorkflowSummary = {
   active: number
   blocked: number
   checking: number
+  pending: number
   done: number
+  waived: number
 }
 
 export type MotryxSessionHistory = {
@@ -178,16 +180,19 @@ function readWorkflowSummary(icAgentDbPath: string): MotryxWorkflowSummary {
     `).get() as { id?: unknown; status?: unknown; goal?: unknown } | undefined
     const rows = db.query("SELECT status FROM lanes").all() as Array<{ status?: unknown }>
     const statuses = rows.map((row) => String(row.status || "UNKNOWN"))
+    const presentations = statuses.map(lanePresentation)
     return {
       status: workflow || statuses.length ? "ok" : "empty",
       workflowID: workflow?.id ? String(workflow.id) : undefined,
       workflowStatus: workflow?.status ? String(workflow.status) : undefined,
       goalPreview: workflow?.goal ? compactText(String(workflow.goal), 96) : undefined,
       lanes: statuses.length,
-      active: statuses.filter((status) => /work|active|progress/i.test(status)).length,
-      blocked: statuses.filter((status) => /block|fail|error/i.test(status)).length,
-      checking: statuses.filter((status) => /check|review/i.test(status)).length,
-      done: statuses.filter((status) => /done|pass|complete/i.test(status)).length,
+      active: presentations.filter((item) => item.bucket === "active").length,
+      blocked: presentations.filter((item) => item.bucket === "blocked").length,
+      checking: presentations.filter((item) => item.bucket === "checking").length,
+      pending: presentations.filter((item) => item.bucket === "pending").length,
+      done: presentations.filter((item) => item.bucket === "done").length,
+      waived: statuses.filter((status) => status.trim().toUpperCase() === "WAIVED").length,
     }
   } catch {
     return emptyWorkflowSummary("unreadable")
@@ -203,7 +208,9 @@ function emptyWorkflowSummary(status: MotryxWorkflowSummary["status"]): MotryxWo
     active: 0,
     blocked: 0,
     checking: 0,
+    pending: 0,
     done: 0,
+    waived: 0,
   }
 }
 

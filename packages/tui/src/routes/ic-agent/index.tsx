@@ -1,5 +1,6 @@
 import { createEffect, createMemo, createResource, createSignal, For, Match, onCleanup, Show, Switch, type JSX } from "solid-js"
 import { useRenderer, useTerminalDimensions } from "@opentui/solid"
+import type { ScrollBoxRenderable } from "@opentui/core"
 import { useBindings } from "../../keymap"
 import { useSync } from "../../context/sync"
 import { useSDK } from "../../context/sdk"
@@ -21,6 +22,7 @@ import {
 import { motryxReadinessFromEnv, type MotryxReadinessItem } from "../../ic-agent/readiness"
 import { motryxDebugViewFromEnv, motryxSessionModeFromEnv, shouldAutoStartOrchestrator } from "../../ic-agent/session-mode"
 import { readMotryxSessionHistory, type MotryxSessionHistoryItem } from "../../ic-agent/session-history"
+import { sessionDetails, sessionWorkflowLabel } from "../../ic-agent/session-picker-presentation"
 import { sanitizeMotryxTranscriptText } from "../../ic-agent/transcript"
 import { motryxTuiLayout } from "../../ic-agent/tui-layout"
 import {
@@ -39,16 +41,19 @@ import {
 import {
   projectIcTui,
   type IcArtifactSummary,
+  type IcDiagnostic,
   type IcLaneBoardRow,
   type IcLaneRole,
   type IcLaneSummary,
-  type IcResourceBlock,
   type IcSessionSummary,
 } from "../../ic-agent/projection"
 import { readIcWorkflowSnapshot } from "../../ic-agent/workflow-adapter"
+import { readArtifactPreview } from "../../ic-agent/artifact"
 import { icCommandSpecs, type IcCommandIntent, type IcSidecardMode } from "../../ic-agent/commands"
 import { SessionSurface } from "../session"
 import { motryx, setMotryxPaletteTheme } from "./motryx-theme"
+import { AttentionStrip } from "./attention-strip"
+import { ArtifactPreviewPanel } from "./artifact-preview-panel"
 
 const WORKFLOW_REFRESH_INTERVAL_MS = 2000
 export function IcAgent() {
@@ -67,6 +72,7 @@ export function IcAgent() {
   const [selectedSessionID, setSelectedSessionID] = createSignal(process.env.MOTRYX_RESUME_SESSION || "")
   const [selectedLaneID, setSelectedLaneID] = createSignal("")
   const [selectedLaneRole, setSelectedLaneRole] = createSignal<IcLaneRole | undefined>()
+  const [selectedArtifactID, setSelectedArtifactID] = createSignal("")
   const [workflowOrchestratorSessionID, setWorkflowOrchestratorSessionID] = createSignal(process.env.MOTRYX_ORCHESTRATOR_SESSION_ID || "")
   const [sidecardMode, setSidecardMode] = createSignal<IcSidecardMode>("workflow")
   const [startingSession, setStartingSession] = createSignal(false)
@@ -118,7 +124,7 @@ export function IcAgent() {
       sessionMode: sessionMode(),
       selectedLaneID: selectedLaneID(),
       selectedLaneRole: debugView() ? selectedLaneRole() : undefined,
-      selectedArtifactID: "",
+      selectedArtifactID: selectedArtifactID(),
       debugView: debugView(),
       workflow: workflow(),
     }),
@@ -146,6 +152,7 @@ export function IcAgent() {
   const narrow = createMemo(() => layout().narrow)
   const compact = createMemo(() => layout().compact)
   const cockpitScrollAcceleration = createMemo(() => getScrollAcceleration(tuiConfig))
+  let cockpitScroll: ScrollBoxRenderable | undefined
   const cockpitWidth = createMemo(() => layout().cockpitWidth)
   const cockpitHeight = createMemo(() => layout().cockpitHeight)
   const conversationWidth = createMemo(() => layout().conversationWidth)
@@ -153,14 +160,29 @@ export function IcAgent() {
   createEffect(() => setMotryxPaletteTheme(theme.selected))
   onCleanup(() => setMotryxPaletteTheme(undefined))
   const selectedLane = createMemo(() => model().lanes.find((item) => item.id === model().laneBoard.selectedLaneID))
-  const nextAttentionLane = createMemo(() => model().lanes.find((item) => item.id === model().laneBoard.nextAttentionLaneID))
   const boardLayout = createMemo(() => laneBoardLayout({
-    terminalHeight: dimensions().height,
+    viewportHeight: layout().cockpitContentHeight,
     laneCount: model().laneBoard.rows.length,
-    hasAttentionHint: Boolean(nextAttentionLane()),
-    selectedLaneVisible: Boolean(selectedLane()),
+    attentionRows: model().attention.length * 2,
   }))
   const inspectedLane = createMemo(() => selectedLane() ?? model().lanes.find(laneNeedsAttention) ?? model().lanes[0])
+  const inspectedArtifact = createMemo(() => model().artifacts.find((item) => item.id === selectedArtifactID()))
+  const [artifactPreview] = createResource(inspectedArtifact, (artifact) => readArtifactPreview({
+    path: artifact.path,
+    title: artifact.title,
+  }))
+  createEffect(() => {
+    if (workflow.loading) return
+    const laneID = selectedLaneID()
+    if (laneID && model().lanes.length > 0 && !model().lanes.some((lane) => lane.id === laneID)) {
+      setSelectedLaneID(model().lanes[0]!.id)
+      setSelectedArtifactID("")
+      toast.show({ message: "Selected lane is no longer in this workflow", variant: "info", duration: 2500 })
+      return
+    }
+    const artifactID = selectedArtifactID()
+    if (artifactID && !model().artifacts.some((artifact) => artifact.id === artifactID)) setSelectedArtifactID("")
+  })
   const inspectedLaneIndex = createMemo(() => {
     const lane = inspectedLane()
     if (!lane) return -1
@@ -218,6 +240,23 @@ export function IcAgent() {
         })
         break
       case "detail":
+        if (selectedArtifactID()) {
+          const lane = inspectedLane()
+          const artifacts = lane ? laneArtifacts(view.artifacts, lane) : []
+          focusNeighbor({
+            items: artifacts,
+            selected: (item) => item.id === selectedArtifactID(),
+            select: (item) => setSelectedArtifactID(item.id),
+            direction,
+          })
+          break
+        }
+        focusNeighbor({
+          items: view.laneBoard.rows,
+          selected: (item) => item.selected,
+          select: (item) => focusLane(item.laneID),
+          direction,
+        })
         break
       case "debug":
         focusNeighbor({
@@ -275,16 +314,66 @@ export function IcAgent() {
         category: "Motryx",
         run: () => moveCockpitFocus(-1),
       },
+      {
+        namespace: "palette",
+        name: "ic.artifact.open",
+        title: "Open lane artifact",
+        desc: "Open the first durable artifact for the selected Motryx lane.",
+        category: "Motryx",
+        enabled: Boolean(inspectedLane() && laneArtifacts(model().artifacts, inspectedLane()!).length > 0),
+        run: () => {
+          const lane = inspectedLane()
+          const artifact = lane ? laneArtifacts(model().artifacts, lane)[0] : undefined
+          if (!artifact) return
+          setSelectedArtifactID(artifact.id)
+          setSidecardMode("detail")
+        },
+      },
     ],
   }))
   useBindings(() => ({
-    enabled: () => renderer.currentFocusedEditor === null,
+    enabled: () => true,
     bindings: [
       { key: "alt+]", desc: "Next Motryx cockpit view", group: "Motryx", cmd: "ic.cockpit.tab.next" },
       { key: "alt+[", desc: "Previous Motryx cockpit view", group: "Motryx", cmd: "ic.cockpit.tab.previous" },
       { key: "alt+j", desc: "Next Motryx lane row", group: "Motryx", cmd: "ic.cockpit.focus.next" },
       { key: "alt+k", desc: "Previous Motryx lane row", group: "Motryx", cmd: "ic.cockpit.focus.previous" },
+      { key: "alt+o", desc: "Open Motryx lane artifact", group: "Motryx", cmd: "ic.artifact.open" },
     ],
+  }))
+  useBindings(() => ({
+    enabled: () => renderer.currentFocusedEditor === null && sidecardMode() === "detail" && !selectedArtifactID(),
+    bindings: [
+      {
+        key: "enter",
+        desc: "Open selected lane artifact",
+        group: "Motryx",
+        cmd: () => {
+          if (selectedArtifactID()) return
+          const lane = inspectedLane()
+          const artifact = lane ? laneArtifacts(model().artifacts, lane)[0] : undefined
+          if (artifact) setSelectedArtifactID(artifact.id)
+        },
+      },
+    ],
+  }))
+  useBindings(() => ({
+    enabled: () => sidecardMode() === "detail" && Boolean(selectedArtifactID()),
+    bindings: [{
+      key: "escape",
+      desc: "Back to lane inspection",
+      group: "Motryx",
+      cmd: () => setSelectedArtifactID(""),
+    }],
+  }))
+  useBindings(() => ({
+    enabled: () => !focusSessionID() && !startingSession(),
+    bindings: [{
+      key: "enter",
+      desc: "Start Motryx orchestrator",
+      group: "Motryx",
+      cmd: () => void startOrchestratorSession(),
+    }],
   }))
   useBindings(() => ({
     enabled: () => debugView(),
@@ -299,11 +388,27 @@ export function IcAgent() {
     setSelectedLaneID("")
     setSelectedLaneRole(undefined)
     setSelectedSessionID("")
+    setSelectedArtifactID("")
   }
   const focusLane = (laneID: string) => {
     setSelectedLaneID(laneID)
     setSelectedLaneRole(undefined)
     setSelectedSessionID("")
+    setSelectedArtifactID("")
+    requestAnimationFrame(() => ensureLaneVisible(laneID))
+  }
+  const ensureLaneVisible = (laneID: string) => {
+    if (!cockpitScroll || sidecardMode() !== "workflow") return
+    const index = model().laneBoard.rows.findIndex((row) => row.laneID === laneID)
+    if (index < 0) return
+    const attentionRows = model().attention.length * 2
+    const rowHeight = 1 + boardLayout().gap
+    const top = attentionRows + index * rowHeight
+    const bottom = top + 1
+    if (top < cockpitScroll.scrollTop) cockpitScroll.scrollTo(top)
+    else if (bottom > cockpitScroll.scrollTop + cockpitScroll.viewport.height) {
+      cockpitScroll.scrollTo(Math.max(0, bottom - cockpitScroll.viewport.height))
+    }
   }
   const focusLaneForDebugNavigation = (laneID: string) => {
     const lane = model().lanes.find((item) => item.id === laneID)
@@ -489,6 +594,7 @@ export function IcAgent() {
     <box flexGrow={1} minHeight={0} flexDirection="column" backgroundColor={motryx.shell}>
       <MotryxHeader
         compact={compact()}
+        short={layout().shortHeader}
       />
 
       <box
@@ -537,6 +643,7 @@ export function IcAgent() {
               promptRight={<text fg={conversationChrome().tone}>{conversationChrome().prompt}</text>}
               showScrollbar={true}
               transformTextPart={sanitizeMotryxTranscriptText}
+              showPromptHints={false}
               empty={(
                 <EmptySessionState
                   starting={startingSession()}
@@ -562,7 +669,16 @@ export function IcAgent() {
           borderColor={narrow() ? motryx.goldDark : motryx.line}
           customBorderChars={SplitBorder.customBorderChars}
         >
-          <CockpitHeader summary={cockpitSummary(model())} compact={compact()} />
+          <Show
+            when={!layout().cockpitCollapsed}
+            fallback={
+              <box flexGrow={1} flexDirection="row" justifyContent="space-between" onMouseDown={() => setSidecardMode("workflow")}>
+                <text fg={motryx.gold} wrapMode="none"><b>FLOW collapsed</b></text>
+                <text fg={motryx.ink} wrapMode="none">{clip(cockpitSummary(model()), Math.max(18, dimensions().width - 24))}</text>
+              </box>
+            }
+          >
+          <CockpitHeader summary={cockpitSummary(model())} compact={compact()} overflow={boardLayout().showScrollHint} />
           <box flexShrink={0} flexDirection="row" gap={1}>
             <SidecardButton
               label={compact() ? `FLOW ${model().cockpit.counts.lanes}` : "FLOW"}
@@ -583,6 +699,7 @@ export function IcAgent() {
             </Show>
           </box>
           <scrollbox
+            ref={(value) => (cockpitScroll = value)}
             flexGrow={1}
             minHeight={0}
             scrollAcceleration={cockpitScrollAcceleration()}
@@ -600,18 +717,15 @@ export function IcAgent() {
                   fallback={<WorkflowReadyState model={model()} />}
                 >
                   <box flexDirection="column">
-                    <ResourceBlockBanner
-                      blocks={model().resourceBlocks}
+                    <AttentionStrip
+                      items={model().attention}
                       compact={compact()}
-                      onSelectLane={(laneID) => focusLane(laneID)}
+                      onSelectLane={focusLane}
                     />
-                    <AttentionLaneHint lane={nextAttentionLane()} onSelect={(lane) => focusLane(lane.id)} />
                     <LaneBoard
                       rows={model().laneBoard.rows}
-                      lanes={model().lanes}
                       compact={compact()}
                       gap={boardLayout().gap}
-                      showScrollHint={boardLayout().showScrollHint}
                       onSelectLane={(laneID) => focusLane(laneID)}
                     />
                   </box>
@@ -623,17 +737,32 @@ export function IcAgent() {
                     <b>INSPECT</b>
                   </text>
                   <Show
-                    when={inspectedLane()}
-                    fallback={<text fg={motryx.muted}>Select a flow row first.</text>}
+                    when={inspectedArtifact()}
+                    fallback={<Show
+                      when={inspectedLane()}
+                      fallback={<text fg={motryx.muted}>Select a flow row first.</text>}
+                    >
+                      <LaneDetail
+                        lane={inspectedLane()}
+                        index={inspectedLaneIndex()}
+                        total={model().lanes.length}
+                        compact={compact()}
+                        rows={model().laneBoard.rows}
+                        artifacts={model().artifacts}
+                        diagnostics={model().diagnostics}
+                        onSelectArtifact={(artifact) => setSelectedArtifactID(artifact.id)}
+                      />
+                    </Show>}
                   >
-                    <LaneDetail
-                      lane={inspectedLane()}
-                      index={inspectedLaneIndex()}
-                      total={model().lanes.length}
-                      compact={compact()}
-                      rows={model().laneBoard.rows}
-                      artifacts={model().artifacts}
-                    />
+                    {(artifact) => (
+                      <ArtifactPreviewPanel
+                        artifact={artifact()}
+                        preview={artifactPreview()}
+                        loading={artifactPreview.loading}
+                        compact={compact()}
+                        onBack={() => setSelectedArtifactID("")}
+                      />
+                    )}
                   </Show>
                 </box>
               </Match>
@@ -649,6 +778,7 @@ export function IcAgent() {
               </Match>
             </Switch>
           </scrollbox>
+          </Show>
         </box>
       </box>
       <MotryxStatusBar
@@ -737,6 +867,7 @@ function findOrchestratorSessionID(model: ReturnType<typeof projectIcTui>) {
 
 function MotryxHeader(props: {
   compact: boolean
+  short: boolean
 }) {
   return (
     <box
@@ -749,9 +880,11 @@ function MotryxHeader(props: {
         <box flexDirection="row" gap={1}>
           <box flexDirection="column" paddingLeft={1} paddingRight={1}>
             <MotryxWordmark size={props.compact ? "compact" : "full"} />
-            <text fg={motryx.gold} wrapMode="none">
-              {props.compact ? "VIRTUAL SILICON" : "VIRTUAL SILICON ENGINEERS"}
-            </text>
+            <Show when={!props.short}>
+              <text fg={motryx.gold} wrapMode="none">
+                {props.compact ? "VIRTUAL SILICON" : "VIRTUAL SILICON ENGINEERS"}
+              </text>
+            </Show>
           </box>
         </box>
       </box>
@@ -818,10 +951,9 @@ function MotryxStatusBar(props: {
         fallback={<text fg={motryx.shellText} wrapMode="none">{debugHint() || "flow"} · {summary()}</text>}
       >
         <box flexDirection="row" gap={2}>
-          <text fg={motryx.shellText} wrapMode="none">esc cancel</text>
-          <text fg={motryx.shellText} wrapMode="none">tab focus</text>
-          <text fg={motryx.shellText} wrapMode="none">alt+[/] view</text>
-          <text fg={motryx.shellText} wrapMode="none">alt+j/k lane</text>
+          <text fg={props.model.attention.length > 0 ? motryx.gold : motryx.shellText} wrapMode="none">
+            {props.model.attention.length > 0 ? `${props.model.attention.length} need action` : "workflow healthy"}
+          </text>
           <Show when={debugHint()}>
             <text fg={motryx.shellText} wrapMode="none">{debugHint()}</text>
           </Show>
@@ -870,7 +1002,7 @@ function ConversationTargetBar(props: {
               detail={roleChipDetail(lane().checker, props.compact)}
               selected={lane().focusedRole === "checker"}
               available={lane().checker.available}
-              tone={motryx.red}
+              tone={motryx.gold}
               compact={props.compact}
               onSelect={() => props.onSelectRole(lane(), "checker")}
             />
@@ -978,29 +1110,6 @@ function MotryxSessionPicker(props: {
       ]}
     />
   )
-}
-
-function sessionWorkflowLabel(session: MotryxSessionHistoryItem) {
-  const summary = session.workflowSummary
-  if (!summary) return "workflow:unknown"
-  if (summary.status === "missing-db") return "workflow:missing-db"
-  if (summary.status === "unreadable") return "workflow:unreadable"
-  if (summary.status === "empty") return "workflow:empty"
-  const active = summary.active > 0 ? `${summary.active} active` : "idle"
-  const blocked = summary.blocked > 0 ? `, ${summary.blocked} blocked` : ""
-  return `${summary.lanes} lanes (${active}${blocked})`
-}
-
-function sessionDetails(session: MotryxSessionHistoryItem) {
-  const details = [`${session.handle} · msg:${session.messageCount} · ${session.bindingStatus}${session.createdText ? ` · ${session.createdText}` : ""}`]
-  details.push(session.icAgentDbPath ? session.icAgentDbPath : session.id)
-  if (session.requiredMigration) {
-    details.push(`schema migration required · ${session.requiredMigration}`)
-  }
-  if (session.workflowSummary?.workflowID) {
-    details.push(`${session.workflowSummary.workflowID} · ${session.workflowSummary.workflowStatus ?? "UNKNOWN"}`)
-  }
-  return details
 }
 
 function EmptySessionState(props: {
@@ -1113,10 +1222,10 @@ function Line(props: { children: JSX.Element }) {
   return <box height={1}>{props.children}</box>
 }
 
-function CockpitHeader(props: { summary: string; compact: boolean }) {
+function CockpitHeader(props: { summary: string; compact: boolean; overflow: boolean }) {
   const line = createMemo(() => {
     const prefix = props.compact ? "FLOW" : "FLOW"
-    return `${prefix} · ${props.summary}`
+    return `${prefix} · ${props.summary}${props.overflow ? " · more" : ""}`
   })
   return (
     <box flexShrink={0} flexDirection="column">
@@ -1317,113 +1426,35 @@ function cockpitSummary(model: ReturnType<typeof projectIcTui>) {
   return `${counts.active} active · ${counts.done}/${counts.total} done${blocked}`
 }
 
-function AttentionLaneHint(props: { lane?: IcLaneSummary; onSelect: (lane: IcLaneSummary) => void }) {
-  return (
-    <Show when={props.lane}>
-      {(lane) => (
-        <box
-          flexDirection="column"
-          paddingLeft={1}
-          paddingRight={1}
-          backgroundColor={motryx.panelAlt}
-          border={["left"]}
-          borderColor={laneBlockedForRoute(lane()) ? motryx.redDark : motryx.gold}
-          onMouseDown={() => props.onSelect(lane())}
-        >
-          <Line>
-            <text fg={laneBlockedForRoute(lane()) ? motryx.redDark : motryx.muted} wrapMode="none">
-              {laneBlockedForRoute(lane())
-                ? `Blocked: ${clip(lane().name, 22)}`
-                : `Next: ${clip(lane().status.toLowerCase(), 8)} ${clip(lane().name, 20)}`}
-            </text>
-          </Line>
-          <Show when={lane().pendingCheckSummary}>
-            <Line>
-              <text fg={motryx.muted} wrapMode="none">
-                {clip(lane().pendingCheckSummary || "", 34)}
-              </text>
-            </Line>
-          </Show>
-        </box>
-      )}
-    </Show>
-  )
-}
-
-function ResourceBlockBanner(props: {
-  blocks: IcResourceBlock[]
-  compact: boolean
-  onSelectLane: (laneID: string) => void
-}) {
-  const first = createMemo(() => props.blocks[0])
-  return (
-    <Show when={first()}>
-      {(block) => (
-        <box
-          flexDirection="column"
-          paddingLeft={1}
-          paddingRight={1}
-          backgroundColor={motryx.panelAlt}
-          border={["left"]}
-          borderColor={motryx.redDark}
-          onMouseDown={() => block().laneID && props.onSelectLane(block().laneID!)}
-        >
-          <Line>
-            <text fg={motryx.redDark} wrapMode="none">
-              {props.compact
-                ? `Quota: ${clip(block().laneName || block().laneID || "workflow", 22)}`
-                : `LLM resource blocked: ${clip(block().providerID || "provider", 14)} / ${clip(block().modelID || "model", 18)}`}
-            </text>
-          </Line>
-          <Line>
-            <text fg={motryx.muted} wrapMode="none">
-              {clip(block().errorMessage || block().impactSummary || "Human confirmation required before resume.", props.compact ? 34 : 54)}
-            </text>
-          </Line>
-        </box>
-      )}
-    </Show>
-  )
-}
-
 function LaneBoard(props: {
   rows: IcLaneBoardRow[]
-  lanes: IcLaneSummary[]
   compact: boolean
   gap: 0 | 1
-  showScrollHint: boolean
   onSelectLane: (laneID: string) => void
 }) {
-  const lanes = createMemo(() => new Map(props.lanes.map((lane) => [lane.id, lane])))
   return (
     <box flexDirection="column" gap={props.gap}>
       <For each={props.rows}>
         {(row) => (
           <LaneBoardRow
             row={row}
-            lane={lanes().get(row.laneID)}
             compact={props.compact}
             onSelectLane={() => props.onSelectLane(row.laneID)}
           />
         )}
       </For>
-      <Show when={props.showScrollHint}>
-        <text fg={motryx.muted} wrapMode="none">
-          {props.compact ? "scroll for more" : "scroll for more lanes"}
-        </text>
-      </Show>
     </box>
   )
 }
 
 function LaneBoardRow(props: {
   row: IcLaneBoardRow
-  lane?: IcLaneSummary
   compact: boolean
   onSelectLane: () => void
 }) {
   const left = createMemo(() => `${pad2(props.row.ordinal)} ${clip(props.row.label, props.compact ? 22 : 28)}`)
   const status = createMemo(() => clipStatus(props.row.statusLabel))
+  const statusChip = createMemo(() => clearDisplayLine(`${status()}${props.row.attention ? " !" : ""}`, props.compact ? 14 : 16))
   return (
     <box
       flexDirection="column"
@@ -1437,18 +1468,9 @@ function LaneBoardRow(props: {
       <box flexDirection="row" justifyContent="space-between">
         <text fg={props.row.selected ? motryx.ink : motryx.ink} wrapMode="none">{left()}</text>
         <box paddingLeft={1} paddingRight={1} backgroundColor={laneStatusBackground(props.row.tone, motryx)}>
-          <text fg={laneStatusForeground(props.row.tone, motryx)} wrapMode="none">{props.row.attention ? `${status()} !` : status()}</text>
+          <text fg={laneStatusForeground(props.row.tone, motryx)} wrapMode="none">{statusChip()}</text>
         </box>
       </box>
-      <Show when={props.row.selected && props.lane}>
-        {(lane) => (
-          <box flexDirection="column">
-            <text fg={motryx.muted} wrapMode="none">
-              {clip(laneBoardDetailLine(props.row, lane()), props.compact ? 28 : 42)}
-            </text>
-          </box>
-        )}
-      </Show>
     </box>
   )
 }
@@ -1459,13 +1481,6 @@ function clipStatus(status: string) {
 
 function statusTextColor(status: string) {
   return laneBoardToneColor(statusTone(status), motryx)
-}
-
-function laneBoardDetailLine(row: IcLaneBoardRow, lane: IcLaneSummary) {
-  const dep = row.needs.length ? `depends ${row.needs.join("/")}` : "no dependencies"
-  const reopen = `reopened ${lane.reopenCount ?? 0}`
-  const last = `updated ${formatLaneBoardTime(lane.updatedAt)}`
-  return `${dep} · ${reopen} · ${last}`
 }
 
 function LaneMetricLines(props: { row: IcLaneBoardRow; lane: IcLaneSummary; compact: boolean }) {
@@ -1496,8 +1511,9 @@ function rowFromLane(lane: IcLaneSummary, index: number): IcLaneBoardRow {
     laneID: lane.id,
     ordinal: index + 1,
     label: lane.name || lane.id,
-    statusLabel: lane.status,
-    tone: laneNeedsAttention(lane) ? "active" : "open",
+    statusLabel: lane.displayStatus,
+    phase: lane.phase,
+    tone: lane.tone,
     depth: 0,
     branch: "root",
     needs: [],
@@ -1523,6 +1539,8 @@ function LaneDetail(props: {
   compact: boolean
   rows: IcLaneBoardRow[]
   artifacts: IcArtifactSummary[]
+  diagnostics: IcDiagnostic[]
+  onSelectArtifact: (artifact: IcArtifactSummary) => void
 }) {
   const row = createMemo(() => {
     const lane = props.lane
@@ -1533,6 +1551,11 @@ function LaneDetail(props: {
     const lane = props.lane
     if (!lane) return []
     return laneArtifacts(props.artifacts, lane).slice(0, 3)
+  })
+  const diagnostics = createMemo(() => {
+    const lane = props.lane
+    if (!lane) return []
+    return props.diagnostics.filter((item) => item.targetType === "lane" && item.targetID === lane.id && item.severity !== "info")
   })
   return (
     <Show when={props.lane}>
@@ -1566,14 +1589,31 @@ function LaneDetail(props: {
                 </text>
               }
             >
-                {(summary) => <text fg={motryx.redDark} wrapMode="word">{clip(summary(), props.compact ? 54 : 72)}</text>}
+                {(summary) => <text fg={lane().phase === "blocked" ? motryx.redDark : motryx.gold} wrapMode="word">{clip(summary(), props.compact ? 54 : 72)}</text>}
             </Show>
           </box>
           <Show when={outputs().length > 0}>
             <box flexDirection="column" gap={1}>
               <text fg={motryx.muted} wrapMode="none">Outputs</text>
               <For each={outputs()}>
-                {(artifact) => <ArtifactOutputRow item={artifact} compact={props.compact} />}
+                {(artifact) => <ArtifactOutputRow item={artifact} compact={props.compact} onSelect={() => props.onSelectArtifact(artifact)} />}
+              </For>
+            </box>
+          </Show>
+          <Show when={diagnostics().length > 0}>
+            <box flexDirection="column" gap={1}>
+              <text fg={motryx.muted} wrapMode="none">Attention</text>
+              <For each={diagnostics()}>
+                {(diagnostic) => (
+                  <box flexDirection="column" border={["left"]} borderColor={diagnostic.severity === "error" ? motryx.redDark : motryx.gold} paddingLeft={1}>
+                    <text fg={diagnostic.severity === "error" ? motryx.redDark : motryx.gold} wrapMode="none">
+                      {clip(diagnostic.title, props.compact ? 26 : 42)}
+                    </text>
+                    <text fg={motryx.ink} wrapMode="word">{diagnostic.detail}</text>
+                    <text fg={motryx.muted} wrapMode="word">{diagnostic.recommendation}</text>
+                    <text fg={motryx.muted} wrapMode="none">{clip(diagnostic.source, props.compact ? 26 : 42)}</text>
+                  </box>
+                )}
               </For>
             </box>
           </Show>
@@ -1590,17 +1630,8 @@ function laneDetailFallback(lane: IcLaneSummary) {
 }
 
 function laneNeedsAttention(lane: IcLaneSummary) {
-  const status = lane.status.toLowerCase()
   const result = lane.lastCheckResult?.toLowerCase() ?? ""
-  return /block|check|rework|fail|work|active|progress/.test(status)
-    || Boolean(lane.pendingCheckSummary)
-    || Boolean(result && !["pass", "passed", "done", "ok", "clean"].includes(result))
-}
-
-function laneBlockedForRoute(lane: IcLaneSummary) {
-  const status = lane.status.toLowerCase()
-  const result = lane.lastCheckResult?.toLowerCase() ?? ""
-  return /block|fail|rework|error|dead/.test(status)
+  return lane.actionability !== "none"
     || Boolean(result && !["pass", "passed", "done", "ok", "clean"].includes(result))
 }
 
@@ -1609,19 +1640,14 @@ function pad2(value: number) {
 }
 
 function laneArtifacts(artifacts: IcArtifactSummary[], lane: IcLaneSummary) {
-  const needles = [lane.id, lane.name].map((item) => item.toLowerCase()).filter(Boolean)
-  const related = artifacts.filter((item) => {
-    const haystack = `${item.id} ${item.title} ${item.path} ${item.detail}`.toLowerCase()
-    return needles.some((needle) => haystack.includes(needle))
-  })
-  return related.length > 0 ? related : artifacts.slice(0, 2)
+  return artifacts.filter((item) => item.producedByLaneID === lane.id)
 }
 
-function ArtifactOutputRow(props: { item: IcArtifactSummary; compact: boolean }) {
+function ArtifactOutputRow(props: { item: IcArtifactSummary; compact: boolean; onSelect: () => void }) {
   const color = () => {
     if (props.item.kind === "doc") return motryx.gold
     if (props.item.kind === "report") return motryx.green
-    if (props.item.kind === "log") return motryx.red
+    if (props.item.kind === "log") return motryx.muted
     return motryx.muted
   }
   return (
@@ -1630,6 +1656,7 @@ function ArtifactOutputRow(props: { item: IcArtifactSummary; compact: boolean })
       paddingLeft={1}
       paddingRight={1}
       backgroundColor={motryx.panelAlt}
+      onMouseDown={props.onSelect}
     >
       <text fg={color()} wrapMode="none">{`${props.item.kind} · ${clip(props.item.title, props.compact ? 24 : 36)}`}</text>
       <text fg={motryx.muted} wrapMode="none">{`updated ${formatArtifactTime(props.item.mtime)}`}</text>
@@ -1657,7 +1684,5 @@ function clip(value: string, length: number) {
 }
 
 function clearDisplayLine(value: string, width: number) {
-  const length = Math.max(0, width)
-  const clipped = clip(value, length)
-  return clipped.padEnd(length, " ")
+  return Locale.padDisplayEnd(value, width)
 }
