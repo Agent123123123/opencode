@@ -10,6 +10,7 @@ import {
 export type MotryxOrchestratorBinding = {
   projectID: string
   orchestratorSessionID: string
+  runtimeID?: string | null
   icAgentDbPath: string
   schemaVersion: number
   createdAt: string

@@ -158,7 +158,7 @@ test("reads a headless-created orchestrator binding as the same TUI product trut
       projectID: project,
       orchestratorSessionID: "ses_headless_tui_equiv",
       icAgentDbPath: path.join(dataRoot, "orchestrators", "ses_headless_tui_equiv", "ic-agent.db"),
-      schemaVersion: 1,
+      schemaVersion: 2,
     })
   } finally {
     server.stop(true)
