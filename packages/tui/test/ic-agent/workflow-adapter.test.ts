@@ -734,6 +734,30 @@ test("prefers the Motryx workflow read API when configured", async () => {
           status: "BUSY",
           laneIDs: ["lane_api"],
         }],
+        functionSlots: [{
+          slotID: "slot_api",
+          slotKey: "api-owner",
+          role: "coordinator",
+          status: "ACTIVE",
+          instanceID: "inst_api",
+          memberGeneration: 1,
+        }],
+        inboxItems: [{
+          inboxItemID: "inbox_api",
+          instanceID: "inst_api",
+          envelopeClass: "command",
+          sourceType: "lane_command",
+          status: "ACTIVE",
+          laneID: "lane_api",
+        }],
+        deliveryFences: [{
+          fenceID: "fence_api",
+          instanceID: "inst_api",
+          inboxItemID: "inbox_api",
+          state: "TURN_ACTIVE",
+          fenceGeneration: 1,
+          expectedSessionID: "ses_api",
+        }],
         artifacts: [{
           id: "artifact_api",
           workflow_id: "wf_api",
@@ -797,6 +821,9 @@ test("prefers the Motryx workflow read API when configured", async () => {
       status: "BUSY",
       laneIDs: ["lane_api"],
     }])
+    expect(snapshot.functionSlots).toEqual([expect.objectContaining({ slotID: "slot_api", instanceID: "inst_api" })])
+    expect(snapshot.inboxItems).toEqual([expect.objectContaining({ inboxItemID: "inbox_api", status: "ACTIVE" })])
+    expect(snapshot.deliveryFences).toEqual([expect.objectContaining({ fenceID: "fence_api", state: "TURN_ACTIVE" })])
     expect(snapshot.artifacts).toEqual([expect.objectContaining({
       id: "artifact_api",
       workflowID: "wf_api",

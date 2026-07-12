@@ -107,7 +107,7 @@ test("surfaces provider auth hints without blocking the empty session action", (
     id: "secondary-key",
     tone: "info",
     label: "Worker auth",
-    detail: "MiniMax/Anthropic credential may be needed later",
+    detail: "Z.AI/MiniMax/Anthropic credential may be needed later",
   })
 })
 
@@ -127,9 +127,9 @@ test("uses user-level Motryx auth store credentials before warning about missing
           refresh: "refresh-token",
           expires: Date.now() + 3600_000,
         },
-        "minimax-cn-coding-plan": {
+        "zai-coding-plan": {
           type: "api",
-          key: "minimax-token",
+          key: "zai-token",
         },
       }),
     )
@@ -155,7 +155,7 @@ test("uses user-level Motryx auth store credentials before warning about missing
       id: "secondary-auth",
       tone: "ok",
       label: "Worker auth",
-      detail: "MiniMax credential found in Motryx auth store",
+      detail: "Z.AI credential found in Motryx auth store",
     })
     expect(readiness.items.some((item) => item.id === "openai-key")).toBe(false)
     expect(readiness.items.some((item) => item.id === "secondary-key")).toBe(false)

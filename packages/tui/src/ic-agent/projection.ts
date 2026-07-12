@@ -331,6 +331,15 @@ export function projectIcTui(input: {
   })
   const hasAgentRoles = agents.some((agent) => agent.role !== "orchestrator")
   const active = hasWorkflowState || primarySessions.length > 0
+  const allocationSummary = input.workflow && (
+    (input.workflow.functionSlots?.length ?? 0) > 0 ||
+    (input.workflow.inboxItems?.length ?? 0) > 0 ||
+    (input.workflow.deliveryFences?.length ?? 0) > 0
+  )
+    ? ` · ${input.workflow.functionSlots?.length ?? 0} slots` +
+      ` · ${input.workflow.inboxItems?.filter((item) => item.status === "QUEUED").length ?? 0} queued` +
+      ` · ${input.workflow.deliveryFences?.length ?? 0} fences`
+    : ""
   const surfaceLevel = attention.length > 0
     ? "workflow_attention"
     : hasAgentRoles
@@ -357,7 +366,7 @@ export function projectIcTui(input: {
         ? `${input.workflow.workflow.status} workflow`
         : active ? "IC Agent workspace" : "No workflow loaded",
       detail: input.workflow?.workflow
-        ? clip(input.workflow.workflow.goal, 180)
+        ? `${clip(input.workflow.workflow.goal, 180)}${allocationSummary}`
         : active
         ? `${primarySessions.length} session${primarySessions.length === 1 ? "" : "s"} available`
         : "Start or resume an orchestrator session to begin.",

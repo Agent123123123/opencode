@@ -1,5 +1,6 @@
 export const IC_LANE_STATES = [
   "OPEN",
+  "READY",
   "WORKING",
   "AWAITING_CHECK",
   "CHECKING",
@@ -29,6 +30,15 @@ const PRESENTATION: Record<IcLaneState, IcLanePresentation> = {
   OPEN: {
     state: "OPEN",
     label: "open",
+    phase: "open",
+    tone: "open",
+    bucket: "open",
+    actionability: "none",
+    terminal: false,
+  },
+  READY: {
+    state: "READY",
+    label: "ready · waiting for slot",
     phase: "open",
     tone: "open",
     bucket: "open",

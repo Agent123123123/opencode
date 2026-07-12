@@ -26,8 +26,11 @@ export function motryxReadinessFromEnv(env: Record<string, string | undefined> =
   const nativeDbUnused = dbName !== "opencode.db"
   const hasOpenAI = Boolean(env.OPENAI_API_KEY || auth.providers.has("openai"))
   const hasSecondary = Boolean(
-    env.ANTHROPIC_API_KEY ||
+    env.ZAI_API_KEY ||
+      env.ANTHROPIC_API_KEY ||
       env.MINIMAX_API_KEY ||
+      auth.providers.has("zai-coding-plan") ||
+      auth.providers.has("zai") ||
       auth.providers.has("anthropic") ||
       auth.providers.has("minimax-cn-coding-plan"),
   )
@@ -95,16 +98,18 @@ export function motryxReadinessFromEnv(env: Record<string, string | undefined> =
       id: "secondary-auth",
       tone: "ok",
       label: "Worker auth",
-      detail: auth.providers.has("minimax-cn-coding-plan")
-        ? "MiniMax credential found in Motryx auth store"
-        : "secondary model key set",
+      detail: auth.providers.has("zai-coding-plan") || auth.providers.has("zai")
+        ? "Z.AI credential found in Motryx auth store"
+        : auth.providers.has("minimax-cn-coding-plan")
+          ? "MiniMax credential found in Motryx auth store"
+          : "worker model key set",
     })
   } else {
     items.push({
       id: "secondary-key",
       tone: "info",
       label: "Worker auth",
-      detail: "MiniMax/Anthropic credential may be needed later",
+      detail: "Z.AI/MiniMax/Anthropic credential may be needed later",
     })
   }
 

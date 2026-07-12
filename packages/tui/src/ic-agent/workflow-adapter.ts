@@ -18,6 +18,7 @@ export type IcWorkflowSnapshot = {
     id: string
     status: string
     goal: string
+    agentAllocationPolicy?: Record<string, unknown>
   }
   lanes: Array<{
     id: string
@@ -28,6 +29,8 @@ export type IcWorkflowSnapshot = {
     pendingCheckSummary?: string
     reopenCount?: number
     repairCycle?: number
+    readyAt?: number
+    readyKind?: string
     dependsOnLaneIDs?: string[]
     coordinatorSessionID?: string
     checkerSessionID?: string
@@ -70,6 +73,30 @@ export type IcWorkflowSnapshot = {
     humanActionRequired: boolean
     automaticProviderFallback: boolean
     lastEventAt?: number
+  }>
+  functionSlots?: Array<{
+    slotID: string
+    slotKey: string
+    role: string
+    status: string
+    instanceID?: string
+    memberGeneration?: number
+  }>
+  inboxItems?: Array<{
+    inboxItemID: string
+    instanceID: string
+    envelopeClass: string
+    sourceType: string
+    status: string
+    laneID?: string
+  }>
+  deliveryFences?: Array<{
+    fenceID: string
+    instanceID: string
+    inboxItemID: string
+    state: string
+    fenceGeneration: number
+    expectedSessionID?: string
   }>
   diagnostics: Array<{
     id: string
@@ -114,6 +141,9 @@ function readLocalWorkflowSnapshot(directory: string, projectContext?: MotryxPro
     agents: [],
     artifacts: [],
     resourceBlocks: [],
+    functionSlots: [],
+    inboxItems: [],
+    deliveryFences: [],
     diagnostics: projectContextDiagnostics(projectContext),
   }
 }
@@ -168,6 +198,9 @@ function normalizeApiWorkflowSnapshot(data: unknown, apiURL: string): IcWorkflow
     agents: normalizeApiAgents(value.agents),
     artifacts: normalizeApiArtifacts(value.artifacts),
     resourceBlocks: normalizeApiResourceBlocks(value.resourceBlocks ?? value.resource_blocks),
+    functionSlots: normalizeFunctionSlots(value.functionSlots ?? value.function_slots),
+    inboxItems: normalizeInboxItems(value.inboxItems ?? value.inbox_items),
+    deliveryFences: normalizeDeliveryFences(value.deliveryFences ?? value.delivery_fences),
     diagnostics: normalizeApiDiagnostics(value.diagnostics, apiURL),
   }
 }
@@ -194,7 +227,65 @@ function normalizeApiWorkflow(value: unknown): IcWorkflowSnapshot["workflow"] {
     id,
     status: optionalString(workflow.status) ?? "UNKNOWN",
     goal: optionalString(workflow.goal) ?? "",
+    agentAllocationPolicy: objectRecord(workflow.agentAllocationPolicy ?? workflow.agent_allocation_policy),
   }
+}
+
+function normalizeFunctionSlots(value: unknown): NonNullable<IcWorkflowSnapshot["functionSlots"]> {
+  if (!Array.isArray(value)) return []
+  return value.flatMap((raw) => {
+    const item = objectRecord(raw)
+    if (!item) return []
+    const slotID = optionalString(item.slotID ?? item.slot_id)
+    if (!slotID) return []
+    return [{
+      slotID,
+      slotKey: optionalString(item.slotKey ?? item.slot_key) ?? slotID,
+      role: optionalString(item.role) ?? "",
+      status: optionalString(item.status) ?? "UNKNOWN",
+      instanceID: optionalString(item.instanceID ?? item.instance_id),
+      memberGeneration: optionalNumber(item.memberGeneration ?? item.member_generation),
+    }]
+  })
+}
+
+function normalizeInboxItems(value: unknown): NonNullable<IcWorkflowSnapshot["inboxItems"]> {
+  if (!Array.isArray(value)) return []
+  return value.flatMap((raw) => {
+    const item = objectRecord(raw)
+    if (!item) return []
+    const inboxItemID = optionalString(item.inboxItemID ?? item.inbox_item_id)
+    const instanceID = optionalString(item.instanceID ?? item.instance_id)
+    if (!inboxItemID || !instanceID) return []
+    return [{
+      inboxItemID,
+      instanceID,
+      envelopeClass: optionalString(item.envelopeClass ?? item.envelope_class) ?? "",
+      sourceType: optionalString(item.sourceType ?? item.source_type) ?? "",
+      status: optionalString(item.status) ?? "UNKNOWN",
+      laneID: optionalString(item.laneID ?? item.lane_id),
+    }]
+  })
+}
+
+function normalizeDeliveryFences(value: unknown): NonNullable<IcWorkflowSnapshot["deliveryFences"]> {
+  if (!Array.isArray(value)) return []
+  return value.flatMap((raw) => {
+    const item = objectRecord(raw)
+    if (!item) return []
+    const fenceID = optionalString(item.fenceID ?? item.fence_id)
+    const instanceID = optionalString(item.instanceID ?? item.instance_id)
+    const inboxItemID = optionalString(item.inboxItemID ?? item.inbox_item_id)
+    if (!fenceID || !instanceID || !inboxItemID) return []
+    return [{
+      fenceID,
+      instanceID,
+      inboxItemID,
+      state: optionalString(item.state) ?? "UNKNOWN",
+      fenceGeneration: optionalNumber(item.fenceGeneration ?? item.fence_generation) ?? 0,
+      expectedSessionID: optionalString(item.expectedSessionID ?? item.expected_session_id),
+    }]
+  })
 }
 
 function normalizeApiLanes(value: unknown): IcWorkflowSnapshot["lanes"] {
@@ -215,6 +306,8 @@ function normalizeApiLanes(value: unknown): IcWorkflowSnapshot["lanes"] {
     const pendingCheckSummary = optionalString(lane.pendingCheckSummary)
     const reopenCount = optionalNumber(lane.reopenCount)
     const repairCycle = optionalNumber(lane.repairCycle)
+    const readyAt = optionalNumber(lane.readyAt ?? lane.ready_at)
+    const readyKind = optionalString(lane.readyKind ?? lane.ready_kind)
     const coordinatorSessionID = optionalString(lane.coordinatorSessionID)
     const checkerSessionID = optionalString(lane.checkerSessionID)
     if (updatedAt) normalized.updatedAt = updatedAt
@@ -222,6 +315,8 @@ function normalizeApiLanes(value: unknown): IcWorkflowSnapshot["lanes"] {
     if (pendingCheckSummary) normalized.pendingCheckSummary = pendingCheckSummary
     if (reopenCount !== undefined) normalized.reopenCount = reopenCount
     if (repairCycle !== undefined) normalized.repairCycle = repairCycle
+    if (readyAt !== undefined) normalized.readyAt = readyAt
+    if (readyKind) normalized.readyKind = readyKind
     if (coordinatorSessionID) normalized.coordinatorSessionID = coordinatorSessionID
     if (checkerSessionID) normalized.checkerSessionID = checkerSessionID
     return normalized
@@ -352,13 +447,19 @@ function readStateDb(stateDb: string, directory: string, projectContext?: Motryx
   const db = new Database(stateDb, { readonly: true, strict: true })
   try {
     const stateDbSource = classifyStateDbSource(stateDb, directory, projectContext)
+    const hasAllocationPolicy = hasColumn(db, "workflows", "agent_allocation_policy_json")
+    const allocationPolicySelect = hasAllocationPolicy
+      ? "agent_allocation_policy_json as agentAllocationPolicyJson"
+      : "'{}' as agentAllocationPolicyJson"
     const workflow = first<WorkflowRow>(
       db,
-      "select id,status,goal from workflows order by rowid desc limit 1",
+      `select id,status,goal,${allocationPolicySelect} from workflows order by rowid desc limit 1`,
     )
     const dependencySelect = hasColumn(db, "lanes", "depends_on_lane_ids_json")
       ? "depends_on_lane_ids_json as dependsOnLaneIDsJson"
       : "'[]' as dependsOnLaneIDsJson"
+    const readyAtSelect = hasColumn(db, "lanes", "ready_at") ? "ready_at as readyAt" : "NULL as readyAt"
+    const readyKindSelect = hasColumn(db, "lanes", "ready_kind") ? "ready_kind as readyKind" : "NULL as readyKind"
     const laneRows = all<LaneRow>(
       db,
       `select id,
@@ -369,6 +470,8 @@ function readStateDb(stateDb: string, directory: string, projectContext?: Motryx
               pending_check_summary as pendingCheckSummary,
               reopen_count as reopenCount,
               repair_cycle as repairCycle,
+              ${readyAtSelect},
+              ${readyKindSelect},
               ${dependencySelect}
 	         from lanes
 	        order by rowid`,
@@ -385,6 +488,8 @@ function readStateDb(stateDb: string, directory: string, projectContext?: Motryx
       pendingCheckSummary: row.pendingCheckSummary,
       reopenCount: row.reopenCount,
       repairCycle: row.repairCycle,
+      ...(row.readyAt != null ? { readyAt: row.readyAt } : {}),
+      ...(row.readyKind ? { readyKind: row.readyKind } : {}),
       dependsOnLaneIDs: parseStringArray(row.dependsOnLaneIDsJson),
       coordinatorSessionID: laneOwners.get(row.id)?.coordinatorSessionID,
       checkerSessionID: laneOwners.get(row.id)?.checkerSessionID,
@@ -496,17 +601,70 @@ function readStateDb(stateDb: string, directory: string, projectContext?: Motryx
             id: workflow.id,
             status: workflow.status,
             goal: workflow.goal,
+            ...(hasAllocationPolicy
+              ? { agentAllocationPolicy: parseJsonObject(workflow.agentAllocationPolicyJson) }
+              : {}),
           }
         : undefined,
       lanes,
       agents,
       artifacts: artifactSummaries(db, workflow?.id, directory, stateDb, stateDbSource),
       resourceBlocks,
+      functionSlots: localFunctionSlots(db, workflow?.id),
+      inboxItems: localInboxItems(db, workflow?.id),
+      deliveryFences: localDeliveryFences(db, workflow?.id),
       diagnostics,
     }
   } finally {
     db.close()
   }
+}
+
+function localFunctionSlots(db: Database, workflowID?: string): NonNullable<IcWorkflowSnapshot["functionSlots"]> {
+  if (!workflowID || !tableExists(db, "function_slots")) return []
+  return all<{
+    slotID: string; slotKey: string; role: string; status: string
+    instanceID?: string; memberGeneration?: number
+  }>(db, `
+    select s.slot_id as slotID, s.slot_key as slotKey, s.role, s.status,
+           m.instance_id as instanceID, m.member_generation as memberGeneration
+      from function_slots s
+      left join function_slot_members m on m.slot_id = s.slot_id and m.status = 'ACTIVE'
+     where s.workflow_id = '${escapeSqlLiteral(workflowID)}'
+     order by s.role, s.slot_key
+  `)
+}
+
+function localInboxItems(db: Database, workflowID?: string): NonNullable<IcWorkflowSnapshot["inboxItems"]> {
+  if (!workflowID || !tableExists(db, "agent_inbox_items")) return []
+  return all<{
+    inboxItemID: string; instanceID: string; envelopeClass: string
+    sourceType: string; status: string; laneID?: string
+  }>(db, `
+    select inbox_item_id as inboxItemID, to_instance_id as instanceID,
+           envelope_class as envelopeClass, source_type as sourceType,
+           status, lane_id as laneID
+      from agent_inbox_items
+     where workflow_id = '${escapeSqlLiteral(workflowID)}'
+       and status in ('QUEUED','CLAIMED','ACTIVE')
+     order by to_instance_id, priority desc, created_at, inbox_item_id
+  `)
+}
+
+function localDeliveryFences(db: Database, workflowID?: string): NonNullable<IcWorkflowSnapshot["deliveryFences"]> {
+  if (!workflowID || !tableExists(db, "instance_delivery_fences")) return []
+  return all<{
+    fenceID: string; instanceID: string; inboxItemID: string; state: string
+    fenceGeneration: number; expectedSessionID?: string
+  }>(db, `
+    select fence_id as fenceID, instance_id as instanceID, inbox_item_id as inboxItemID,
+           state, fence_generation as fenceGeneration,
+           expected_session_id as expectedSessionID
+      from instance_delivery_fences
+     where workflow_id = '${escapeSqlLiteral(workflowID)}'
+       and state in ('ACQUIRED','PROMPT_ACCEPTED','TURN_ACTIVE','DRAINING')
+     order by instance_id, fence_generation desc
+  `)
 }
 
 function legacyFallbackDiagnostic(source: NonNullable<IcWorkflowSnapshot["stateDbSource"]>, stateDb: string) {
@@ -1232,6 +1390,7 @@ type WorkflowRow = {
   id: string
   status: string
   goal: string
+  agentAllocationPolicyJson?: string
 }
 
 type LaneRow = {
@@ -1243,6 +1402,8 @@ type LaneRow = {
   pendingCheckSummary?: string
   reopenCount?: number
   repairCycle?: number
+  readyAt?: number
+  readyKind?: string
   dependsOnLaneIDsJson?: string
 }
 
