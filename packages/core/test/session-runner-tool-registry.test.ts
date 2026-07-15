@@ -33,6 +33,7 @@ const integrated = testEffect(Layer.mergeAll(ApplicationTools.layer, registry))
 const identity = {
   agent: AgentV2.ID.make("build"),
   assistantMessageID: SessionMessage.ID.make("msg_registry"),
+  activityInputIDs: [SessionMessage.ID.make("msg_input_registry")],
 }
 const sessionID = SessionV2.ID.make("ses_registry")
 const call = (name: string, id = `call-${name}`): ToolRegistry.ExecuteInput => ({
@@ -112,6 +113,35 @@ describe("ToolRegistry", () => {
       const second = yield* toolDefinitions(service)
 
       expect(second[0]).toBe(first[0])
+    }),
+  )
+
+  it.effect("allows a compatibility adapter to preserve a provider-facing input schema", () =>
+    Effect.gen(function* () {
+      const service = yield* ToolRegistry.Service
+      yield* service.register({
+        compatible: Tool.make({
+          description: "Compatibility tool",
+          input: Schema.Unknown,
+          inputJsonSchema: {
+            type: "object",
+            properties: { text: { type: "string" } },
+            required: ["text"],
+          },
+          output: Schema.String,
+          execute: (input) => Effect.succeed((input as { text: string }).text),
+        }),
+      })
+      const materialized = yield* service.materialize()
+      expect(materialized.definitions.find((item) => item.name === "compatible")?.inputSchema).toMatchObject({
+        type: "object",
+        required: ["text"],
+      })
+      expect((yield* materialized.settle({
+        sessionID,
+        ...identity,
+        call: { type: "tool-call", id: "call-compatible", name: "compatible", input: { text: "ok" } },
+      })).result).toEqual({ type: "text", value: "ok" })
     }),
   )
 

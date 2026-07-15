@@ -156,6 +156,12 @@ export interface Interface {
     readonly aggregateID: string
     readonly after?: Cursor
   }) => Stream.Stream<CursorEvent>
+  /** Finite durable aggregate history page for HTTP/API reconciliation. */
+  readonly aggregateHistory: (input: {
+    readonly aggregateID: string
+    readonly after?: Cursor
+    readonly limit?: number
+  }) => Effect.Effect<CursorEvent[]>
   readonly sync: (handler: Sync) => Effect.Effect<Unsubscribe>
   readonly listen: (listener: Listener) => Effect.Effect<Unsubscribe>
   readonly beforeCommit: (guard: CommitGuard) => Effect.Effect<void>
@@ -559,16 +565,16 @@ export const layerWith = (options?: LayerOptions) =>
         }
       }
 
-      const readAfter = (aggregateID: string, after: number) =>
+      const readAfter = (aggregateID: string, after: number, limit?: number) =>
         (options?.beforeAggregateRead?.(aggregateID) ?? Effect.void).pipe(
-          Effect.andThen(
-            db
+          Effect.andThen(() => {
+            const query = db
               .select()
               .from(EventTable)
               .where(and(eq(EventTable.aggregate_id, aggregateID), gt(EventTable.seq, after)))
               .orderBy(asc(EventTable.seq))
-              .all(),
-          ),
+            return (limit === undefined ? query : query.limit(limit)).all()
+          }),
           Effect.orDie,
           Effect.map((rows) =>
             rows.map((event) =>
@@ -662,6 +668,7 @@ export const layerWith = (options?: LayerOptions) =>
         subscribe,
         all: streamAll,
         aggregateEvents: streamEvents,
+        aggregateHistory: (input) => readAfter(input.aggregateID, input.after ?? -1, input.limit),
         sync,
         listen,
         beforeCommit,

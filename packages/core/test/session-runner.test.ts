@@ -575,7 +575,11 @@ describe("SessionRunnerLLM", () => {
             }),
         }),
       })
-      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Use application context" }), resume: false })
+      const prompt = yield* session.prompt({
+        sessionID,
+        prompt: new Prompt({ text: "Use application context" }),
+        resume: false,
+      })
       responses = [
         [
           LLMEvent.stepStart({ index: 0 }),
@@ -594,6 +598,7 @@ describe("SessionRunnerLLM", () => {
           sessionID,
           agent: AgentV2.ID.make("build"),
           assistantMessageID: expect.stringMatching(/^msg_/),
+          activityInputIDs: [prompt.id],
           toolCallID: "call-application",
         },
       ])
@@ -704,7 +709,7 @@ describe("SessionRunnerLLM", () => {
       yield* events.publish(SessionEvent.Moved, {
         sessionID,
         timestamp: DateTime.makeUnsafe(1),
-        location: { directory: AbsolutePath.make("/moved") },
+        location: Location.Ref.make({ directory: AbsolutePath.make("/moved") }),
       })
       expect(
         yield* db
@@ -762,7 +767,7 @@ describe("SessionRunnerLLM", () => {
           .publish(SessionEvent.Moved, {
             sessionID,
             timestamp: DateTime.makeUnsafe(1),
-            location: { directory: AbsolutePath.make("/moved") },
+            location: Location.Ref.make({ directory: AbsolutePath.make("/moved") }),
           })
           .pipe(Effect.asVoid)
       })

@@ -4,6 +4,7 @@ import { Prompt } from "@opencode-ai/core/session/prompt"
 import { SessionV2 } from "@opencode-ai/core/session"
 import { ProjectV2 } from "@opencode-ai/core/project"
 import { AbsolutePath, PositiveInt, RelativePath, withStatics } from "@opencode-ai/core/schema"
+import { EventV2 } from "@opencode-ai/core/event"
 import { WorkspaceV2 } from "@opencode-ai/core/workspace"
 import { Schema, Struct } from "effect"
 import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema, OpenApi } from "effect/unstable/httpapi"
@@ -43,6 +44,21 @@ const SessionsProjectQuery = Schema.Struct({
 })
 
 const SessionsAllQuery = Schema.Struct(SessionsQueryFields)
+
+const SessionEventHistoryQuery = Schema.Struct({
+  after: Schema.NumberFromString.pipe(Schema.decodeTo(EventV2.Cursor), Schema.optional),
+  limit: Schema.NumberFromString.pipe(Schema.decodeTo(PositiveInt), Schema.optional),
+})
+
+const SessionEventHistoryItem = Schema.Struct({
+  cursor: EventV2.Cursor,
+  event: Schema.Struct({
+    id: EventV2.ID,
+    type: Schema.String,
+    version: Schema.Number.pipe(Schema.optional),
+    data: Schema.Unknown,
+  }),
+})
 
 const withCursor = <Fields extends Schema.Struct.Fields>(schema: Schema.Struct<Fields>) =>
   schema.mapFields((fields) => ({
@@ -137,6 +153,22 @@ export const SessionGroup = HttpApiGroup.make("server.session")
           identifier: "v2.session.get",
           summary: "Get session",
           description: "Retrieve a session by ID.",
+        }),
+      ),
+  )
+  .add(
+    HttpApiEndpoint.get("session.events", "/api/session/:sessionID/event", {
+      params: { sessionID: SessionV2.ID },
+      query: SessionEventHistoryQuery,
+      success: Schema.Struct({ data: Schema.Array(SessionEventHistoryItem) }),
+      error: SessionNotFoundError,
+    })
+      .middleware(SessionLocationMiddleware)
+      .annotateMerge(
+        OpenApi.annotations({
+          identifier: "v2.session.events",
+          summary: "List durable session events",
+          description: "Read one finite page of durable session event history after an aggregate cursor.",
         }),
       ),
   )

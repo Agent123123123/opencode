@@ -437,6 +437,26 @@ describe("EventV2", () => {
     }),
   )
 
+  it.effect("reads a finite durable aggregate history page", () =>
+    Effect.gen(function* () {
+      const events = yield* EventV2.Service
+      const aggregateID = EventV2.ID.create()
+      yield* events.publish(SyncMessage, { id: aggregateID, text: "zero" })
+      yield* events.publish(SyncMessage, { id: aggregateID, text: "one" })
+      yield* events.publish(SyncMessage, { id: aggregateID, text: "two" })
+
+      const page = yield* events.aggregateHistory({
+        aggregateID,
+        after: EventV2.Cursor.make(0),
+        limit: 1,
+      })
+
+      expect(page.map((item) => [item.cursor, item.event.data])).toEqual([
+        [EventV2.Cursor.make(1), { id: aggregateID, text: "one" }],
+      ])
+    }),
+  )
+
   it.effect("catches durable aggregate events published during replay handoff", () =>
     Effect.gen(function* () {
       const events = yield* EventV2.Service

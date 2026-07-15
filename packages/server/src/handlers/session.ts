@@ -11,12 +11,14 @@ import {
   UnknownError,
 } from "../errors"
 import { AbsolutePath } from "@opencode-ai/core/schema"
+import { EventV2 } from "@opencode-ai/core/event"
 
 const DefaultSessionsLimit = 50
 
 export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handlers) =>
   Effect.gen(function* () {
     const session = yield* SessionV2.Service
+    const events = yield* EventV2.Service
 
     return handlers
       .handle(
@@ -89,6 +91,37 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
                   }),
               ),
             ),
+          }
+        }),
+      )
+      .handle(
+        "session.events",
+        Effect.fn(function* (ctx) {
+          yield* session.get(ctx.params.sessionID).pipe(
+            Effect.catchTag(
+              "Session.NotFoundError",
+              (error) =>
+                new SessionNotFoundError({
+                  sessionID: error.sessionID,
+                  message: `Session not found: ${error.sessionID}`,
+                }),
+            ),
+          )
+          const history = yield* events.aggregateHistory({
+            aggregateID: ctx.params.sessionID,
+            after: ctx.query.after,
+            limit: Math.min(ctx.query.limit ?? 200, 1000),
+          })
+          return {
+            data: history.map(({ cursor, event }) => ({
+              cursor,
+              event: {
+                id: event.id,
+                type: event.type,
+                version: event.version,
+                data: event.data,
+              },
+            })),
           }
         }),
       )

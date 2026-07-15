@@ -170,14 +170,13 @@ describe("SessionRunnerLLM recorded", () => {
       expect(messages[1]?.type === "assistant" ? messages[1].content : []).toMatchObject([
         { type: "text", text: "Hello!" },
       ])
-      expect(
-        (yield* db
-          .select({ type: EventTable.type })
+      const durableEvents = yield* db
+          .select({ type: EventTable.type, data: EventTable.data })
           .from(EventTable)
           .where(eq(EventTable.aggregate_id, sessionID))
           .orderBy(EventTable.seq)
-          .all()).map((event) => event.type),
-      ).toEqual([
+          .all()
+      expect(durableEvents.map((event) => event.type)).toEqual([
         "session.next.prompt.admitted.1",
         "session.next.prompt.promoted.1",
         "session.next.step.started.1",
@@ -185,6 +184,9 @@ describe("SessionRunnerLLM recorded", () => {
         "session.next.text.ended.1",
         "session.next.step.ended.2",
       ])
+      expect(durableEvents.find((event) => event.type === "session.next.step.started.1")?.data).toMatchObject({
+        activityInputIDs: [prompt.id],
+      })
     }),
   )
 })

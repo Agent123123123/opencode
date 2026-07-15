@@ -16,6 +16,7 @@ export type ExecuteInput = {
   readonly sessionID: SessionSchema.ID
   readonly agent: AgentV2.ID
   readonly assistantMessageID: SessionMessage.ID
+  readonly activityInputIDs?: ReadonlyArray<SessionMessage.ID>
   readonly call: ToolCall
 }
 
@@ -62,6 +63,7 @@ const registryLayer = Layer.effect(
         sessionID: input.sessionID,
         agent: input.agent,
         assistantMessageID: input.assistantMessageID,
+        activityInputIDs: input.activityInputIDs ?? [],
         toolCallID: input.call.id,
       }).pipe(
         Effect.map((output) => ({ output })),

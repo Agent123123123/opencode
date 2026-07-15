@@ -645,6 +645,13 @@ const scenarios: Scenario[] = [
   http.protected.get("/api/health", "v2.health.get").json(200, (body) => {
     object(body)
     check(body.healthy === true, "v2 server should report healthy")
+    object(body.capabilities)
+    check(body.capabilities.sessionCreateByID === true, "v2 server should advertise client-assigned session IDs")
+    check(body.capabilities.durableInputIdempotency === true, "v2 server should advertise durable input IDs")
+    check(body.capabilities.inputDeliveryQueue === true, "v2 server should advertise queued input delivery")
+    check(body.capabilities.sessionEventReplay === true, "v2 server should advertise finite event replay")
+    check(body.capabilities.toolExecutionIdentity === true, "v2 server should advertise generic tool identity")
+    check(!/motryx|lane|slot|fence|recovery/i.test(JSON.stringify(body.capabilities)), "v2 health should remain domain neutral")
   }),
   http.protected.get("/api/location", "v2.location.get").json(200, object),
   http.protected.get("/api/agent", "v2.agent.list").json(200, locationData(array)),
@@ -883,6 +890,13 @@ const scenarios: Scenario[] = [
       headers: ctx.headers(),
     }))
     .json(200, data(object)),
+  http.protected
+    .get("/api/session/{sessionID}/event", "v2.session.events")
+    .at((ctx) => ({
+      path: `${route("/api/session/{sessionID}/event", { sessionID: "ses_httpapi_missing" })}?after=0&limit=1`,
+      headers: ctx.headers(),
+    }))
+    .json(404, object, "status"),
   http.protected
     .get("/api/session/{sessionID}/context", "v2.session.context")
     .at((ctx) => ({

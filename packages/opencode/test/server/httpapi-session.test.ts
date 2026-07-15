@@ -614,6 +614,18 @@ describe("session HttpApi", () => {
           delivery: "steer",
           promoted_seq: null,
         })
+        const history = yield* requestJson<{
+          data: Array<{ cursor: number; event: { type: string; data: { messageID?: string } } }>
+        }>(`/api/session/${session.id}/event?limit=200`, { headers })
+        const admittedEvent = history.data.find((item) => item.event.type === "session.next.prompt.admitted")
+        expect(admittedEvent?.event.data.messageID).toBe("msg_http_prompt")
+        const cursor = history.data.at(-1)?.cursor
+        expect(cursor).toBeNumber()
+        const after = yield* requestJson<{ data: unknown[] }>(
+          `/api/session/${session.id}/event?after=${cursor}&limit=1`,
+          { headers },
+        )
+        expect(after.data).toEqual([])
         const conflict = yield* request(`/api/session/${session.id}/prompt`, {
           method: "POST",
           headers: { ...headers, "content-type": "application/json" },

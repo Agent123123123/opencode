@@ -10,6 +10,7 @@ export interface Context {
   readonly sessionID: SessionSchema.ID
   readonly agent: AgentV2.ID
   readonly assistantMessageID: SessionMessage.ID
+  readonly activityInputIDs?: ReadonlyArray<SessionMessage.ID>
   readonly toolCallID: string
 }
 
@@ -40,6 +41,8 @@ export type Content =
 type Config<Input extends SchemaType<any>, Output extends SchemaType<any>> = {
   readonly description: string
   readonly input: Input
+  /** Optional provider-facing schema for compatibility adapters whose runtime decoder is intentionally opaque. */
+  readonly inputJsonSchema?: JsonSchema.JsonSchema
   readonly output: Output
   readonly execute: (
     input: Schema.Schema.Type<Input>,
@@ -71,7 +74,7 @@ export function make<Input extends SchemaType<any>, Output extends SchemaType<an
       const definition = new ToolDefinition({
         name,
         description: config.description,
-        inputSchema: toJsonSchema(config.input),
+        inputSchema: config.inputJsonSchema ?? toJsonSchema(config.input),
         outputSchema: toJsonSchema(config.output),
       })
       definitions.set(name, definition)

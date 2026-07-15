@@ -264,7 +264,16 @@ export interface Hooks {
     output: { parts: Part[] },
   ) => Promise<void>
   "tool.execute.before"?: (
-    input: { tool: string; sessionID: string; callID: string },
+    input: {
+      tool: string
+      sessionID: string
+      callID: string
+      activityIdentity?: {
+        activityID: string
+        inputIDs: ReadonlyArray<string>
+        assistantMessageID: string
+      }
+    },
     output: { args: any },
   ) => Promise<void>
   "shell.env"?: (
@@ -272,7 +281,17 @@ export interface Hooks {
     output: { env: Record<string, string> },
   ) => Promise<void>
   "tool.execute.after"?: (
-    input: { tool: string; sessionID: string; callID: string; args: any },
+    input: {
+      tool: string
+      sessionID: string
+      callID: string
+      args: any
+      activityIdentity?: {
+        activityID: string
+        inputIDs: ReadonlyArray<string>
+        assistantMessageID: string
+      }
+    },
     output: {
       title: string
       output: string

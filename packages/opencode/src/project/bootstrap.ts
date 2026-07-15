@@ -10,6 +10,7 @@ import { ShareNext } from "@/share/share-next"
 import { Effect, Layer } from "effect"
 import { Config } from "@/config/config"
 import { Service } from "./bootstrap-service"
+import { V2PluginToolBridge } from "@/plugin/v2-tool-bridge"
 
 export { Service } from "./bootstrap-service"
 export type { Interface } from "./bootstrap-service"
@@ -24,6 +25,7 @@ export const layer = Layer.effect(
     const format = yield* Format.Service
     const lsp = yield* LSP.Service
     const plugin = yield* Plugin.Service
+    const pluginTools = yield* V2PluginToolBridge.Service
     const project = yield* Project.Service
     const shareNext = yield* ShareNext.Service
     const snapshot = yield* Snapshot.Service
@@ -36,6 +38,7 @@ export const layer = Layer.effect(
       yield* config.get()
       // Plugin can mutate config so it has to be initialized before anything else.
       yield* plugin.init()
+      yield* pluginTools.init()
       // Each service self-manages its own slow work via Effect.forkScoped against
       // its per-instance state scope. We just await materialization here.
       yield* Effect.forEach(
@@ -55,6 +58,7 @@ export const defaultLayer: Layer.Layer<Service> = layer.pipe(
     Format.defaultLayer,
     LSP.defaultLayer,
     Plugin.defaultLayer,
+    V2PluginToolBridge.defaultLayer,
     Project.defaultLayer,
     ShareNext.defaultLayer,
     Snapshot.defaultLayer,
@@ -67,6 +71,7 @@ export const node = LayerNode.make(layer, [
   Format.node,
   LSP.node,
   Plugin.node,
+  V2PluginToolBridge.node,
   Project.node,
   ShareNext.node,
   Snapshot.node,

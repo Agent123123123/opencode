@@ -179,6 +179,7 @@ export namespace Step {
     schema: {
       ...Base,
       assistantMessageID: SessionMessageID.ID,
+      activityInputIDs: SessionMessageID.ID.pipe(Schema.Array, Schema.optional),
       agent: Schema.String,
       model: ModelV2.Ref,
       snapshot: Schema.String.pipe(Schema.optional),

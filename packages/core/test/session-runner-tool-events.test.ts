@@ -27,6 +27,7 @@ const capture = () => {
     subscribe: () => Stream.empty,
     all: () => Stream.empty,
     aggregateEvents: () => Stream.empty,
+    aggregateHistory: () => Effect.succeed([]),
     sync: () => Effect.succeed(Effect.void),
     listen: () => Effect.succeed(Effect.void),
     beforeCommit: () => Effect.void,
@@ -45,6 +46,7 @@ const capture = () => {
         id: ModelV2.ID.make("model"),
         providerID: ProviderV2.ID.make("provider"),
       },
+      activityInputIDs: [SessionMessage.ID.make("msg_activity_input")],
     }),
   }
 }
@@ -73,6 +75,10 @@ test("local tool success serializes media base64 once and reconstructs from stru
   const { published, publisher } = capture()
   await Effect.runPromise(publisher.publish(call))
   await Effect.runPromise(publisher.publish(result))
+
+  expect(published.find((event) => event.type === "session.next.step.started.1")?.data).toMatchObject({
+    activityInputIDs: ["msg_activity_input"],
+  })
 
   const success = published.find((event) => event.type === "session.next.tool.success.1")
   expect(success).toBeDefined()

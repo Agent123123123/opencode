@@ -27,6 +27,7 @@ import { SessionCompaction } from "../compaction"
 import { SessionEvent } from "../event"
 import { SessionHistory } from "../history"
 import { SessionInput } from "../input"
+import { SessionMessage } from "../message"
 import { SessionSchema } from "../schema"
 import { SessionStore } from "../store"
 import { type RunError, Service, StepLimitExceededError } from "./index"
@@ -214,6 +215,7 @@ export const layer = Layer.effect(
       const model = yield* models.resolve(session)
       const entries = yield* SessionHistory.entriesForRunner(db, session.id, system.baselineSeq)
       const context = entries.map((entry) => entry.message)
+      const activityInputIDs = currentActivityInputIDs(context)
       const toolMaterialization = yield* tools.materialize(agent.info?.permissions)
       const promptCacheKey = /^ses_[0-9a-f]{64}$/.test(session.id) ? session.id.slice(4) : session.id
       const request = LLM.request({
@@ -235,6 +237,7 @@ export const layer = Layer.effect(
           providerID: ProviderV2.ID.make(model.provider),
           ...(session.model?.variant === undefined ? {} : { variant: session.model.variant }),
         },
+        activityInputIDs,
       })
       const withPublication = Semaphore.makeUnsafe(1).withPermit
       const publish = (event: LLMEvent, outputPaths: ReadonlyArray<string> = []) =>
@@ -262,6 +265,7 @@ export const layer = Layer.effect(
                   sessionID: session.id,
                   agent: agent.id,
                   assistantMessageID,
+                  activityInputIDs,
                   call: event,
                 }),
               ).pipe(
@@ -402,3 +406,22 @@ export const layer = Layer.effect(
 )
 
 export const defaultLayer = layer
+
+/** Input messages that opened the current activity, independent of later tool-continuation steps. */
+const currentActivityInputIDs = (messages: ReadonlyArray<SessionMessage.Message>) => {
+  let latestUser = -1
+  for (let index = messages.length - 1; index >= 0; index--) {
+    if (messages[index]?.type === "user") {
+      latestUser = index
+      break
+    }
+  }
+  if (latestUser < 0) return []
+  const inputIDs: SessionMessage.ID[] = []
+  for (let index = latestUser; index >= 0; index--) {
+    const message = messages[index]!
+    if (message.type === "assistant") break
+    if (message.type === "user") inputIDs.unshift(message.id)
+  }
+  return inputIDs
+}
