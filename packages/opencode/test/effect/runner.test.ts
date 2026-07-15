@@ -476,6 +476,56 @@ describe("Runner", () => {
     }),
   )
 
+  it.live(
+    "onBusy observes the committed shell state",
+    Effect.gen(function* () {
+      const s = yield* Scope.Scope
+      let observed: Runner.State<string, never>["_tag"] | undefined
+      let runner!: Runner.Runner<string>
+      runner = Runner.make<string>(s, {
+        onBusy: Effect.sync(() => {
+          observed = runner.state._tag
+        }),
+      })
+
+      yield* runner.startShell(Effect.succeed("done"))
+      expect(observed).toBe("Shell")
+    }),
+  )
+
+  it.live(
+    "onBusy can cancel the committed shell without deadlocking",
+    Effect.gen(function* () {
+      const s = yield* Scope.Scope
+      let runner!: Runner.Runner<string>
+      runner = Runner.make<string>(s, {
+        onBusy: Effect.suspend(() => runner.cancel),
+      })
+
+      const exit = yield* runner
+        .startShell(Effect.never.pipe(Effect.as("unreachable")))
+        .pipe(Effect.exit, Effect.timeout("1 second"))
+      expect(Exit.isFailure(exit)).toBe(true)
+      expect(runner.state._tag).toBe("Idle")
+    }),
+  )
+
+  it.live(
+    "short shell publishes busy before idle",
+    Effect.gen(function* () {
+      const s = yield* Scope.Scope
+      const events: string[] = []
+      const runner = Runner.make<string>(s, {
+        onBusy: Effect.sync(() => events.push("busy")),
+        onIdle: Effect.sync(() => events.push("idle")),
+      })
+
+      yield* runner.startShell(Effect.succeed("done"))
+      expect(events).toEqual(["busy", "idle"])
+      expect(runner.state._tag).toBe("Idle")
+    }),
+  )
+
   // --- busy flag ---
 
   it.live(
