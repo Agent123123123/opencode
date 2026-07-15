@@ -276,6 +276,60 @@ describe("cross-spawn spawner", () => {
     )
 
     fx.effect(
+      "resolves kill on process exit when a detached descendant keeps stdio open",
+      Effect.gen(function* () {
+        if (process.platform === "win32") return
+
+        const tmp = yield* Effect.acquireRelease(
+          Effect.promise(() => tmpdir()),
+          (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+        )
+        const pidFile = path.join(tmp.path, "descendant.pid")
+        let descendant = 0
+        const cleanup = Effect.sync(() => {
+          if (!descendant) return
+          try {
+            process.kill(-descendant, "SIGKILL")
+          } catch {
+            try {
+              process.kill(descendant, "SIGKILL")
+            } catch {}
+          }
+        })
+
+        yield* Effect.gen(function* () {
+          const childCode = "setInterval(() => {}, 10000)"
+          const script = [
+            'const { spawn } = require("node:child_process")',
+            `const child = spawn(process.execPath, ["-e", ${JSON.stringify(childCode)}], { detached: true, stdio: ["ignore", "inherit", "inherit"] })`,
+            `require("node:fs").writeFileSync(${JSON.stringify(pidFile)}, String(child.pid))`,
+            "child.unref()",
+            "setInterval(() => {}, 10000)",
+          ].join(";")
+          const handle = yield* js(script)
+          descendant = yield* Effect.promise(async () => {
+            const until = Date.now() + 2_000
+            while (Date.now() < until) {
+              try {
+                return Number(await fs.readFile(pidFile, "utf8"))
+              } catch {
+                await new Promise((resolve) => setTimeout(resolve, 10))
+              }
+            }
+            throw new Error("detached descendant did not start")
+          })
+
+          const started = Date.now()
+          yield* handle.kill({ forceKillAfter: 100 }).pipe(Effect.timeout("1 second"))
+          expect(Date.now() - started).toBeLessThan(1_000)
+          expect(yield* handle.isRunning).toBe(false)
+          expect(alive(descendant)).toBe(true)
+        }).pipe(Effect.ensuring(cleanup))
+      }),
+      5_000,
+    )
+
+    fx.effect(
       "isRunning reflects process state",
       Effect.gen(function* () {
         const handle = yield* js('process.stdout.write("done")')

@@ -270,16 +270,22 @@ export const make = Effect.gen(function* () {
       const proc = launch(command.command, command.args, opts)
       let end = false
       let exit: readonly [code: number | null, signal: NodeJS.Signals | null] | undefined
+      const complete = (value: readonly [code: number | null, signal: NodeJS.Signals | null]) => {
+        if (end) return
+        end = true
+        Deferred.doneUnsafe(signal, Exit.succeed(value))
+      }
       proc.on("error", (err) => {
         resume(Effect.fail(toPlatformError("spawn", err, command)))
       })
       proc.on("exit", (...args) => {
         exit = args
+        // Process lifecycle follows `exit`. `close` may be delayed forever by
+        // inherited stdio held by descendants and cannot gate cancellation.
+        complete(args)
       })
       proc.on("close", (...args) => {
-        if (end) return
-        end = true
-        Deferred.doneUnsafe(signal, Exit.succeed(exit ?? args))
+        complete(exit ?? args)
       })
       proc.on("spawn", () => {
         resume(Effect.succeed([proc, signal]))
@@ -395,7 +401,15 @@ export const make = Effect.gen(function* () {
               const escalated = command.options.forceKillAfter
                 ? Effect.timeoutOrElse(attempt, {
                     duration: command.options.forceKillAfter,
-                    orElse: () => send("SIGKILL").pipe(Effect.andThen(Deferred.await(signal)), Effect.asVoid),
+                    orElse: () =>
+                      send("SIGKILL").pipe(
+                        Effect.andThen(Deferred.await(signal)),
+                        Effect.asVoid,
+                        Effect.timeoutOrElse({
+                          duration: command.options.forceKillAfter!,
+                          orElse: () => Effect.void,
+                        }),
+                      ),
                   })
                 : attempt
               return yield* Effect.ignore(escalated)
@@ -432,7 +446,12 @@ export const make = Effect.gen(function* () {
               if (!opts?.forceKillAfter) return attempt
               return Effect.timeoutOrElse(attempt, {
                 duration: opts.forceKillAfter,
-                orElse: () => send("SIGKILL").pipe(Effect.andThen(Deferred.await(signal)), Effect.asVoid),
+                orElse: () =>
+                  send("SIGKILL").pipe(
+                    Effect.andThen(Deferred.await(signal)),
+                    Effect.asVoid,
+                    Effect.timeoutOrElse({ duration: opts.forceKillAfter!, orElse: () => Effect.void }),
+                  ),
               })
             },
             unref: Effect.sync(() => {
