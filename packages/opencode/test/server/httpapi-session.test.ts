@@ -35,7 +35,7 @@ import { resetDatabase } from "../fixture/db"
 import { disposeAllInstances, provideInstanceEffect, TestInstance, tmpdirScoped } from "../fixture/fixture"
 import { TestLLMServer } from "../lib/llm-server"
 import { testProviderConfig } from "../lib/test-provider"
-import { testEffect } from "../lib/effect"
+import { pollWithTimeout, testEffect } from "../lib/effect"
 
 const originalWorkspaces = Flag.OPENCODE_EXPERIMENTAL_WORKSPACES
 const workspaceLayer = Workspace.defaultLayer.pipe(
@@ -582,7 +582,7 @@ describe("session HttpApi", () => {
           request(`/api/session/${session.id}/prompt`, {
             method: "POST",
             headers: { ...headers, "content-type": "application/json" },
-            body: JSON.stringify({ id: "msg_http_prompt", prompt: { text: "hello" } }),
+            body: JSON.stringify({ id: "msg_http_prompt", prompt: { text: "hello" }, resume: false }),
           })
         const first = yield* recordPrompt()
         const retried = yield* recordPrompt()
@@ -629,7 +629,7 @@ describe("session HttpApi", () => {
         const conflict = yield* request(`/api/session/${session.id}/prompt`, {
           method: "POST",
           headers: { ...headers, "content-type": "application/json" },
-          body: JSON.stringify({ id: "msg_http_prompt", prompt: { text: "goodbye" } }),
+          body: JSON.stringify({ id: "msg_http_prompt", prompt: { text: "goodbye" }, resume: false }),
         })
         expect(conflict.status).toBe(409)
         expect(yield* responseJson(conflict)).toEqual({
@@ -639,6 +639,79 @@ describe("session HttpApi", () => {
         })
       }),
     { git: true, config: { formatter: false, lsp: false } },
+  )
+
+  it.live("executes a v2 HTTP prompt through the production session wiring", () =>
+    Effect.gen(function* () {
+      const llm = yield* TestLLMServer
+      yield* llm.textMatch(
+        (hit) => JSON.stringify(hit.body).includes("analyst task"),
+        "analyst accepted",
+        { usage: { input: 3, output: 2 } },
+      )
+      const directory = yield* tmpdirScoped({ git: true, config: testProviderConfig(llm.url) })
+      const headers = { "x-opencode-directory": directory, "content-type": "application/json" }
+      const created = yield* requestJson<{ data: { id: string } }>("/api/session", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          agent: "build",
+          model: { id: "test-model", providerID: "test" },
+          location: { directory },
+        }),
+      })
+      const messageID = "msg_http_execution"
+      const submitted = yield* request(`/api/session/${created.data.id}/prompt`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ id: messageID, prompt: { text: "analyst task" }, delivery: "steer" }),
+      })
+      expect(submitted.status).toBe(200)
+      expect(yield* responseJson(submitted)).toMatchObject({
+        data: { id: messageID, sessionID: created.data.id, delivery: "steer" },
+      })
+
+      const admitted = yield* pollWithTimeout(
+        Database.Service.use(({ db }) =>
+          db
+            .select()
+            .from(SessionInputTable)
+            .where(eq(SessionInputTable.id, SessionMessage.ID.make(messageID)))
+            .get()
+            .pipe(Effect.orDie, Effect.map((row) => (row?.promoted_seq === null ? undefined : row))),
+        ),
+        "v2 HTTP prompt was admitted but not promoted",
+      )
+      expect(admitted.promoted_seq).toBeNumber()
+      const messages = yield* pollWithTimeout(
+        requestJson<{ data: SessionMessage.Message[] }>(`/api/session/${created.data.id}/message?order=asc`, {
+          headers,
+        }).pipe(Effect.map((response) => (response.data.length >= 2 ? response.data : undefined))),
+        "v2 HTTP prompt was admitted but did not finish execution",
+      )
+      expect(messages).toMatchObject([
+        { id: messageID, type: "user", text: "analyst task" },
+        { type: "assistant", content: [{ type: "text", text: "analyst accepted" }] },
+      ])
+
+      const inputs = yield* llm.inputs
+      expect(inputs.some((input) => input.model === "test-model" && JSON.stringify(input).includes("analyst task"))).toBe(
+        true,
+      )
+
+      const history = yield* requestJson<{ data: Array<{ event: { type: string } }> }>(
+        `/api/session/${created.data.id}/event?limit=200`,
+        { headers },
+      )
+      expect(history.data.map((item) => item.event.type)).toEqual(
+        expect.arrayContaining([
+          "session.next.prompt.admitted",
+          "session.next.prompt.promoted",
+          "session.next.step.started",
+          "session.next.step.ended",
+        ]),
+      )
+    }).pipe(Effect.provide(TestLLMServer.layer), Effect.provide(CrossSpawnSpawner.defaultLayer)),
   )
 
   it.instance(

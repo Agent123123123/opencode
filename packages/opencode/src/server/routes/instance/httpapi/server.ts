@@ -47,6 +47,7 @@ import { Todo } from "@/session/todo"
 import { SessionShare } from "@/share/session"
 import { ShareNext } from "@/share/share-next"
 import { EventV2Bridge } from "@/event-v2-bridge"
+import { Git } from "@opencode-ai/core/git"
 import { EventV2 } from "@opencode-ai/core/event"
 import { Database } from "@opencode-ai/core/database/database"
 import { Skill } from "@/skill"
@@ -88,7 +89,7 @@ import { questionHandlers } from "./handlers/question"
 import { sessionHandlers } from "./handlers/session"
 import { syncHandlers } from "./handlers/sync"
 import { tuiHandlers } from "./handlers/tui"
-import { handlers } from "@opencode-ai/server/handlers"
+import { handlers, liveSessions } from "@opencode-ai/server/handlers"
 import { schemaErrorLayer as v2SchemaErrorLayer } from "@opencode-ai/server/middleware/schema-error"
 import { workspaceHandlers } from "./handlers/workspace"
 import { instanceContextLayer } from "./middleware/instance-context"
@@ -163,6 +164,12 @@ const serverRoutes = HttpApiBuilder.layer(Api).pipe(
   Layer.provide(handlers),
   Layer.provide([serverHttpApiAuthLayer, v2SchemaErrorLayer]),
 )
+const moveSessionLayer = MoveSession.layer.pipe(
+  Layer.provide(Git.defaultLayer),
+  Layer.provide(EventV2.defaultLayer),
+  Layer.provide(ProjectV2.defaultLayer),
+  Layer.provide(liveSessions),
+)
 
 // `OpenApi.fromApi` is non-trivial; defer until /doc is actually hit so
 // processes that never serve it (CLI, scripts) don't pay at module load.
@@ -229,7 +236,7 @@ export function createRoutes(
       Project.defaultLayer,
       ProjectV2.defaultLayer,
       ProjectCopy.defaultLayer,
-      MoveSession.defaultLayer,
+      moveSessionLayer,
       ProviderAuth.defaultLayer,
       Provider.defaultLayer,
       PtyTicket.defaultLayer,
