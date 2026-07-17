@@ -72,7 +72,7 @@ export const layer = Layer.effectDiscard(
 
     yield* registry.register({
       key,
-      load: observe().pipe(
+      load: () => observe().pipe(
         Effect.map((files) =>
           files === SystemContext.unavailable
             ? source(files)

@@ -1,6 +1,6 @@
 export * as PermissionV2 from "./permission"
 
-import { Context, Deferred, Effect as EffectRuntime, Layer, Schema } from "effect"
+import { Context, DateTime, Deferred, Effect as EffectRuntime, Layer, Schema } from "effect"
 import { EventV2 } from "./event"
 import { Location } from "./location"
 import { AgentV2 } from "./agent"
@@ -11,6 +11,8 @@ import { Identifier } from "./util/identifier"
 import { Wildcard } from "./util/wildcard"
 import { PermissionSchema } from "./permission/schema"
 import { PermissionSaved } from "./permission/saved"
+import { SessionEvent } from "./session/event"
+import { SessionMessage } from "./session/message"
 
 export { Effect, Rule, Ruleset } from "./permission/schema"
 type Effect = PermissionSchema.Effect
@@ -35,11 +37,14 @@ export type Source = typeof Source.Type
 
 const RequestFields = {
   sessionID: SessionV2.ID,
+  turnID: SessionMessage.ID,
+  assistantMessageID: SessionMessage.ID,
+  activityInputIDs: Schema.Array(SessionMessage.ID),
   action: Schema.String,
   resources: Schema.Array(Schema.String),
   save: Schema.Array(Schema.String).pipe(Schema.optional),
   metadata: Schema.Record(Schema.String, Schema.Unknown).pipe(Schema.optional),
-  source: Source.pipe(Schema.optional),
+  source: Source,
 }
 
 export const Request = Schema.Struct({
@@ -71,17 +76,7 @@ export const AskResult = Schema.Struct({
 }).annotate({ identifier: "PermissionV2.AskResult" })
 export type AskResult = typeof AskResult.Type
 
-export const Event = {
-  Asked: EventV2.define({ type: "permission.v2.asked", schema: Request.fields }),
-  Replied: EventV2.define({
-    type: "permission.v2.replied",
-    schema: {
-      sessionID: SessionV2.ID,
-      requestID: ID,
-      reply: Reply,
-    },
-  }),
-}
+export const Event = SessionEvent.Permission
 
 export class RejectedError extends Schema.TaggedErrorClass<RejectedError>()("PermissionV2.RejectedError", {}) {}
 
@@ -187,10 +182,19 @@ export const layer = Layer.effect(
       return { effect, rules: all }
     })
 
+    const hiddenAgent = EffectRuntime.fnUntraced(function* (input: AssertInput) {
+      const session = yield* sessions.get(input.sessionID)
+      if (!session) return yield* new SessionV2.NotFoundError({ sessionID: input.sessionID })
+      return (yield* agents.resolve(input.agent ?? session.agent))?.hidden === true
+    })
+
     function request(input: AssertInput): Request {
       return {
         id: input.id ?? ID.create(),
         sessionID: input.sessionID,
+        turnID: input.turnID,
+        assistantMessageID: input.assistantMessageID,
+        activityInputIDs: input.activityInputIDs,
         action: input.action,
         resources: input.resources,
         save: input.save,
@@ -207,7 +211,7 @@ export const layer = Layer.effect(
           if (pending.has(request.id)) return yield* EffectRuntime.die(`Duplicate pending permission ID: ${request.id}`)
           pending.set(request.id, item)
           yield* events
-            .publish(Event.Asked, request)
+            .publish(Event.Asked, { ...request, timestamp: yield* DateTime.now })
             .pipe(EffectRuntime.onError(() => EffectRuntime.sync(() => pending.delete(request.id))))
           return item
         }),
@@ -216,8 +220,9 @@ export const layer = Layer.effect(
     const ask = EffectRuntime.fn("PermissionV2.ask")(function* (input: AssertInput) {
       const result = yield* evaluateInput(input)
       const value = request(input)
-      if (result.effect === "ask") yield* create(value, input.agent)
-      return { id: value.id, effect: result.effect }
+      const effect = result.effect === "ask" && (yield* hiddenAgent(input)) ? "deny" : result.effect
+      if (effect === "ask") yield* create(value, input.agent)
+      return { id: value.id, effect }
     })
 
     const assert = EffectRuntime.fn("PermissionV2.assert")((input: AssertInput) =>
@@ -230,6 +235,9 @@ export const layer = Layer.effect(
             })
           }
           if (result.effect === "allow") return
+          if (yield* hiddenAgent(input)) {
+            return yield* new DeniedError({ rules: relevant(input, result.rules) })
+          }
           const item = yield* create(request(input), input.agent)
           return yield* restore(Deferred.await(item.deferred)).pipe(
             EffectRuntime.ensuring(
@@ -249,6 +257,10 @@ export const layer = Layer.effect(
           if (!existing) return yield* new NotFoundError({ requestID: input.requestID })
           yield* events.publish(Event.Replied, {
             sessionID: existing.request.sessionID,
+            turnID: existing.request.turnID,
+            assistantMessageID: existing.request.assistantMessageID,
+            activityInputIDs: existing.request.activityInputIDs,
+            timestamp: yield* DateTime.now,
             requestID: existing.request.id,
             reply: input.reply,
           })
@@ -263,6 +275,10 @@ export const layer = Layer.effect(
               if (item.request.sessionID !== existing.request.sessionID) continue
               yield* events.publish(Event.Replied, {
                 sessionID: item.request.sessionID,
+                turnID: item.request.turnID,
+                assistantMessageID: item.request.assistantMessageID,
+                activityInputIDs: item.request.activityInputIDs,
+                timestamp: yield* DateTime.now,
                 requestID: item.request.id,
                 reply: "reject",
               })
@@ -300,6 +316,10 @@ export const layer = Layer.effect(
               continue
             yield* events.publish(Event.Replied, {
               sessionID: item.request.sessionID,
+              turnID: item.request.turnID,
+              assistantMessageID: item.request.assistantMessageID,
+              activityInputIDs: item.request.activityInputIDs,
+              timestamp: yield* DateTime.now,
               requestID: item.request.id,
               reply: "always",
             })

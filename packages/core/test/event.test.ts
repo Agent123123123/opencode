@@ -71,6 +71,24 @@ const VersionedMessage = EventV2.define({
   },
 })
 
+const HistoricalMessageV1 = EventV2.define({
+  type: "test.historical",
+  sync: { version: 1, aggregate: "id" },
+  schema: {
+    id: Schema.String,
+    legacyText: Schema.String,
+  },
+})
+
+const HistoricalMessage = EventV2.define({
+  type: "test.historical",
+  sync: { version: 2, aggregate: "id" },
+  schema: {
+    id: Schema.String,
+    text: Schema.String,
+  },
+})
+
 const SyncTimestamp = EventV2.define({
   type: "test.timestamp",
   sync: {
@@ -156,6 +174,29 @@ describe("EventV2", () => {
       })
 
       expect(EventV2.registry.get("test.out-of-order")).toBe(latest)
+    }),
+  )
+
+  it.effect("replays historical sync versions with their registered codec", () =>
+    Effect.gen(function* () {
+      const events = yield* EventV2.Service
+      const aggregateID = "historical-one"
+      yield* events.replay({
+        id: EventV2.ID.create(),
+        type: EventV2.versionedType(HistoricalMessageV1.type, 1),
+        seq: 0,
+        aggregateID,
+        data: { id: aggregateID, legacyText: "legacy" },
+      })
+
+      const history = yield* events.aggregateHistory({ aggregateID })
+      expect(EventV2.registry.get(HistoricalMessage.type)).toBe(HistoricalMessage)
+      expect(history).toHaveLength(1)
+      expect(history[0]?.event).toMatchObject({
+        type: HistoricalMessageV1.type,
+        version: 1,
+        data: { id: aggregateID, legacyText: "legacy" },
+      })
     }),
   )
 

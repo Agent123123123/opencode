@@ -33,6 +33,7 @@ import { Vcs } from "@/project/vcs"
 import { InstanceStore } from "@/project/instance-store"
 import { InstanceBootstrap } from "@/project/bootstrap"
 import { WorkspaceAdapterRuntime } from "./workspace-adapter-runtime"
+import { LocationServiceMapLive } from "@opencode-ai/core/location-layer"
 
 export const Info = Schema.Struct({
   ...WorkspaceInfoSchema.fields,
@@ -901,10 +902,10 @@ export const layer = Layer.effect(
   }),
 )
 
-export const defaultLayer = layer.pipe(
+export const sharedDefaultLayer = layer.pipe(
   Layer.provide(Auth.defaultLayer),
   Layer.provide(Session.defaultLayer),
-  Layer.provide(SessionPrompt.defaultLayer),
+  Layer.provide(SessionPrompt.sharedDefaultLayer),
   Layer.provide(Project.defaultLayer),
   Layer.provide(Vcs.defaultLayer),
   Layer.provide(FSUtil.defaultLayer),
@@ -913,6 +914,8 @@ export const defaultLayer = layer.pipe(
   Layer.provide(FetchHttpClient.layer),
   Layer.provide(RuntimeFlags.defaultLayer),
 )
+
+export const defaultLayer = sharedDefaultLayer.pipe(Layer.provide(LocationServiceMapLive))
 
 const TIMEOUT = 5000
 

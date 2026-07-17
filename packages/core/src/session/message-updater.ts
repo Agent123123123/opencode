@@ -139,6 +139,10 @@ export function update(adapter: Adapter, event: SessionEvent.Event) {
       "session.next.prompt.admitted": () => Effect.void,
       "session.next.prompt.promoted": () => Effect.void,
       "session.next.interrupt.requested": () => Effect.void,
+      "session.turn.started": () => Effect.void,
+      "session.turn.settled": () => Effect.void,
+      "permission.v2.asked": () => Effect.void,
+      "permission.v2.replied": () => Effect.void,
       "session.next.context.updated": (event) =>
         adapter.appendMessage(
           new SessionMessage.System({

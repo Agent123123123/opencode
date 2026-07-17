@@ -64,14 +64,11 @@ export const layer = Layer.effectDiscard(
               const resource = path.relative(root, real).replaceAll("\\", "/") || "."
               const target = AbsolutePath.make(real)
               const type = yield* reader.inspect(target)
-              yield* permission.assert({
+              yield* permission.assert(Tool.permissionRequest(context, {
                 action: name,
                 resources: [resource],
                 save: ["*"],
-                sessionID: context.sessionID,
-                agent: context.agent,
-                source: { type: "tool", messageID: context.assistantMessageID, callID: context.toolCallID },
-              })
+              }))
               if (type === "directory") return yield* reader.list(target, { offset: input.offset, limit: input.limit })
               const content = yield* reader.read(target, resource, {
                 offset: input.offset,

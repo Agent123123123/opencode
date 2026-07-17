@@ -33,6 +33,8 @@ class SessionModelValidation extends Context.Service<
 >()("@opencode/public/OpenCode/SessionModelValidation") {}
 
 const ApplicationToolsLayer = ApplicationTools.layer
+// The public embedding surface is its own composition root. It must not join
+// the server process singleton used by AppRuntime and HTTP routing.
 const LocationServicesLayer = LocationServiceMap.layer.pipe(Layer.provide(ApplicationToolsLayer))
 const SessionModelValidationLayer = Layer.effect(
   SessionModelValidation,

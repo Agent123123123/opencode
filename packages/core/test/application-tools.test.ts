@@ -9,6 +9,7 @@ import { ToolRegistry } from "@opencode-ai/core/tool/registry"
 import { executeTool, settleTool, toolDefinitions } from "./lib/tool"
 import { ToolOutputStore } from "@opencode-ai/core/tool-output-store"
 import { Tools } from "@opencode-ai/core/tool/tools"
+import { ToolExecutionPolicy } from "@opencode-ai/core/tool/execution-policy"
 import { Deferred, Effect, Exit, Fiber, Layer, Schema, Scope } from "effect"
 import { testEffect } from "./lib/effect"
 
@@ -20,12 +21,15 @@ const registry = ToolRegistry.layer.pipe(
   Layer.provide(permission),
   Layer.provide(applications),
   Layer.provide(ToolOutputStore.defaultLayer),
+  Layer.provide(ToolExecutionPolicy.emptyLayer),
 )
 const it = testEffect(Layer.mergeAll(applications, registry))
 
 const sessionID = SessionV2.ID.make("ses_application_tool")
 const agent = AgentV2.ID.make("build")
+const turnID = SessionMessage.ID.make("msg_turn_application_tool")
 const assistantMessageID = SessionMessage.ID.make("msg_application_tool")
+const activityInputIDs = [SessionMessage.ID.make("msg_input_application_tool")]
 const contextual = (contexts: Tool.Context[]) =>
   Tool.make({
     description: "Read application context",
@@ -56,7 +60,9 @@ describe("ApplicationTools", () => {
         yield* executeTool(registry, {
           sessionID,
           agent,
+          turnID,
           assistantMessageID,
+          activityInputIDs,
           call: { type: "tool-call", id: "call-opaque", name: "opaque", input: { query: "once" } },
         }),
       ).toEqual({
@@ -66,7 +72,7 @@ describe("ApplicationTools", () => {
           { type: "file", uri: "data:image/png;base64,aGVsbG8=", mime: "image/png", name: "result.png" },
         ],
       })
-      expect(contexts).toEqual([{ sessionID, agent, assistantMessageID, toolCallID: "call-opaque" }])
+      expect(contexts).toEqual([{ sessionID, agent, turnID, assistantMessageID, activityInputIDs, toolCallID: "call-opaque" }])
     }),
   )
 
@@ -101,11 +107,13 @@ describe("ApplicationTools", () => {
         yield* settleTool(registry, {
           sessionID,
           agent,
+          turnID,
           assistantMessageID,
+          activityInputIDs,
           call: { type: "tool-call", id: "call-denied", name: "application_context", input: { query: "hello" } },
         }),
       ).toMatchObject({ result: { type: "content" } })
-      expect(contexts).toEqual([{ sessionID, agent, assistantMessageID, toolCallID: "call-denied" }])
+      expect(contexts).toEqual([{ sessionID, agent, turnID, assistantMessageID, activityInputIDs, toolCallID: "call-denied" }])
     }),
   )
 
@@ -124,7 +132,9 @@ describe("ApplicationTools", () => {
         yield* settleTool(registry, {
           sessionID,
           agent,
+          turnID,
           assistantMessageID,
+          activityInputIDs,
           call: { type: "tool-call", id: "call-context", name: "application_context", input: { query: "hello" } },
         }),
       ).toEqual({
@@ -143,7 +153,7 @@ describe("ApplicationTools", () => {
           ],
         },
       })
-      expect(contexts).toEqual([{ sessionID, agent, assistantMessageID, toolCallID: "call-context" }])
+      expect(contexts).toEqual([{ sessionID, agent, turnID, assistantMessageID, activityInputIDs, toolCallID: "call-context" }])
     }),
   )
 
@@ -174,7 +184,9 @@ describe("ApplicationTools", () => {
         yield* settleTool(registry, {
           sessionID,
           agent,
+          turnID,
           assistantMessageID,
+          activityInputIDs,
           call: { type: "tool-call", id: "call-removed", name: "contextual", input: { query: "hello" } },
         }),
       ).toEqual({ result: { type: "error", value: "Unknown tool: contextual" } })
@@ -245,19 +257,23 @@ describe("ApplicationTools", () => {
       yield* settleTool(registry, {
         sessionID,
         agent,
+        turnID,
         assistantMessageID,
+        activityInputIDs,
         call: { type: "tool-call", id: "call-second", name: "contextual", input: { query: "second" } },
       })
       yield* Scope.close(scope, Exit.void)
       yield* settleTool(registry, {
         sessionID,
         agent,
+        turnID,
         assistantMessageID,
+        activityInputIDs,
         call: { type: "tool-call", id: "call-first", name: "contextual", input: { query: "first" } },
       })
 
-      expect(secondContexts).toEqual([{ sessionID, agent, assistantMessageID, toolCallID: "call-second" }])
-      expect(firstContexts).toEqual([{ sessionID, agent, assistantMessageID, toolCallID: "call-first" }])
+      expect(secondContexts).toEqual([{ sessionID, agent, turnID, assistantMessageID, activityInputIDs, toolCallID: "call-second" }])
+      expect(firstContexts).toEqual([{ sessionID, agent, turnID, assistantMessageID, activityInputIDs, toolCallID: "call-first" }])
     }),
   )
 
@@ -280,11 +296,13 @@ describe("ApplicationTools", () => {
         yield* settleTool(registry, {
           sessionID,
           agent,
+          turnID,
           assistantMessageID,
+          activityInputIDs,
           call: { type: "tool-call", id: "call-shared", name: "shared", input: { query: "location" } },
         }),
       ).toMatchObject({ result: { type: "content" } })
-      expect(locationContexts).toEqual([{ sessionID, agent, assistantMessageID, toolCallID: "call-shared" }])
+      expect(locationContexts).toEqual([{ sessionID, agent, turnID, assistantMessageID, activityInputIDs, toolCallID: "call-shared" }])
       expect(applicationContexts).toEqual([])
     }),
   )

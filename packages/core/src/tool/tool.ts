@@ -3,15 +3,36 @@ export * as Tool from "./tool"
 import { ToolDefinition, ToolFailure, ToolOutput, type ToolCall } from "@opencode-ai/llm"
 import { Effect, JsonSchema, Schema } from "effect"
 import type { AgentV2 } from "../agent"
+import type { PermissionV2 } from "../permission"
 import type { SessionMessage } from "../session/message"
 import type { SessionSchema } from "../session/schema"
+import type { ToolExecutionPolicy } from "./execution-policy"
 
 export interface Context {
   readonly sessionID: SessionSchema.ID
   readonly agent: AgentV2.ID
+  readonly turnID: SessionMessage.ID
   readonly assistantMessageID: SessionMessage.ID
-  readonly activityInputIDs?: ReadonlyArray<SessionMessage.ID>
+  readonly activityInputIDs: ReadonlyArray<SessionMessage.ID>
   readonly toolCallID: string
+}
+
+type PermissionRequestInput = Omit<
+  PermissionV2.AssertInput,
+  "sessionID" | "agent" | "turnID" | "assistantMessageID" | "activityInputIDs" | "source"
+>
+
+/** Build a permission request with the exact activity identity owned by the tool runner. */
+export function permissionRequest(context: Context, input: PermissionRequestInput): PermissionV2.AssertInput {
+  return {
+    ...input,
+    sessionID: context.sessionID,
+    agent: context.agent,
+    turnID: context.turnID,
+    assistantMessageID: context.assistantMessageID,
+    activityInputIDs: [...context.activityInputIDs],
+    source: { type: "tool", messageID: context.assistantMessageID, callID: context.toolCallID },
+  }
 }
 
 export type SchemaType<A> = Schema.Codec<A, any, never, never>
@@ -57,7 +78,12 @@ type Config<Input extends SchemaType<any>, Output extends SchemaType<any>> = {
 type Runtime = {
   readonly permission?: string
   readonly definition: (name: string) => ToolDefinition
-  readonly settle: (call: ToolCall, context: Context) => Effect.Effect<ToolOutput, ToolFailure>
+  readonly settle: (
+    call: ToolCall,
+    context: Context,
+    name: string,
+    policies: ToolExecutionPolicy.Interface,
+  ) => Effect.Effect<ToolOutput, ToolFailure>
 }
 
 const runtimes = new WeakMap<AnyTool, Runtime>()
@@ -80,11 +106,23 @@ export function make<Input extends SchemaType<any>, Output extends SchemaType<an
       definitions.set(name, definition)
       return definition
     },
-    settle: (call, context) =>
+    settle: (call, context, name, policies) =>
       Schema.decodeUnknownEffect(config.input)(call.input).pipe(
         Effect.mapError((error) => new ToolFailure({ message: `Invalid tool input: ${error.message}` })),
         Effect.flatMap((input) =>
-          config.execute(input, context).pipe(
+          policies.execute(
+            {
+              sessionID: context.sessionID,
+              agent: context.agent,
+              turnID: context.turnID,
+              assistantMessageID: context.assistantMessageID,
+              activityInputIDs: context.activityInputIDs,
+              toolCallID: context.toolCallID,
+              toolName: name,
+              validatedInput: input,
+            },
+            (policyInput) => config.execute(policyInput as Schema.Schema.Type<Input>, context),
+          ).pipe(
             Effect.flatMap((output) =>
               Schema.encodeEffect(config.output)(output).pipe(
                 Effect.mapError(
@@ -132,7 +170,14 @@ export const withPermission = <Input extends SchemaType<any>, Output extends Sch
 
 export const permission = (tool: AnyTool, name: string) => runtimeOf(tool).permission ?? name
 export const definition = (name: string, tool: AnyTool) => runtimeOf(tool).definition(name)
-export const settle = (tool: AnyTool, call: ToolCall, context: Context) => runtimeOf(tool).settle(call, context)
+export const settle = (
+  tool: AnyTool,
+  name: string,
+  call: ToolCall,
+  context: Context,
+  policies: ToolExecutionPolicy.Interface,
+) =>
+  runtimeOf(tool).settle(call, context, name, policies)
 
 function runtimeOf(tool: AnyTool) {
   const runtime = runtimes.get(tool)

@@ -18,7 +18,7 @@ import { Permission } from "@/permission"
 import { Skill } from "@/skill"
 import { AbsolutePath } from "@opencode-ai/core/schema"
 import { Location } from "@opencode-ai/core/location"
-import { LocationServiceMap } from "@opencode-ai/core/location-layer"
+import { LocationServiceMap, LocationServiceMapLive } from "@opencode-ai/core/location-layer"
 import { PluginBoot } from "@opencode-ai/core/plugin/boot"
 import { Reference } from "@opencode-ai/core/reference"
 
@@ -108,9 +108,11 @@ export const layer = Layer.effect(
   }),
 )
 
-export const defaultLayer = layer.pipe(Layer.provide(Skill.defaultLayer), Layer.provide(LocationServiceMap.layer))
+export const sharedDefaultLayer = layer.pipe(Layer.provide(Skill.defaultLayer))
 
-const locationServiceMapNode = LayerNode.make(LocationServiceMap.layer, [])
+export const defaultLayer = sharedDefaultLayer.pipe(Layer.provide(LocationServiceMapLive))
+
+const locationServiceMapNode = LayerNode.make(LocationServiceMapLive, [])
 
 export const node = LayerNode.make(layer, [Skill.node, locationServiceMapNode])
 

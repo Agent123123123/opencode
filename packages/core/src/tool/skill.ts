@@ -75,14 +75,11 @@ export const layer = Layer.effectDiscard(
               const skill = current.find((skill) => skill.name === input.name)
               if (!skill) return yield* unableToLoad(input.name)
               return yield* Effect.gen(function* () {
-                yield* permission.assert({
+                yield* permission.assert(Tool.permissionRequest(context, {
                   action: name,
                   resources: [skill.name],
                   save: [skill.name],
-                  sessionID: context.sessionID,
-                  agent: context.agent,
-                  source: { type: "tool", messageID: context.assistantMessageID, callID: context.toolCallID },
-                })
+                }))
                 const directory = path.dirname(skill.location)
                 const files =
                   path.basename(skill.location) === "SKILL.md"

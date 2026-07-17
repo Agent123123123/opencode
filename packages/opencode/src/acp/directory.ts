@@ -7,6 +7,7 @@ import { ModelV2 } from "@opencode-ai/core/model"
 import { Provider } from "@/provider/provider"
 import { Context, Effect, Layer, SynchronizedRef } from "effect"
 import type * as ACPError from "./error"
+import { LocationServiceMapLive } from "@opencode-ai/core/location-layer"
 
 export type ModelOption = {
   readonly providerID: ProviderV2.ID
@@ -199,12 +200,14 @@ export const layer = Layer.effect(
   }),
 )
 
-export const defaultLayer = layer.pipe(
+export const sharedDefaultLayer = layer.pipe(
   Layer.provide(loaderLayer),
   Layer.provide(Provider.defaultLayer),
-  Layer.provide(Agent.defaultLayer),
+  Layer.provide(Agent.sharedDefaultLayer),
   Layer.provide(Command.defaultLayer),
   Layer.provide(InstanceStore.defaultLayer),
 )
+
+export const defaultLayer = sharedDefaultLayer.pipe(Layer.provide(LocationServiceMapLive))
 
 export * as Directory from "./directory"

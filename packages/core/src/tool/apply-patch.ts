@@ -70,11 +70,6 @@ export const layer = Layer.effectDiscard(
                 return new ToolFailure({ message: prefix })
               }
               return Effect.gen(function* () {
-                const source = {
-                  type: "tool" as const,
-                  messageID: context.assistantMessageID,
-                  callID: context.toolCallID,
-                }
                 if (!input.patchText.trim()) return yield* new ToolFailure({ message: "patchText is required" })
                 const hunks = yield* Effect.try({
                   try: () => Patch.parse(input.patchText),
@@ -93,21 +88,15 @@ export const layer = Layer.effectDiscard(
                   if (external) externalDirectories.set(external.resource, external)
                 }
                 for (const external of externalDirectories.values()) {
-                  yield* permission.assert({
+                  yield* permission.assert(Tool.permissionRequest(context, {
                     ...LocationMutation.externalDirectoryPermission(external),
-                    sessionID: context.sessionID,
-                    agent: context.agent,
-                    source,
-                  })
+                  }))
                 }
-                yield* permission.assert({
+                yield* permission.assert(Tool.permissionRequest(context, {
                   action: "edit",
                   resources: [...new Set(targets.map(({ target }) => target.resource))],
                   save: ["*"],
-                  sessionID: context.sessionID,
-                  agent: context.agent,
-                  source,
-                })
+                }))
 
                 const prepared: Prepared[] = []
                 for (const { hunk, target } of targets) {

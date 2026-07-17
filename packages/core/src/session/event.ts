@@ -136,6 +136,107 @@ export const ContextUpdated = EventV2.define({
 })
 export type ContextUpdated = typeof ContextUpdated.Type
 
+export namespace Turn {
+  export const Started = EventV2.define({
+    type: "session.turn.started",
+    ...options,
+    schema: {
+      ...Base,
+      turnID: Schema.String,
+      turnStartedAt: V2Schema.DateTimeUtcFromMillis,
+      activityInputIDs: SessionMessageID.ID.pipe(Schema.Array),
+    },
+  })
+  export type Started = typeof Started.Type
+
+  export const Settled = EventV2.define({
+    type: "session.turn.settled",
+    ...options,
+    schema: {
+      ...Base,
+      schema: Schema.Literal("opencode.turn_settled.v1"),
+      turnID: Schema.String,
+      turnStartedAt: V2Schema.DateTimeUtcFromMillis,
+      activityInputIDs: SessionMessageID.ID.pipe(Schema.Array),
+      outcome: Schema.Literals(["completed", "error", "aborted"]),
+      reason: Schema.String.pipe(Schema.optional),
+      errorClass: Schema.Literals(["transport", "resource", "protocol", "interrupt", "unknown"]).pipe(
+        Schema.optional,
+      ),
+      abortOrigin: Schema.Literals(["user", "framework", "runtime_shutdown", "unknown"]).pipe(Schema.optional),
+    },
+  })
+  export type Settled = typeof Settled.Type
+}
+
+export namespace Permission {
+  // Retain v1 decoders so historical permission events remain replayable. V1
+  // lacked canonical turn identity and must never be published by new code.
+  export const AskedV1 = EventV2.define({
+    type: "permission.v2.asked",
+    ...options,
+    schema: {
+      ...Base,
+      id: Schema.String,
+      action: Schema.String,
+      resources: Schema.Array(Schema.String),
+      save: Schema.Array(Schema.String).pipe(Schema.optional),
+      metadata: Schema.Record(Schema.String, Schema.Unknown).pipe(Schema.optional),
+      source: Schema.Struct({
+        type: Schema.Literal("tool"),
+        messageID: Schema.String,
+        callID: Schema.String,
+      }).pipe(Schema.optional),
+    },
+  })
+
+  export const Asked = EventV2.define({
+    type: "permission.v2.asked",
+    sync: { aggregate: "sessionID", version: 2 },
+    schema: {
+      ...Base,
+      id: Schema.String,
+      turnID: SessionMessageID.ID,
+      assistantMessageID: SessionMessageID.ID,
+      activityInputIDs: SessionMessageID.ID.pipe(Schema.Array),
+      action: Schema.String,
+      resources: Schema.Array(Schema.String),
+      save: Schema.Array(Schema.String).pipe(Schema.optional),
+      metadata: Schema.Record(Schema.String, Schema.Unknown).pipe(Schema.optional),
+      source: Schema.Struct({
+        type: Schema.Literal("tool"),
+        messageID: Schema.String,
+        callID: Schema.String,
+      }),
+    },
+  })
+  export type Asked = typeof Asked.Type
+
+  export const RepliedV1 = EventV2.define({
+    type: "permission.v2.replied",
+    ...options,
+    schema: {
+      ...Base,
+      requestID: Schema.String,
+      reply: Schema.Literals(["once", "always", "reject"]),
+    },
+  })
+
+  export const Replied = EventV2.define({
+    type: "permission.v2.replied",
+    sync: { aggregate: "sessionID", version: 2 },
+    schema: {
+      ...Base,
+      turnID: SessionMessageID.ID,
+      assistantMessageID: SessionMessageID.ID,
+      activityInputIDs: SessionMessageID.ID.pipe(Schema.Array),
+      requestID: Schema.String,
+      reply: Schema.Literals(["once", "always", "reject"]),
+    },
+  })
+  export type Replied = typeof Replied.Type
+}
+
 export const Synthetic = EventV2.define({
   type: "session.next.synthetic",
   ...options,
@@ -478,6 +579,10 @@ const DurableDefinitions = [
   PromptLifecycle.Promoted,
   InterruptRequested,
   ContextUpdated,
+  Turn.Started,
+  Turn.Settled,
+  Permission.Asked,
+  Permission.Replied,
   Synthetic,
   Shell.Started,
   Shell.Ended,

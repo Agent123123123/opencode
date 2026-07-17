@@ -5,14 +5,15 @@ import * as AnthropicMessages from "@opencode-ai/llm/protocols/anthropic-message
 import * as OpenAICompatibleChat from "@opencode-ai/llm/protocols/openai-compatible-chat"
 import * as OpenAIResponses from "@opencode-ai/llm/protocols/openai-responses"
 import { Auth, type AnyRoute } from "@opencode-ai/llm/route"
-import { Context, Effect, Layer, Option, Schema } from "effect"
+import { Context, Effect, Layer, Schema } from "effect"
 import { produce } from "immer"
 import { Catalog } from "../../catalog"
 import { ModelV2 } from "../../model"
 import { ModelRequest } from "../../model-request"
-import { PluginBoot } from "../../plugin/boot"
 import { ProviderV2 } from "../../provider"
 import { SessionSchema } from "../schema"
+import { SessionModelSupport } from "../model-support"
+import { SessionSelection } from "../selection"
 
 export class ModelNotSelectedError extends Schema.TaggedErrorClass<ModelNotSelectedError>()(
   "SessionRunnerModel.ModelNotSelectedError",
@@ -35,6 +36,7 @@ export type Error =
   | Catalog.ModelNotFoundError
   | ModelNotSelectedError
   | UnsupportedApiError
+  | SessionSelection.Error
 
 export interface Interface {
   readonly resolve: (session: SessionSchema.Info) => Effect.Effect<Model, Error>
@@ -119,28 +121,23 @@ export const fromCatalogModel = (
 export const resolve = (session: SessionSchema.Info, model: ModelV2.Info, provider?: ProviderV2.Info) =>
   fromCatalogModel(withVariant(model, session.model?.variant), provider)
 
-export const supported = (model: ModelV2.Info) =>
-  model.api.type === "aisdk" &&
-  (model.api.package === "@ai-sdk/openai" ||
-    model.api.package === "@ai-sdk/anthropic" ||
-    (model.api.package === "@ai-sdk/openai-compatible" && model.api.url !== undefined))
+export const supported = SessionModelSupport.supported
 
 /** Resolves models from the catalog belonging to the current Location runtime. */
 export const locationLayer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const catalog = yield* Catalog.Service
-    const boot = yield* PluginBoot.Service
+    const selection = yield* SessionSelection.Service
     return Service.of({
       resolve: Effect.fn("SessionRunnerModel.resolve")(function* (session) {
-        // Location plugins populate and filter the catalog asynchronously during layer startup.
-        yield* boot.wait()
-        const selected = session.model
-          ? yield* catalog.model.get(session.model.providerID, session.model.id)
-          : (Option.getOrUndefined((yield* catalog.model.default()).pipe(Option.filter(supported))) ??
-            (yield* catalog.model.available()).find(supported))
-        if (!selected) return yield* new ModelNotSelectedError({ sessionID: session.id })
-        return yield* resolve(session, selected, yield* catalog.provider.get(selected.providerID))
+        const selected = yield* selection.resolve({ agent: session.agent, model: session.model })
+        const model = yield* catalog.model.get(selected.model.providerID, selected.model.id)
+        return yield* resolve(
+          new SessionSchema.Info({ ...session, agent: selected.agent, model: selected.model }),
+          model,
+          yield* catalog.provider.get(model.providerID),
+        )
       }),
     })
   }),

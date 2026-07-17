@@ -11,6 +11,7 @@ import { Effect, Layer } from "effect"
 import { Config } from "@/config/config"
 import { Service } from "./bootstrap-service"
 import { V2PluginToolBridge } from "@/plugin/v2-tool-bridge"
+import { LocationServiceMap, LocationServiceMapLive } from "@opencode-ai/core/location-layer"
 
 export { Service } from "./bootstrap-service"
 export type { Interface } from "./bootstrap-service"
@@ -52,19 +53,21 @@ export const layer = Layer.effect(
   }),
 )
 
-export const defaultLayer: Layer.Layer<Service> = layer.pipe(
+export const sharedDefaultLayer: Layer.Layer<Service, never, LocationServiceMap> = layer.pipe(
   Layer.provide([
     Config.defaultLayer,
     Format.defaultLayer,
     LSP.defaultLayer,
     Plugin.defaultLayer,
-    V2PluginToolBridge.defaultLayer,
+    V2PluginToolBridge.layer.pipe(Layer.provide(Plugin.defaultLayer)),
     Project.defaultLayer,
     ShareNext.defaultLayer,
     Snapshot.defaultLayer,
     Vcs.defaultLayer,
   ]),
 )
+
+export const defaultLayer: Layer.Layer<Service> = sharedDefaultLayer.pipe(Layer.provide(LocationServiceMapLive))
 
 export const node = LayerNode.make(layer, [
   Config.node,

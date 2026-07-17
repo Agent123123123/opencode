@@ -32,6 +32,7 @@ import { SkillGuidance } from "./skill/guidance"
 import { BuiltInTools } from "./tool/builtins"
 import { Image } from "./image"
 import { ToolRegistry } from "./tool/registry"
+import { ToolExecutionPolicy } from "./tool/execution-policy"
 import { ApplicationTools } from "./tool/application-tools"
 import { ToolOutputStore } from "./tool-output-store"
 import { AppProcess } from "./process"
@@ -42,6 +43,7 @@ import { LLMClient } from "@opencode-ai/llm"
 import { RequestExecutor } from "@opencode-ai/llm/route"
 import * as SessionRunnerLLM from "./session/runner/llm"
 import { SessionRunnerModel } from "./session/runner/model"
+import { SessionSelection } from "./session/selection"
 import { SystemContextBuiltIns } from "./system-context/builtins"
 import { FetchHttpClient } from "effect/unstable/http"
 
@@ -71,12 +73,15 @@ export class LocationServiceMap extends LayerMap.Service<LocationServiceMap>()("
       LocationMutation.locationLayer.pipe(Layer.orDie),
     ).pipe(Layer.provideMerge(location))
     const resources = ToolOutputStore.layer.pipe(Layer.provide(base))
+    const executionPolicies = ToolExecutionPolicy.layer.pipe(Layer.provide(base))
     const permissionsAndTools = ToolRegistry.layer.pipe(
       Layer.provideMerge(PermissionV2.locationLayer),
+      Layer.provide(executionPolicies),
       Layer.provide(resources),
       Layer.provide(base),
     )
-    const services = Layer.mergeAll(base, resources, permissionsAndTools)
+    const selection = SessionSelection.locationLayer.pipe(Layer.provide(base))
+    const services = Layer.mergeAll(base, resources, executionPolicies, permissionsAndTools, selection)
     const image = Image.layer.pipe(Layer.provide(services))
     const mutation = FileMutation.locationLayer.pipe(Layer.provide(services))
     const skillGuidance = SkillGuidance.locationLayer.pipe(Layer.provide(services))
@@ -133,3 +138,10 @@ export class LocationServiceMap extends LayerMap.Service<LocationServiceMap>()("
     ApplicationTools.layer,
   ],
 }) {}
+
+/**
+ * Process composition roots must share this exact Layer identity. Accessing
+ * the generated `LocationServiceMap.layer` getter at multiple call sites can
+ * create distinct LayerMap instances even when those runtimes share a memo map.
+ */
+export const LocationServiceMapLive = LocationServiceMap.layer

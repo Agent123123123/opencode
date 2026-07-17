@@ -24,6 +24,13 @@ import { FSUtil } from "@opencode-ai/core/fs-util"
 import { EffectFlock } from "@opencode-ai/core/util/effect-flock"
 import { Plugin } from "../../src/plugin"
 import { V2PluginToolBridge } from "../../src/plugin/v2-tool-bridge"
+import { SystemContext } from "@opencode-ai/core/system-context"
+import { SystemContextRegistry } from "@opencode-ai/core/system-context/registry"
+import { SessionSchema } from "@opencode-ai/core/session/schema"
+import { ProjectV2 } from "@opencode-ai/core/project"
+import { ModelV2 } from "@opencode-ai/core/model"
+import { ProviderV2 } from "@opencode-ai/core/provider"
+import { DateTime } from "effect"
 
 const configLayer = Config.layer.pipe(
   Layer.provide(EffectFlock.defaultLayer),
@@ -82,10 +89,12 @@ describe("V2 plugin tool bridge", () => {
                 "    if (input.toolID === 'bridge_echo') output.jsonSchema = { type: 'object', properties: { text: { type: 'string' } }, required: ['text'] }",
                 "  },",
                 "  'tool.execute.before': async (input, output) => {",
-                "    if (input.activityIdentity?.activityID !== 'msg_bridge' || input.activityIdentity?.inputIDs?.join(',') !== 'msg_input') throw new Error('missing exact activity identity')",
-                "    output.args.text += '-before'",
+                "    if (input.activityIdentity?.activityID !== 'msg_turn_bridge' || input.activityIdentity?.inputIDs?.join(',') !== 'msg_input') throw new Error('missing exact activity identity')",
+                "    if (input.tool === 'read') throw new Error('blocked builtin read')",
+                "    if (input.tool === 'bridge_echo') output.args.text += '-before'",
                 "  },",
                 "  'tool.execute.after': async (_input, output) => { output.output += '-after' },",
+                "  'system.context': async (input, output) => { output.system.push(`context:${input.sessionID}:${input.agentID}:${input.model?.modelID}`) },",
                 "})",
                 "",
               ].join("\n"),
@@ -118,6 +127,7 @@ describe("V2 plugin tool bridge", () => {
       const settled = yield* materialized.settle({
         sessionID: SessionV2.ID.make("ses_bridge"),
         agent: AgentV2.ID.make("build"),
+        turnID: SessionMessage.ID.make("msg_turn_bridge"),
         assistantMessageID: SessionMessage.ID.make("msg_bridge"),
         activityInputIDs: [SessionMessage.ID.make("msg_input")],
         call: { type: "tool-call", id: "call_bridge", name: "bridge_echo", input: { text: "hello" } },
@@ -126,10 +136,53 @@ describe("V2 plugin tool bridge", () => {
         type: "text",
         value: "ses_bridge:msg_bridge:hello-before-after",
       })
+      const blockedBuiltin = yield* materialized.settle({
+        sessionID: SessionV2.ID.make("ses_bridge"),
+        agent: AgentV2.ID.make("build"),
+        turnID: SessionMessage.ID.make("msg_turn_bridge"),
+        assistantMessageID: SessionMessage.ID.make("msg_bridge"),
+        activityInputIDs: [SessionMessage.ID.make("msg_input")],
+        call: { type: "tool-call", id: "call_builtin_read", name: "read", input: { path: file } },
+      })
+      expect(blockedBuiltin.result).toEqual({ type: "error", value: "blocked builtin read" })
+      const context = yield* Effect.gen(function* () {
+        const registry = yield* SystemContextRegistry.Service
+        return yield* registry.load({
+          session: new SessionSchema.Info({
+            id: SessionSchema.ID.make("ses_bridge"),
+            projectID: ProjectV2.ID.make("project-bridge"),
+            agent: AgentV2.ID.make("analyst"),
+            model: {
+              providerID: ProviderV2.ID.make("test"),
+              id: ModelV2.ID.make("test-model"),
+            },
+            cost: 0,
+            tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+            time: { created: DateTime.makeUnsafe(0), updated: DateTime.makeUnsafe(0) },
+            title: "Bridge",
+            location: { directory: AbsolutePath.make(test.directory) },
+          }),
+          agent: { id: AgentV2.ID.make("analyst"), info: undefined },
+          effectiveModel: {
+            providerID: ProviderV2.ID.make("test"),
+            id: ModelV2.ID.make("test-model"),
+          },
+          activityInputIDs: [SessionMessage.ID.make("msg_input")],
+        })
+      }).pipe(
+        Effect.provide(
+          (yield* LocationServiceMap).get(
+            Location.Ref.make({ directory: AbsolutePath.make(test.directory) }),
+          ),
+        ),
+      )
+      expect((yield* SystemContext.initialize(context)).baseline).toContain("context:ses_bridge:analyst:test-model")
       const rejected = yield* materialized.settle({
         sessionID: SessionV2.ID.make("ses_missing_for_permission"),
         agent: AgentV2.ID.make("build"),
+        turnID: SessionMessage.ID.make("msg_turn_bridge_permission"),
         assistantMessageID: SessionMessage.ID.make("msg_bridge_permission"),
+        activityInputIDs: [],
         call: { type: "tool-call", id: "call_bridge_permission", name: "bridge_ask", input: {} },
       })
       expect(rejected.result).toMatchObject({ type: "error" })

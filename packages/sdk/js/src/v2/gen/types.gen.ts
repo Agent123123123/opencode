@@ -26,6 +26,10 @@ export type Event =
   | EventSessionNextPromptPromoted
   | EventSessionNextInterruptRequested
   | EventSessionNextContextUpdated
+  | EventSessionTurnStarted
+  | EventSessionTurnSettled
+  | EventPermissionV2Asked
+  | EventPermissionV2Replied
   | EventSessionNextSynthetic
   | EventSessionNextShellStarted
   | EventSessionNextShellEnded
@@ -56,8 +60,6 @@ export type Event =
   | EventInstallationUpdateAvailable
   | EventFileEdited
   | EventConnectorUpdated
-  | EventPermissionV2Asked
-  | EventPermissionV2Replied
   | EventReferenceUpdated
   | EventFileWatcherUpdated
   | EventPtyCreated
@@ -921,6 +923,69 @@ export type GlobalEvent = {
       }
     | {
         id: string
+        type: "session.turn.started"
+        properties: {
+          timestamp: number
+          sessionID: string
+          turnID: string
+          turnStartedAt: number
+          activityInputIDs: Array<string>
+        }
+      }
+    | {
+        id: string
+        type: "session.turn.settled"
+        properties: {
+          timestamp: number
+          sessionID: string
+          schema: "opencode.turn_settled.v1"
+          turnID: string
+          turnStartedAt: number
+          activityInputIDs: Array<string>
+          outcome: "completed" | "error" | "aborted"
+          reason?: string
+          errorClass?: "transport" | "resource" | "protocol" | "interrupt" | "unknown"
+          abortOrigin?: "user" | "framework" | "runtime_shutdown" | "unknown"
+        }
+      }
+    | {
+        id: string
+        type: "permission.v2.asked"
+        properties: {
+          timestamp: number
+          sessionID: string
+          id: string
+          turnID: string
+          assistantMessageID: string
+          activityInputIDs: Array<string>
+          action: string
+          resources: Array<string>
+          save?: Array<string>
+          metadata?: {
+            [key: string]: unknown
+          }
+          source: {
+            type: "tool"
+            messageID: string
+            callID: string
+          }
+        }
+      }
+    | {
+        id: string
+        type: "permission.v2.replied"
+        properties: {
+          timestamp: number
+          sessionID: string
+          turnID: string
+          assistantMessageID: string
+          activityInputIDs: Array<string>
+          requestID: string
+          reply: "once" | "always" | "reject"
+        }
+      }
+    | {
+        id: string
         type: "session.next.synthetic"
         properties: {
           timestamp: number
@@ -957,6 +1022,7 @@ export type GlobalEvent = {
           timestamp: number
           sessionID: string
           assistantMessageID: string
+          activityInputIDs?: Array<string>
           agent: string
           model: {
             id: string
@@ -1287,30 +1353,6 @@ export type GlobalEvent = {
         type: "connector.updated"
         properties: {
           [key: string]: unknown
-        }
-      }
-    | {
-        id: string
-        type: "permission.v2.asked"
-        properties: {
-          id: string
-          sessionID: string
-          action: string
-          resources: Array<string>
-          save?: Array<string>
-          metadata?: {
-            [key: string]: unknown
-          }
-          source?: PermissionV2Source
-        }
-      }
-    | {
-        id: string
-        type: "permission.v2.replied"
-        properties: {
-          sessionID: string
-          requestID: string
-          reply: PermissionV2Reply
         }
       }
     | {
@@ -1665,6 +1707,10 @@ export type GlobalEvent = {
     | SyncEventSessionNextPromptPromoted
     | SyncEventSessionNextInterruptRequested
     | SyncEventSessionNextContextUpdated
+    | SyncEventSessionTurnStarted
+    | SyncEventSessionTurnSettled
+    | SyncEventPermissionV2Asked
+    | SyncEventPermissionV2Replied
     | SyncEventSessionNextSynthetic
     | SyncEventSessionNextShellStarted
     | SyncEventSessionNextShellEnded
@@ -2755,12 +2801,6 @@ export type InvalidCursorError = {
   message: string
 }
 
-export type SessionNotFoundError = {
-  _tag: "SessionNotFoundError"
-  sessionID: string
-  message: string
-}
-
 export type ConflictError = {
   _tag: "ConflictError"
   message: string
@@ -2771,6 +2811,12 @@ export type ServiceUnavailableError = {
   _tag: "ServiceUnavailableError"
   message: string
   service?: string
+}
+
+export type SessionNotFoundError = {
+  _tag: "SessionNotFoundError"
+  sessionID: string
+  message: string
 }
 
 export type UnknownError1 = {
@@ -3033,14 +3079,6 @@ export type SessionNextRetryError = {
     [key: string]: string
   }
 }
-
-export type PermissionV2Source = {
-  type: "tool"
-  messageID: string
-  callID: string
-}
-
-export type PermissionV2Reply = "once" | "always" | "reject"
 
 export type QuestionV2Option = {
   /**
@@ -3333,6 +3371,97 @@ export type SyncEventSessionNextContextUpdated = {
   }
 }
 
+export type SyncEventSessionTurnStarted = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "session.turn.started.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      timestamp: number
+      sessionID: string
+      turnID: string
+      turnStartedAt: number
+      activityInputIDs: Array<string>
+    }
+  }
+}
+
+export type SyncEventSessionTurnSettled = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "session.turn.settled.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      timestamp: number
+      sessionID: string
+      schema: "opencode.turn_settled.v1"
+      turnID: string
+      turnStartedAt: number
+      activityInputIDs: Array<string>
+      outcome: "completed" | "error" | "aborted"
+      reason?: string
+      errorClass?: "transport" | "resource" | "protocol" | "interrupt" | "unknown"
+      abortOrigin?: "user" | "framework" | "runtime_shutdown" | "unknown"
+    }
+  }
+}
+
+export type SyncEventPermissionV2Asked = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "permission.v2.asked.2"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      timestamp: number
+      sessionID: string
+      id: string
+      turnID: string
+      assistantMessageID: string
+      activityInputIDs: Array<string>
+      action: string
+      resources: Array<string>
+      save?: Array<string>
+      metadata?: {
+        [key: string]: unknown
+      }
+      source: {
+        type: "tool"
+        messageID: string
+        callID: string
+      }
+    }
+  }
+}
+
+export type SyncEventPermissionV2Replied = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "permission.v2.replied.2"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      timestamp: number
+      sessionID: string
+      turnID: string
+      assistantMessageID: string
+      activityInputIDs: Array<string>
+      requestID: string
+      reply: "once" | "always" | "reject"
+    }
+  }
+}
+
 export type SyncEventSessionNextSynthetic = {
   type: "sync"
   id: string
@@ -3397,6 +3526,7 @@ export type SyncEventSessionNextStepStarted = {
       timestamp: number
       sessionID: string
       assistantMessageID: string
+      activityInputIDs?: Array<string>
       agent: string
       model: {
         id: string
@@ -4177,16 +4307,25 @@ export type ConnectorAttempt = {
   }
 }
 
+export type PermissionV2Source = {
+  type: "tool"
+  messageID: string
+  callID: string
+}
+
 export type PermissionV2Request = {
   id: string
   sessionID: string
+  turnID: string
+  assistantMessageID: string
+  activityInputIDs: Array<string>
   action: string
   resources: Array<string>
   save?: Array<string>
   metadata?: {
     [key: string]: unknown
   }
-  source?: PermissionV2Source
+  source: PermissionV2Source
 }
 
 export type PermissionSavedInfo = {
@@ -4195,6 +4334,8 @@ export type PermissionSavedInfo = {
   action: string
   resource: string
 }
+
+export type PermissionV2Reply = "once" | "always" | "reject"
 
 export type FileSystemEntry = {
   path: string
@@ -4567,6 +4708,73 @@ export type EventSessionNextContextUpdated = {
   }
 }
 
+export type EventSessionTurnStarted = {
+  id: string
+  type: "session.turn.started"
+  properties: {
+    timestamp: number
+    sessionID: string
+    turnID: string
+    turnStartedAt: number
+    activityInputIDs: Array<string>
+  }
+}
+
+export type EventSessionTurnSettled = {
+  id: string
+  type: "session.turn.settled"
+  properties: {
+    timestamp: number
+    sessionID: string
+    schema: "opencode.turn_settled.v1"
+    turnID: string
+    turnStartedAt: number
+    activityInputIDs: Array<string>
+    outcome: "completed" | "error" | "aborted"
+    reason?: string
+    errorClass?: "transport" | "resource" | "protocol" | "interrupt" | "unknown"
+    abortOrigin?: "user" | "framework" | "runtime_shutdown" | "unknown"
+  }
+}
+
+export type EventPermissionV2Asked = {
+  id: string
+  type: "permission.v2.asked"
+  properties: {
+    timestamp: number
+    sessionID: string
+    id: string
+    turnID: string
+    assistantMessageID: string
+    activityInputIDs: Array<string>
+    action: string
+    resources: Array<string>
+    save?: Array<string>
+    metadata?: {
+      [key: string]: unknown
+    }
+    source: {
+      type: "tool"
+      messageID: string
+      callID: string
+    }
+  }
+}
+
+export type EventPermissionV2Replied = {
+  id: string
+  type: "permission.v2.replied"
+  properties: {
+    timestamp: number
+    sessionID: string
+    turnID: string
+    assistantMessageID: string
+    activityInputIDs: Array<string>
+    requestID: string
+    reply: "once" | "always" | "reject"
+  }
+}
+
 export type EventSessionNextSynthetic = {
   id: string
   type: "session.next.synthetic"
@@ -4608,6 +4816,7 @@ export type EventSessionNextStepStarted = {
     timestamp: number
     sessionID: string
     assistantMessageID: string
+    activityInputIDs?: Array<string>
     agent: string
     model: {
       id: string
@@ -4964,32 +5173,6 @@ export type EventConnectorUpdated = {
   type: "connector.updated"
   properties: {
     [key: string]: unknown
-  }
-}
-
-export type EventPermissionV2Asked = {
-  id: string
-  type: "permission.v2.asked"
-  properties: {
-    id: string
-    sessionID: string
-    action: string
-    resources: Array<string>
-    save?: Array<string>
-    metadata?: {
-      [key: string]: unknown
-    }
-    source?: PermissionV2Source
-  }
-}
-
-export type EventPermissionV2Replied = {
-  id: string
-  type: "permission.v2.replied"
-  properties: {
-    sessionID: string
-    requestID: string
-    reply: PermissionV2Reply
   }
 }
 
@@ -9529,6 +9712,16 @@ export type V2HealthGetResponses = {
    */
   200: {
     healthy: true
+    capabilities: {
+      sessionCreateByID: boolean
+      durableInputIdempotency: boolean
+      inputDeliveryQueue: boolean
+      sessionEventReplay: boolean
+      toolExecutionIdentity: boolean
+      transportActivityEvents: boolean
+      activitySettlement: boolean
+      targetedInterrupt: boolean
+    }
   }
 }
 
@@ -9649,6 +9842,7 @@ export type V2SessionListResponse = V2SessionListResponses[keyof V2SessionListRe
 export type V2SessionCreateData = {
   body: {
     id?: string
+    title?: string
     agent?: string
     model?: {
       id: string
@@ -9671,6 +9865,14 @@ export type V2SessionCreateErrors = {
    * UnauthorizedError
    */
   401: UnauthorizedError
+  /**
+   * ConflictError
+   */
+  409: ConflictError
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
 }
 
 export type V2SessionCreateError = V2SessionCreateErrors[keyof V2SessionCreateErrors]
@@ -9722,6 +9924,54 @@ export type V2SessionGetResponses = {
 }
 
 export type V2SessionGetResponse = V2SessionGetResponses[keyof V2SessionGetResponses]
+
+export type V2SessionEventsData = {
+  body?: never
+  path: {
+    sessionID: string
+  }
+  query?: {
+    after?: number
+    limit?: number
+  }
+  url: "/api/session/{sessionID}/event"
+}
+
+export type V2SessionEventsErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * SessionNotFoundError
+   */
+  404: SessionNotFoundError
+}
+
+export type V2SessionEventsError = V2SessionEventsErrors[keyof V2SessionEventsErrors]
+
+export type V2SessionEventsResponses = {
+  /**
+   * Success
+   */
+  200: {
+    data: Array<{
+      cursor: number
+      event: {
+        id: string
+        type: string
+        version?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        data: unknown
+      }
+    }>
+  }
+}
+
+export type V2SessionEventsResponse = V2SessionEventsResponses[keyof V2SessionEventsResponses]
 
 export type V2SessionPromptData = {
   body: {

@@ -51,6 +51,7 @@ import { memoMap } from "@opencode-ai/core/effect/memo-map"
 import { BackgroundJob } from "@/background/job"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { EventV2Bridge } from "@/event-v2-bridge"
+import { LocationServiceMapLive } from "@opencode-ai/core/location-layer"
 
 export const AppLayer = Layer.mergeAll(
   Npm.defaultLayer,
@@ -66,7 +67,7 @@ export const AppLayer = Layer.mergeAll(
   ModelsDev.defaultLayer,
   Provider.defaultLayer,
   ProviderAuth.defaultLayer,
-  Agent.defaultLayer,
+  Agent.sharedDefaultLayer,
   Skill.defaultLayer,
   Discovery.defaultLayer,
   Question.defaultLayer,
@@ -78,11 +79,11 @@ export const AppLayer = Layer.mergeAll(
   RuntimeFlags.defaultLayer,
   EventV2Bridge.defaultLayer,
   SessionRunState.defaultLayer,
-  SessionProcessor.defaultLayer,
-  SessionCompaction.defaultLayer,
+  SessionProcessor.sharedDefaultLayer,
+  SessionCompaction.sharedDefaultLayer,
   SessionRevert.defaultLayer,
   SessionSummary.defaultLayer,
-  SessionPrompt.defaultLayer,
+  SessionPrompt.sharedDefaultLayer,
   Instruction.defaultLayer,
   LLM.defaultLayer,
   LSP.defaultLayer,
@@ -90,18 +91,19 @@ export const AppLayer = Layer.mergeAll(
   McpAuth.defaultLayer,
   Command.defaultLayer,
   Truncate.defaultLayer,
-  ToolRegistry.defaultLayer,
+  ToolRegistry.sharedDefaultLayer,
   Format.defaultLayer,
   Project.defaultLayer,
   Vcs.defaultLayer,
-  Workspace.defaultLayer,
+  Workspace.sharedDefaultLayer,
   Worktree.appLayer,
   Installation.defaultLayer,
   ShareNext.defaultLayer,
   SessionShare.defaultLayer,
 ).pipe(
   Layer.provideMerge(Ripgrep.defaultLayer),
-  Layer.provideMerge(InstanceLayer.layer),
+  Layer.provideMerge(InstanceLayer.sharedLayer),
+  Layer.provideMerge(LocationServiceMapLive),
   Layer.provideMerge(Observability.layer),
 )
 

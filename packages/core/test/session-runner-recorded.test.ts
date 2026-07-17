@@ -7,6 +7,8 @@ import { EventV2 } from "@opencode-ai/core/event"
 import { EventTable } from "@opencode-ai/core/event/sql"
 import { PermissionV2 } from "@opencode-ai/core/permission"
 import { AgentV2 } from "@opencode-ai/core/agent"
+import { ModelV2 } from "@opencode-ai/core/model"
+import { ProviderV2 } from "@opencode-ai/core/provider"
 import { Config } from "@opencode-ai/core/config"
 import { Project } from "@opencode-ai/core/project"
 import { ProjectTable } from "@opencode-ai/core/project/sql"
@@ -18,6 +20,7 @@ import { SessionExecution } from "@opencode-ai/core/session/execution"
 import { SessionRunCoordinator } from "@opencode-ai/core/session/run-coordinator"
 import * as SessionRunnerLLM from "@opencode-ai/core/session/runner/llm"
 import { SessionRunnerModel } from "@opencode-ai/core/session/runner/model"
+import { SessionSelection } from "@opencode-ai/core/session/selection"
 import { ToolRegistry } from "@opencode-ai/core/tool/registry"
 import { SessionTable } from "@opencode-ai/core/session/sql"
 import { SessionStore } from "@opencode-ai/core/session/store"
@@ -68,6 +71,14 @@ const model = OpenAIChat.route
   })
   .model({ id: "gpt-4o-mini" })
 const models = SessionRunnerModel.layerWith(() => Effect.succeed(model))
+const selection = SessionSelection.layerWith((input) =>
+  Effect.succeed({
+    agent: input.agent ?? AgentV2.defaultID,
+    model:
+      input.model ??
+      { id: ModelV2.ID.make("gpt-4o-mini"), providerID: ProviderV2.ID.make("openai") },
+  }),
+)
 const systemContext = SystemContextRegistry.layer
 const location = Location.layer({ directory: AbsolutePath.make("/project") }).pipe(Layer.provide(Project.defaultLayer))
 const skillGuidance = Layer.mock(SkillGuidance.Service, { load: () => Effect.succeed(SystemContext.empty) })
@@ -80,6 +91,7 @@ const runner = SessionRunnerLLM.defaultLayer.pipe(
   Layer.provide(client),
   Layer.provide(registry),
   Layer.provide(models),
+  Layer.provide(selection),
   Layer.provide(systemContext),
   Layer.provide(location),
   Layer.provide(agents),
@@ -119,6 +131,7 @@ const it = testEffect(
     agents,
     registry,
     models,
+    selection,
     systemContext,
     location,
     skillGuidance,
@@ -150,6 +163,8 @@ describe("SessionRunnerLLM recorded", () => {
           directory: "/project",
           title: "test",
           version: "test",
+          agent: AgentV2.defaultID,
+          model: { id: "gpt-4o-mini", providerID: "openai" },
         })
         .onConflictDoNothing()
         .run()
@@ -179,10 +194,12 @@ describe("SessionRunnerLLM recorded", () => {
       expect(durableEvents.map((event) => event.type)).toEqual([
         "session.next.prompt.admitted.1",
         "session.next.prompt.promoted.1",
+        "session.turn.started.1",
         "session.next.step.started.1",
         "session.next.text.started.1",
         "session.next.text.ended.1",
         "session.next.step.ended.2",
+        "session.turn.settled.1",
       ])
       expect(durableEvents.find((event) => event.type === "session.next.step.started.1")?.data).toMatchObject({
         activityInputIDs: [prompt.id],

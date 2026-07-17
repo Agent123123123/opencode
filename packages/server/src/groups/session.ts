@@ -128,11 +128,13 @@ export const SessionGroup = HttpApiGroup.make("server.session")
     HttpApiEndpoint.post("session.create", "/api/session", {
       payload: Schema.Struct({
         id: SessionV2.ID.pipe(Schema.optional),
+        title: Schema.String.pipe(Schema.optional),
         agent: AgentV2.ID.pipe(Schema.optional),
         model: ModelV2.Ref.pipe(Schema.optional),
         location: Location.Ref.pipe(Schema.optional),
       }),
       success: Schema.Struct({ data: SessionV2.Info }),
+      error: [ConflictError, InvalidRequestError, ServiceUnavailableError],
     }).annotateMerge(
       OpenApi.annotations({
         identifier: "v2.session.create",

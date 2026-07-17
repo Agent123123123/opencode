@@ -11,12 +11,14 @@ import { Wildcard } from "../util/wildcard"
 import { ApplicationTools } from "./application-tools"
 import { definition, permission, settle, validateName, type AnyTool, type RegistrationError } from "./tool"
 import { Tools } from "./tools"
+import { ToolExecutionPolicy } from "./execution-policy"
 
 export type ExecuteInput = {
   readonly sessionID: SessionSchema.ID
   readonly agent: AgentV2.ID
+  readonly turnID: SessionMessage.ID
   readonly assistantMessageID: SessionMessage.ID
-  readonly activityInputIDs?: ReadonlyArray<SessionMessage.ID>
+  readonly activityInputIDs: ReadonlyArray<SessionMessage.ID>
   readonly call: ToolCall
 }
 
@@ -44,6 +46,7 @@ const registryLayer = Layer.effect(
   Effect.gen(function* () {
     const applications = yield* ApplicationTools.Service
     const resources = yield* ToolOutputStore.Service
+    const policies = yield* ToolExecutionPolicy.Service
     type Registration = { readonly identity: object; readonly tool: AnyTool }
     const local = new Map<string, Array<{ readonly token: object; readonly registration: Registration }>>()
 
@@ -59,13 +62,14 @@ const registryLayer = Layer.effect(
         }
       if (advertised && registration.identity !== advertised)
         return { result: { type: "error" as const, value: `Stale tool call: ${input.call.name}` } }
-      const pending = yield* settle(registration.tool, input.call, {
+      const pending = yield* settle(registration.tool, input.call.name, input.call, {
         sessionID: input.sessionID,
         agent: input.agent,
+        turnID: input.turnID,
         assistantMessageID: input.assistantMessageID,
-        activityInputIDs: input.activityInputIDs ?? [],
+        activityInputIDs: input.activityInputIDs,
         toolCallID: input.call.id,
-      }).pipe(
+      }, policies).pipe(
         Effect.map((output) => ({ output })),
         Effect.catchTag("LLM.ToolFailure", (failure) =>
           Effect.succeed({ result: { type: "error" as const, value: failure.message } }),
@@ -138,4 +142,5 @@ function whollyDisabled(action: string, rules: PermissionV2.Ruleset) {
 export const defaultLayer = layer.pipe(
   Layer.provide(ApplicationTools.layer),
   Layer.provide(ToolOutputStore.defaultLayer),
+  Layer.provide(ToolExecutionPolicy.emptyLayer),
 )

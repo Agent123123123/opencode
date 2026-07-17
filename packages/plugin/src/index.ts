@@ -313,6 +313,15 @@ export interface Hooks {
       system: string[]
     },
   ) => Promise<void>
+  "system.context"?: (
+    input: {
+      sessionID: string
+      agentID: string
+      activityInputIDs: ReadonlyArray<string>
+      model?: { providerID: string; modelID: string; variant?: string }
+    },
+    output: { system: string[] },
+  ) => Promise<void>
   "experimental.provider.small_model"?: (input: { provider: ProviderV2 }, output: { model?: ModelV2 }) => Promise<void>
   /**
    * Called before session compaction starts. Allows plugins to customize

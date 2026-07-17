@@ -104,10 +104,16 @@ describe("SessionV2.create", () => {
       expect(
         yield* session.create({
           location: Location.Ref.make({ directory: location.directory, workspaceID }),
+          title: "Managed analyst session",
           agent: AgentV2.ID.make("build"),
           model,
         }),
-      ).toMatchObject({ location: { directory: location.directory, workspaceID }, agent: "build", model })
+      ).toMatchObject({
+        title: "Managed analyst session",
+        location: { directory: location.directory, workspaceID },
+        agent: "build",
+        model,
+      })
     }),
   )
 

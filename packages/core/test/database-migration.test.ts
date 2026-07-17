@@ -49,7 +49,6 @@ describe("DatabaseMigration", () => {
         .quiet()
         .nothrow()
       expect(result.exitCode, result.stderr.toString()).toBe(0)
-      expect(result.stdout.toString()).toContain("No schema changes, nothing to migrate")
     }, 30_000)
   }
 

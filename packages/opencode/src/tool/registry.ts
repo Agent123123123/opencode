@@ -48,6 +48,7 @@ import { EventV2Bridge } from "@/event-v2-bridge"
 import { Agent } from "../agent/agent"
 import { Skill } from "../skill"
 import { Permission } from "@/permission"
+import { LocationServiceMapLive } from "@opencode-ai/core/location-layer"
 import { BackgroundJob } from "@/background/job"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { ProviderV2 } from "@opencode-ai/core/provider"
@@ -315,7 +316,7 @@ export const layer = Layer.effect(
   }),
 )
 
-export const defaultLayer = Layer.suspend(() =>
+export const sharedDefaultLayer = Layer.suspend(() =>
   layer
     .pipe(
       Layer.provide(Config.defaultLayer),
@@ -323,7 +324,7 @@ export const defaultLayer = Layer.suspend(() =>
       Layer.provide(Question.defaultLayer),
       Layer.provide(Todo.defaultLayer),
       Layer.provide(Skill.defaultLayer),
-      Layer.provide(Agent.defaultLayer),
+      Layer.provide(Agent.sharedDefaultLayer),
       Layer.provide(Session.defaultLayer),
       Layer.provide(BackgroundJob.defaultLayer),
       Layer.provide(Provider.defaultLayer),
@@ -338,6 +339,8 @@ export const defaultLayer = Layer.suspend(() =>
     )
     .pipe(Layer.provide(Database.defaultLayer), Layer.provide(RuntimeFlags.defaultLayer)),
 )
+
+export const defaultLayer = sharedDefaultLayer.pipe(Layer.provide(LocationServiceMapLive))
 
 function isZodType(value: unknown): value is z.ZodType {
   return typeof value === "object" && value !== null && "_zod" in value

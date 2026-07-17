@@ -65,6 +65,7 @@ export { MessageDecodeError }
 
 export interface CreateInput {
   readonly id?: ID
+  readonly title?: string
   readonly agent?: Agent.ID
   readonly model?: Model.Ref
   readonly location: Location.Ref

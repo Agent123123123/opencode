@@ -229,17 +229,19 @@ export const layerWith = (options?: LayerOptions) =>
         commit?: (seq: number) => Effect.Effect<void>,
       ) {
         return Effect.gen(function* () {
-          const definition = registry.get(event.type)
-          const sync = definition?.sync
-          if (sync) {
-            if (event.version !== sync.version) {
-              yield* Effect.die(
+          const latest = registry.get(event.type)
+          if (latest?.sync) {
+            const definition =
+              event.version === undefined ? undefined : syncRegistry.get(versionedType(event.type, event.version))
+            if (!definition) {
+              return yield* Effect.die(
                 new InvalidSyncEventError({
                   type: event.type,
-                  message: `Expected event version ${sync.version}, got ${event.version}`,
+                  message: `Unknown sync event version ${event.type}.${event.version ?? "missing"}`,
                 }),
               )
             }
+            const sync = definition.sync
             const aggregateID = (event.data as Record<string, unknown>)[sync.aggregate]
             if (typeof aggregateID !== "string") {
               yield* Effect.die(

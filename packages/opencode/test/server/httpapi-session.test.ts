@@ -714,6 +714,73 @@ describe("session HttpApi", () => {
     }).pipe(Effect.provide(TestLLMServer.layer), Effect.provide(CrossSpawnSpawner.defaultLayer)),
   )
 
+  it.live("materializes the selected agent model and variant at v2 session creation", () =>
+    Effect.gen(function* () {
+      const llm = yield* TestLLMServer
+      const base = testProviderConfig(llm.url)
+      const directory = yield* tmpdirScoped({
+        git: true,
+        config: {
+          ...base,
+          model: "test/test-model",
+          agent: {
+            analyst: {
+              model: "test/test-model",
+              variant: "high",
+              mode: "subagent",
+              hidden: true,
+            },
+          },
+          provider: {
+            test: {
+              ...base.provider.test,
+              models: {
+                "test-model": {
+                  ...base.provider.test.models["test-model"],
+                  variants: { high: { reasoningEffort: "high" } },
+                },
+              },
+            },
+          },
+        },
+      })
+      const headers = { "x-opencode-directory": directory, "content-type": "application/json" }
+      const id = "ses_http_agent_model"
+      const created = yield* requestJson<{
+        data: {
+          id: string
+          title: string
+          agent: string
+          model: { id: string; providerID: string; variant: string }
+        }
+      }>("/api/session", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ id, title: "Analyst lane", agent: "analyst", location: { directory } }),
+      })
+
+      expect(created.data).toMatchObject({
+        id,
+        title: "Analyst lane",
+        agent: "analyst",
+        model: { id: "test-model", providerID: "test", variant: "high" },
+      })
+
+      const conflict = yield* request("/api/session", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ id, agent: "build", location: { directory } }),
+      })
+      expect(conflict.status).toBe(409)
+      const titleConflict = yield* request("/api/session", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ id, title: "Different lane", agent: "analyst", location: { directory } }),
+      })
+      expect(titleConflict.status).toBe(409)
+    }).pipe(Effect.provide(TestLLMServer.layer), Effect.provide(CrossSpawnSpawner.defaultLayer)),
+  )
+
   it.instance(
     "returns v2 public unavailable errors for unfinished session mutations",
     () =>

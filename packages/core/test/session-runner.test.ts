@@ -31,7 +31,9 @@ import { SessionRunCoordinator } from "@opencode-ai/core/session/run-coordinator
 import { SessionRunner } from "@opencode-ai/core/session/runner"
 import * as SessionRunnerLLM from "@opencode-ai/core/session/runner/llm"
 import { SessionRunnerModel } from "@opencode-ai/core/session/runner/model"
+import { SessionSelection } from "@opencode-ai/core/session/selection"
 import { ToolRegistry } from "@opencode-ai/core/tool/registry"
+import { ToolExecutionPolicy } from "@opencode-ai/core/tool/execution-policy"
 import { ToolOutputStore } from "@opencode-ai/core/tool-output-store"
 import { ApplicationTools } from "@opencode-ai/core/tool/application-tools"
 import { AgentV2 } from "@opencode-ai/core/agent"
@@ -128,6 +130,7 @@ const registry = ToolRegistry.layer.pipe(
   Layer.provide(permission),
   Layer.provide(applications),
   Layer.provide(ToolOutputStore.defaultLayer),
+  Layer.provide(ToolExecutionPolicy.emptyLayer),
 )
 const agents = AgentV2.layer
 const echo = Layer.effectDiscard(
@@ -162,22 +165,33 @@ const echo = Layer.effectDiscard(
 ).pipe(Layer.provide(registry))
 let modelResolveHook = Effect.void
 let currentModel = model
+let defaultAgentID = AgentV2.defaultID
 const models = SessionRunnerModel.layerWith((session) =>
   modelResolveHook.pipe(Effect.as(session.model?.id === "replacement" ? replacementModel : currentModel)),
+)
+const selection = SessionSelection.layerWith((input) =>
+  Effect.succeed({
+    agent: input.agent ?? defaultAgentID,
+    model:
+      input.model ??
+      { id: ModelV2.ID.make(currentModel.id), providerID: ProviderV2.ID.make(currentModel.provider) },
+  }),
 )
 const systemContextKey = SystemContext.Key.make("test/context")
 let systemBaseline = "Initial context"
 let systemRemoved = false
 let systemUnavailable = false
 let systemLoadHook = Effect.void
+const systemContextRequests: SystemContextRegistry.Request[] = []
 const skillBaselines = new Map<AgentV2.ID, string>()
 const systemContext = Layer.effectDiscard(
   SystemContextRegistry.Service.pipe(
     Effect.flatMap((registry) =>
       registry.register({
         key: systemContextKey,
-        load: Effect.sync(() =>
-          SystemContext.combine(
+        load: (request) => Effect.sync(() => {
+          systemContextRequests.push(request)
+          return SystemContext.combine(
             systemRemoved
               ? []
               : [
@@ -194,8 +208,8 @@ const systemContext = Layer.effectDiscard(
                     removed: () => "System context source removed: test/context",
                   }),
                 ],
-          ),
-        ),
+          )
+        }),
       }),
     ),
   ),
@@ -241,6 +255,7 @@ const runner = SessionRunnerLLM.layer.pipe(
   Layer.provide(client),
   Layer.provide(registry),
   Layer.provide(models),
+  Layer.provide(selection),
   Layer.provide(systemContext),
   Layer.provide(location),
   Layer.provide(agents),
@@ -282,6 +297,7 @@ const it = testEffect(
     registry,
     echo,
     models,
+    selection,
     systemContext,
     location,
     skillGuidance,
@@ -307,6 +323,8 @@ const insertSession = (id: SessionV2.ID) =>
         directory: "/project",
         title: "test",
         version: "test",
+        agent: AgentV2.defaultID,
+        model: { id: "fake-model", providerID: "fake" },
       })
       .onConflictDoNothing()
       .run()
@@ -320,8 +338,10 @@ const setup = Effect.gen(function* () {
   systemRemoved = false
   systemUnavailable = false
   systemLoadHook = Effect.void
+  systemContextRequests.length = 0
   modelResolveHook = Effect.void
   currentModel = model
+  defaultAgentID = AgentV2.defaultID
   skillBaselines.clear()
   responses = undefined
   streamFailure = undefined
@@ -593,10 +613,12 @@ describe("SessionRunnerLLM", () => {
       yield* session.resume(sessionID)
 
       expect(requests[0]?.tools.map((tool) => tool.name)).toContain("application_context")
+      expect(systemContextRequests.some((request) => request.activityInputIDs.includes(prompt.id))).toBe(true)
       expect(contexts).toEqual([
         {
           sessionID,
           agent: AgentV2.ID.make("build"),
+          turnID: expect.stringMatching(/^msg_/),
           assistantMessageID: expect.stringMatching(/^msg_/),
           activityInputIDs: [prompt.id],
           toolCallID: "call-application",
@@ -615,6 +637,29 @@ describe("SessionRunnerLLM", () => {
           ],
         },
       ])
+      const { db } = yield* Database.Service
+      const activityEvents = yield* db
+        .select({ seq: EventTable.seq, type: EventTable.type, data: EventTable.data })
+        .from(EventTable)
+        .where(eq(EventTable.aggregate_id, sessionID))
+        .orderBy(asc(EventTable.seq))
+        .all()
+        .pipe(Effect.orDie)
+      const started = activityEvents.filter((event) => event.type === EventV2.versionedType(SessionEvent.Turn.Started.type, 1))
+      const settled = activityEvents.filter((event) => event.type === EventV2.versionedType(SessionEvent.Turn.Settled.type, 1))
+      const toolSuccess = activityEvents.find((event) => event.type === EventV2.versionedType(SessionEvent.Tool.Success.type, 1))
+      expect(started).toHaveLength(1)
+      expect(settled).toHaveLength(1)
+      const startedTurnID = (started[0]!.data as { turnID: SessionMessage.ID }).turnID
+      const settledTurnID = (settled[0]!.data as { turnID: SessionMessage.ID }).turnID
+      expect(contexts[0]?.turnID).toBe(startedTurnID)
+      expect(settledTurnID).toBe(contexts[0]?.turnID)
+      expect(settled[0]?.seq).toBeGreaterThan(toolSuccess?.seq ?? Number.MAX_SAFE_INTEGER)
+      expect(settled[0]?.data).toMatchObject({
+        schema: "opencode.turn_settled.v1",
+        outcome: "completed",
+        activityInputIDs: [prompt.id],
+      })
     }),
   )
 
@@ -841,6 +886,31 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
+  it.effect("applies the selected agent request overlay to the provider request", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const agents = yield* AgentV2.Service
+      yield* agents.update((editor) =>
+        editor.update(AgentV2.ID.make("build"), (agent) => {
+          agent.request.headers["x-agent-profile"] = "managed-build"
+          agent.request.body.reasoning_effort = "high"
+        }),
+      )
+      const session = yield* SessionV2.Service
+      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Use request overlay" }), resume: false })
+      requests.length = 0
+      response = []
+
+      yield* session.resume(sessionID)
+
+      expect(requests).toHaveLength(1)
+      expect(requests[0]?.http).toEqual({
+        headers: { "x-agent-profile": "managed-build" },
+        body: { reasoning_effort: "high" },
+      })
+    }),
+  )
+
   it.effect("uses the configured default agent system for omitted-agent sessions", () =>
     Effect.gen(function* () {
       yield* setup
@@ -856,6 +926,9 @@ describe("SessionRunnerLLM", () => {
         })
         editor.default(AgentV2.ID.make("reviewer"))
       })
+      defaultAgentID = AgentV2.ID.make("reviewer")
+      const { db } = yield* Database.Service
+      yield* db.update(SessionTable).set({ agent: null }).where(eq(SessionTable.id, sessionID)).run().pipe(Effect.orDie)
       const session = yield* SessionV2.Service
       yield* session.prompt({ sessionID, prompt: new Prompt({ text: "First" }), resume: false })
 
@@ -2482,7 +2555,7 @@ describe("SessionRunnerLLM", () => {
     Effect.gen(function* () {
       yield* setup
       const session = yield* SessionV2.Service
-      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Start working" }), resume: false })
+      const initial = yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Start working" }), resume: false })
 
       requests.length = 0
       responses = [
@@ -2502,8 +2575,8 @@ describe("SessionRunnerLLM", () => {
 
       const first = yield* session.resume(sessionID).pipe(Effect.forkChild)
       yield* Deferred.await(streamStarted)
-      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "First steer" }) })
-      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Second steer" }) })
+      const firstSteer = yield* session.prompt({ sessionID, prompt: new Prompt({ text: "First steer" }) })
+      const secondSteer = yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Second steer" }) })
       yield* Deferred.succeed(streamGate, undefined)
       yield* Fiber.join(first)
       streamGate = undefined
@@ -2512,6 +2585,23 @@ describe("SessionRunnerLLM", () => {
 
       expect(requests).toHaveLength(2)
       expect(userTexts(requests[1]!)).toEqual(["Start working", "First steer", "Second steer"])
+      const { db } = yield* Database.Service
+      const settled = (yield* db
+        .select({ type: EventTable.type, data: EventTable.data })
+        .from(EventTable)
+        .where(eq(EventTable.aggregate_id, sessionID))
+        .orderBy(asc(EventTable.seq))
+        .all()
+        .pipe(Effect.orDie))
+        .findLast((event) => event.type === EventV2.versionedType(SessionEvent.Turn.Settled.type, 1))
+      expect(settled?.data).toMatchObject({
+        activityInputIDs: [initial.id, firstSteer.id, secondSteer.id],
+      })
+      expect(
+        systemContextRequests.some((request) =>
+          [initial.id, firstSteer.id, secondSteer.id].every((id) => request.activityInputIDs.includes(id)),
+        ),
+      ).toBe(true)
       yield* (yield* SessionRunCoordinator.Service).wake(sessionID)
       yield* Effect.yieldNow
       expect(requests).toHaveLength(2)
@@ -3185,6 +3275,12 @@ describe("SessionRunnerLLM", () => {
   it.effect("fails after the bounded number of local tool continuation steps", () =>
     Effect.gen(function* () {
       yield* setup
+      const agents = yield* AgentV2.Service
+      yield* agents.update((editor) =>
+        editor.update(AgentV2.ID.make("build"), (agent) => {
+          agent.steps = 3
+        }),
+      )
       const session = yield* SessionV2.Service
       yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Loop forever" }), resume: false })
 
@@ -3193,7 +3289,7 @@ describe("SessionRunnerLLM", () => {
       executions.length = 0
       streamGate = undefined
       streamStarted = undefined
-      responses = Array.from({ length: 25 }, (_, index) => [
+      responses = Array.from({ length: 3 }, (_, index) => [
         LLMEvent.stepStart({ index: 0 }),
         LLMEvent.toolCall({ id: `call-echo-${index}`, name: "echo", input: { text: `${index}` } }),
         LLMEvent.stepFinish({ index: 0, reason: "tool-calls" }),
@@ -3202,9 +3298,9 @@ describe("SessionRunnerLLM", () => {
 
       const failure = yield* session.resume(sessionID).pipe(Effect.flip)
 
-      expect(failure).toMatchObject({ _tag: "SessionRunner.StepLimitExceededError", sessionID, limit: 25 })
-      expect(requests).toHaveLength(25)
-      expect(executions).toHaveLength(25)
+      expect(failure).toMatchObject({ _tag: "SessionRunner.StepLimitExceededError", sessionID, limit: 3 })
+      expect(requests).toHaveLength(3)
+      expect(executions).toHaveLength(3)
     }),
   )
 

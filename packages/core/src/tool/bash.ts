@@ -122,32 +122,21 @@ export const layer = Layer.effectDiscard(
           toModelOutput: ({ output }) => [{ type: "text", text: modelOutput(output) }],
           execute: (input, context) =>
             Effect.gen(function* () {
-              const source = {
-                type: "tool" as const,
-                messageID: context.assistantMessageID,
-                callID: context.toolCallID,
-              }
               const target = yield* mutation.resolve({ path: input.workdir ?? ".", kind: "directory" })
               const external = target.externalDirectory
               if (external)
-                yield* permission.assert({
+                yield* permission.assert(Tool.permissionRequest(context, {
                   ...LocationMutation.externalDirectoryPermission(external),
-                  sessionID: context.sessionID,
-                  agent: context.agent,
-                  source,
-                })
+                }))
               const warnings = externalCommandDirectories(input.command, target.canonical).map(
                 (directory) =>
                   `Command argument references external directory ${path.join(directory, "*").replaceAll("\\", "/")}. Bash runs with host-user filesystem, process, and network authority; this scan is advisory only.`,
               )
-              yield* permission.assert({
+              yield* permission.assert(Tool.permissionRequest(context, {
                 action: name,
                 resources: [input.command],
                 save: [input.command],
-                sessionID: context.sessionID,
-                agent: context.agent,
-                source,
-              })
+              }))
 
               if ((yield* fs.stat(target.canonical)).type !== "Directory")
                 return yield* Effect.fail(new Error(`Working directory is not a directory: ${target.canonical}`))

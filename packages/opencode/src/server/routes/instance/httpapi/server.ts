@@ -28,6 +28,7 @@ import { InstanceLayer } from "@/project/instance-layer"
 import { Plugin } from "@/plugin"
 import { Project } from "@/project/project"
 import { ProjectV2 } from "@opencode-ai/core/project"
+import { LocationServiceMapLive } from "@opencode-ai/core/location-layer"
 import { ProjectCopy } from "@opencode-ai/core/project/copy"
 import { MoveSession } from "@opencode-ai/core/control-plane/move-session"
 import { ProviderAuth } from "@/provider/auth"
@@ -220,7 +221,7 @@ export function createRoutes(
       cors(corsOptions),
       Database.defaultLayer,
       Account.defaultLayer,
-      Agent.defaultLayer,
+      Agent.sharedDefaultLayer,
       Auth.defaultLayer,
       BackgroundJob.defaultLayer,
       Command.defaultLayer,
@@ -243,8 +244,8 @@ export function createRoutes(
       Question.defaultLayer,
       RuntimeFlags.defaultLayer,
       Session.defaultLayer,
-      SessionCompaction.defaultLayer,
-      SessionPrompt.defaultLayer,
+      SessionCompaction.sharedDefaultLayer,
+      SessionPrompt.sharedDefaultLayer,
       SessionRevert.defaultLayer,
       SessionShare.defaultLayer,
       SessionRunState.defaultLayer,
@@ -256,9 +257,9 @@ export function createRoutes(
       EventV2.defaultLayer,
       Skill.defaultLayer,
       Todo.defaultLayer,
-      ToolRegistry.defaultLayer,
+      ToolRegistry.sharedDefaultLayer,
       Vcs.defaultLayer,
-      Workspace.defaultLayer,
+      Workspace.sharedDefaultLayer,
       Worktree.appLayer,
       FSUtil.defaultLayer,
       FetchHttpClient.layer,
@@ -266,7 +267,8 @@ export function createRoutes(
     ]),
     Layer.provide(Layer.succeed(CorsConfig)(corsOptions)),
     Layer.provideMerge(Ripgrep.defaultLayer),
-    Layer.provide(InstanceLayer.layer),
+    Layer.provide(InstanceLayer.sharedLayer),
+    Layer.provide(LocationServiceMapLive),
     Layer.provideMerge(Observability.layer),
   )
 }

@@ -57,7 +57,7 @@ export const layer = Layer.effectDiscard(
           ],
           execute: (input, context) =>
             Effect.gen(function* () {
-              yield* permission.assert({
+              yield* permission.assert(Tool.permissionRequest(context, {
                 action: name,
                 resources: [input.pattern],
                 save: ["*"],
@@ -66,10 +66,7 @@ export const layer = Layer.effectDiscard(
                   path: input.path,
                   limit: input.limit,
                 },
-                sessionID: context.sessionID,
-                agent: context.agent,
-                source: { type: "tool", messageID: context.assistantMessageID, callID: context.toolCallID },
-              })
+              }))
               const cwd = path.resolve(location.directory, input.path ?? ".")
               return yield* ripgrep
                 .glob({

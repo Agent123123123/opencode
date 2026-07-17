@@ -770,4 +770,126 @@ describe("Config", () => {
       }),
     ),
   )
+
+  it.live("loads only managed global configuration when project configuration is disabled", () =>
+    Effect.acquireRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ).pipe(
+      Effect.flatMap((tmp) => {
+        const previous = process.env.OPENCODE_DISABLE_PROJECT_CONFIG
+        const global = path.join(tmp.path, "managed")
+        const root = path.join(tmp.path, "repo")
+        const directory = path.join(root, "work")
+        return Effect.acquireUseRelease(
+          Effect.sync(() => {
+            process.env.OPENCODE_DISABLE_PROJECT_CONFIG = "1"
+          }),
+          () =>
+            Effect.gen(function* () {
+              yield* Effect.promise(async () => {
+                await fs.mkdir(global, { recursive: true })
+                await fs.mkdir(path.join(directory, ".opencode"), { recursive: true })
+                await Promise.all([
+                  fs.writeFile(
+                    path.join(global, "opencode.json"),
+                    JSON.stringify({
+                      model: "openai/gpt-5.5",
+                      agents: { analyst: { model: "openai/gpt-5.5" } },
+                      skills: ["./managed-skills"],
+                    }),
+                  ),
+                  fs.writeFile(
+                    path.join(root, "opencode.json"),
+                    JSON.stringify({
+                      model: "zai-coding-plan/glm-5.1",
+                      agents: { leaked: { model: "zai-coding-plan/glm-5.1" } },
+                      skills: ["./leaked-skills"],
+                    }),
+                  ),
+                  fs.writeFile(
+                    path.join(directory, ".opencode", "opencode.json"),
+                    JSON.stringify({ plugins: ["leaked-plugin"] }),
+                  ),
+                ])
+              })
+              return yield* Effect.gen(function* () {
+                const config = yield* Config.Service
+                const entries = yield* config.entries()
+                const documents = entries.filter((entry) => entry.type === "document")
+
+                expect(entries.filter((entry) => entry.type === "directory").map((entry) => entry.path)).toEqual([
+                  AbsolutePath.make(global),
+                ])
+                expect(Config.latest(entries, "model")).toBe("openai/gpt-5.5")
+                expect(documents).toHaveLength(1)
+                expect(documents[0]?.info.agents?.analyst?.model).toBe("openai/gpt-5.5")
+                expect(documents[0]?.info.agents?.leaked).toBeUndefined()
+                expect(documents[0]?.info.skills).toEqual(["./managed-skills"])
+                expect(documents[0]?.info.plugins).toBeUndefined()
+              }).pipe(
+                Effect.provide(
+                  testLayer(directory, global, root, {
+                    type: "git",
+                    store: AbsolutePath.make(path.join(root, ".git")),
+                  }),
+                ),
+              )
+            }),
+          () =>
+            Effect.sync(() => {
+              if (previous === undefined) delete process.env.OPENCODE_DISABLE_PROJECT_CONFIG
+              else process.env.OPENCODE_DISABLE_PROJECT_CONFIG = previous
+            }),
+        )
+      }),
+    ),
+  )
+
+  it.live("applies explicit and inline configuration with inline content at highest priority", () =>
+    Effect.acquireRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ).pipe(
+      Effect.flatMap((tmp) => {
+        const previousFile = process.env.OPENCODE_CONFIG
+        const previousContent = process.env.OPENCODE_CONFIG_CONTENT
+        const global = path.join(tmp.path, "global")
+        const explicit = path.join(tmp.path, "custom.jsonc")
+        return Effect.acquireUseRelease(
+          Effect.sync(() => {
+            process.env.OPENCODE_CONFIG = explicit
+            process.env.OPENCODE_CONFIG_CONTENT = JSON.stringify({ model: "inline/model", username: "inline" })
+          }),
+          () =>
+            Effect.gen(function* () {
+              yield* Effect.promise(async () => {
+                await fs.mkdir(global, { recursive: true })
+                await Promise.all([
+                  fs.writeFile(path.join(global, "opencode.json"), JSON.stringify({ model: "global/model" })),
+                  fs.writeFile(explicit, JSON.stringify({ model: "explicit/model", username: "explicit" })),
+                ])
+              })
+              return yield* Effect.gen(function* () {
+                const config = yield* Config.Service
+                const entries = yield* config.entries()
+
+                expect(Config.latest(entries, "model")).toBe("inline/model")
+                expect(Config.latest(entries, "username")).toBe("inline")
+                expect(
+                  entries.filter((entry) => entry.type === "document").map((entry) => entry.path),
+                ).toEqual([path.join(global, "opencode.json"), explicit, "OPENCODE_CONFIG_CONTENT"])
+              }).pipe(Effect.provide(testLayer(tmp.path, global)))
+            }),
+          () =>
+            Effect.sync(() => {
+              if (previousFile === undefined) delete process.env.OPENCODE_CONFIG
+              else process.env.OPENCODE_CONFIG = previousFile
+              if (previousContent === undefined) delete process.env.OPENCODE_CONFIG_CONTENT
+              else process.env.OPENCODE_CONFIG_CONTENT = previousContent
+            }),
+        )
+      }),
+    ),
+  )
 })

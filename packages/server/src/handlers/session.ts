@@ -6,12 +6,15 @@ import { SessionsCursor } from "../groups/session"
 import {
   ConflictError,
   InvalidCursorError,
+  InvalidRequestError,
   ServiceUnavailableError,
   SessionNotFoundError,
   UnknownError,
 } from "../errors"
 import { AbsolutePath } from "@opencode-ai/core/schema"
 import { EventV2 } from "@opencode-ai/core/event"
+import { LocationServiceMap } from "@opencode-ai/core/location-layer"
+import { SessionSelection } from "@opencode-ai/core/session/selection"
 
 const DefaultSessionsLimit = 50
 
@@ -19,6 +22,7 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
   Effect.gen(function* () {
     const session = yield* SessionV2.Service
     const events = yield* EventV2.Service
+    const locations = yield* LocationServiceMap
 
     return handlers
       .handle(
@@ -67,13 +71,62 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
       .handle(
         "session.create",
         Effect.fn(function* (ctx) {
-          return {
-            data: yield* session.create({
-              id: ctx.payload.id,
-              agent: ctx.payload.agent,
-              model: ctx.payload.model,
-              location: ctx.payload.location ?? { directory: AbsolutePath.make(process.cwd()) },
+          const location = ctx.payload.location ?? { directory: AbsolutePath.make(process.cwd()) }
+          const selection = yield* SessionSelection.Service.use((service) =>
+            service.resolve({ agent: ctx.payload.agent, model: ctx.payload.model }),
+          ).pipe(
+            Effect.provide(locations.get(location)),
+            Effect.catchTags({
+              "SessionSelection.AgentNotFoundError": (error) =>
+                Effect.fail(new InvalidRequestError({ message: `Unknown agent: ${error.agent}`, field: "agent" })),
+              "SessionSelection.ModelNotSelectedError": () =>
+                Effect.fail(
+                  new ServiceUnavailableError({ message: "No supported model is available", service: "catalog" }),
+                ),
+              "SessionSelection.ModelUnsupportedError": (error) =>
+                Effect.fail(
+                  new InvalidRequestError({
+                    message: `Unsupported model: ${error.model.providerID}/${error.model.id}`,
+                    field: "model",
+                  }),
+                ),
+              "SessionSelection.VariantNotFoundError": (error) =>
+                Effect.fail(
+                  new InvalidRequestError({
+                    message: `Unknown model variant: ${error.model.variant}`,
+                    field: "model.variant",
+                  }),
+                ),
+              "CatalogV2.ProviderNotFound": (error) =>
+                Effect.fail(
+                  new InvalidRequestError({ message: `Unknown provider: ${error.providerID}`, field: "model.providerID" }),
+                ),
+              "CatalogV2.ModelNotFound": (error) =>
+                Effect.fail(
+                  new InvalidRequestError({ message: `Unknown model: ${error.modelID}`, field: "model.id" }),
+                ),
             }),
+          )
+          const created = yield* session.create({
+            id: ctx.payload.id,
+            title: ctx.payload.title,
+            agent: selection.agent,
+            model: selection.model,
+            location,
+          })
+          if (
+            created.agent !== selection.agent ||
+            created.model?.id !== selection.model.id ||
+            created.model.providerID !== selection.model.providerID ||
+            created.model.variant !== selection.model.variant ||
+            (ctx.payload.title !== undefined && created.title !== ctx.payload.title)
+          )
+            return yield* new ConflictError({
+              message: `Session ${created.id} already exists with a different title, agent, or model selection`,
+              resource: created.id,
+            })
+          return {
+            data: created,
           }
         }),
       )

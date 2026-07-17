@@ -198,15 +198,12 @@ export const layer = Layer.effectDiscard(
           execute: (input, context) => {
             const provider = selectProvider(context.sessionID, config, config.provider)
             return Effect.gen(function* () {
-              yield* permission.assert({
+              yield* permission.assert(Tool.permissionRequest(context, {
                 action: name,
                 resources: [input.query],
                 save: ["*"],
                 metadata: { ...input, provider },
-                sessionID: context.sessionID,
-                agent: context.agent,
-                source: { type: "tool", messageID: context.assistantMessageID, callID: context.toolCallID },
-              })
+              }))
 
               const text =
                 provider === "exa"

@@ -60,28 +60,17 @@ export const layer = Layer.effectDiscard(
             toModelOutput: ({ output }) => [{ type: "text", text: toModelOutput(output) }],
             execute: (input, context) =>
               Effect.gen(function* () {
-                const source = {
-                  type: "tool" as const,
-                  messageID: context.assistantMessageID,
-                  callID: context.toolCallID,
-                }
                 const target = yield* mutation.resolve({ path: input.path, kind: "file" })
                 const external = target.externalDirectory
                 if (external)
-                  yield* permission.assert({
+                  yield* permission.assert(Tool.permissionRequest(context, {
                     ...LocationMutation.externalDirectoryPermission(external),
-                    sessionID: context.sessionID,
-                    agent: context.agent,
-                    source,
-                  })
-                yield* permission.assert({
+                  }))
+                yield* permission.assert(Tool.permissionRequest(context, {
                   action: "edit",
                   resources: [target.resource],
                   save: ["*"],
-                  sessionID: context.sessionID,
-                  agent: context.agent,
-                  source,
-                })
+                }))
                 return yield* files.writeTextPreservingBom({ target, content: input.content })
               }).pipe(Effect.mapError(() => new ToolFailure({ message: `Unable to write ${input.path}` }))),
           }),

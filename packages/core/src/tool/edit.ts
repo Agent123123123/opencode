@@ -118,11 +118,6 @@ export const layer = Layer.effectDiscard(
                 )
 
               return Effect.gen(function* () {
-                const permissionSource = {
-                  type: "tool" as const,
-                  messageID: context.assistantMessageID,
-                  callID: context.toolCallID,
-                }
                 if (input.oldString === input.newString) {
                   return yield* new ToolFailure({
                     message: "No changes to apply: oldString and newString are identical.",
@@ -138,24 +133,18 @@ export const layer = Layer.effectDiscard(
                 const external = target.externalDirectory
                 if (external) {
                   yield* unableToEdit(
-                    permission.assert({
+                    permission.assert(Tool.permissionRequest(context, {
                       ...LocationMutation.externalDirectoryPermission(external),
-                      sessionID: context.sessionID,
-                      agent: context.agent,
-                      source: permissionSource,
-                    }),
+                    })),
                   )
                 }
 
                 yield* unableToEdit(
-                  permission.assert({
+                  permission.assert(Tool.permissionRequest(context, {
                     action: "edit",
                     resources: [target.resource],
                     save: ["*"],
-                    sessionID: context.sessionID,
-                    agent: context.agent,
-                    source: permissionSource,
-                  }),
+                  })),
                 )
                 const source = decodeUtf8(yield* unableToEdit(fs.readFile(target.canonical)))
                 const ending = detectLineEnding(source.text)

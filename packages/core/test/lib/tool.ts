@@ -5,7 +5,9 @@ import { Effect } from "effect"
 
 export const toolIdentity = {
   agent: AgentV2.ID.make("build"),
+  turnID: SessionMessage.ID.make("msg_turn_tool_test"),
   assistantMessageID: SessionMessage.ID.make("msg_tool_test"),
+  activityInputIDs: [SessionMessage.ID.make("msg_input_tool_test")],
 }
 
 export const toolDefinitions = (

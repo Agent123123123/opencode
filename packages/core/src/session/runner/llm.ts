@@ -7,7 +7,7 @@ import {
   isContextOverflowFailure,
   type ProviderErrorEvent,
 } from "@opencode-ai/llm"
-import { Cause, DateTime, Effect, FiberSet, Layer, Option, Schema, Semaphore, Stream } from "effect"
+import { Cause, DateTime, Effect, Exit, FiberSet, Layer, Option, Schema, Semaphore, Stream } from "effect"
 import { AgentV2 } from "../../agent"
 import { Config } from "../../config"
 import { Database } from "../../database/database"
@@ -29,6 +29,7 @@ import { SessionHistory } from "../history"
 import { SessionInput } from "../input"
 import { SessionMessage } from "../message"
 import { SessionSchema } from "../schema"
+import { SessionSelection } from "../selection"
 import { SessionStore } from "../store"
 import { type RunError, Service, StepLimitExceededError } from "./index"
 import { SessionRunnerModel } from "./model"
@@ -86,7 +87,7 @@ import { toLLMMessages } from "./to-llm-message"
  */
 
 // QUESTION: Did this exist previously, or did we add this limit? Does it make sense?
-const MAX_STEPS = 25
+const DEFAULT_MAX_STEPS = 25
 
 export const layer = Layer.effect(
   Service,
@@ -96,6 +97,7 @@ export const layer = Layer.effect(
     const agents = yield* AgentV2.Service
     const tools = yield* ToolRegistry.Service
     const models = yield* SessionRunnerModel.Service
+    const selections = yield* SessionSelection.Service
     const store = yield* SessionStore.Service
     const location = yield* Location.Service
     const systemContext = yield* SystemContextRegistry.Service
@@ -154,6 +156,13 @@ export const layer = Layer.effect(
       }
     }
 
+    type Activity = {
+      readonly turnID: SessionMessage.ID
+      readonly turnStartedAt: DateTime.Utc
+      started: boolean
+      activityInputIDs: ReadonlyArray<SessionMessage.ID>
+    }
+
     const rebuildPreparedTurn = (promotion?: SessionInput.Delivery) =>
       new TurnTransitionError({ _tag: "RebuildPreparedTurn", promotion })
     const continueAfterOverflowCompaction = new TurnTransitionError({
@@ -168,23 +177,52 @@ export const layer = Layer.effect(
       )
 
     const sameModel = Schema.toEquivalence(Schema.UndefinedOr(ModelV2.Ref))
-    const loadSystemContext = (agent: AgentV2.Selection) =>
-      Effect.all([systemContext.load(), skillGuidance.load(agent), referenceGuidance.load()], {
+    const loadSystemContext = (
+      session: SessionSchema.Info,
+      agent: AgentV2.Selection,
+      effectiveModel: ModelV2.Ref,
+      activityInputIDs: ReadonlyArray<SessionMessage.ID> = [],
+    ) =>
+      Effect.all([systemContext.load({ session, agent, effectiveModel, activityInputIDs }), skillGuidance.load(agent), referenceGuidance.load()], {
         concurrency: "unbounded",
       }).pipe(Effect.map(SystemContext.combine))
 
     const runTurnAttempt = Effect.fn("SessionRunner.runTurn")(function* (
       sessionID: SessionSchema.ID,
       promotion: SessionInput.Delivery | undefined,
+      activity: Activity,
       recoverOverflow?: typeof compaction.compactAfterOverflow,
     ) {
       const session = yield* getSession(sessionID)
       if (session.location.directory !== location.directory || session.location.workspaceID !== location.workspaceID)
         return yield* Effect.interrupt
-      const agent = yield* agents.select(session.agent)
+      const selection = yield* selections.resolve({ agent: session.agent, model: session.model })
+      const timestamp = yield* DateTime.now
+      if (session.agent !== selection.agent)
+        yield* events.publish(SessionEvent.AgentSwitched, {
+          sessionID: session.id,
+          timestamp,
+          messageID: SessionMessage.ID.create(),
+          agent: selection.agent,
+        })
+      if (session.model === undefined)
+        yield* events.publish(SessionEvent.ModelSwitched, {
+          sessionID: session.id,
+          timestamp,
+          messageID: SessionMessage.ID.create(),
+          model: selection.model,
+        })
+      if (session.agent !== selection.agent || session.model === undefined)
+        return yield* Effect.die(rebuildPreparedTurn(promotion))
+      const agent = yield* agents.select(selection.agent)
+      const cutoff = promotion ? yield* SessionInput.latestSeq(db, session.id) : -1
+      const pendingActivityInputIDs = promotion
+        ? yield* SessionInput.pendingActivityIDs(db, session.id, promotion, cutoff)
+        : []
+      activity.activityInputIDs = mergeInputIDs(activity.activityInputIDs, pendingActivityInputIDs)
       const initialized = yield* SessionContextEpoch.initialize(
         db,
-        loadSystemContext(agent),
+        loadSystemContext(session, agent, selection.model, activity.activityInputIDs),
         session.id,
         session.location,
         agent.id,
@@ -192,7 +230,6 @@ export const layer = Layer.effect(
       const toolFibers = yield* FiberSet.make<void, ToolOutputStore.Error>()
       let needsContinuation = false
       if (promotion) {
-        const cutoff = yield* SessionInput.latestSeq(db, session.id)
         if (promotion === "steer") yield* SessionInput.promoteSteers(db, events, session.id, cutoff)
         if (promotion === "queue") {
           yield* SessionInput.promoteNextQueued(db, events, session.id)
@@ -204,7 +241,7 @@ export const layer = Layer.effect(
         (yield* SessionContextEpoch.prepare(
           db,
           events,
-          loadSystemContext(agent),
+          loadSystemContext(session, agent, selection.model, activity.activityInputIDs),
           session.id,
           session.location,
           agent.id,
@@ -215,7 +252,18 @@ export const layer = Layer.effect(
       const model = yield* models.resolve(session)
       const entries = yield* SessionHistory.entriesForRunner(db, session.id, system.baselineSeq)
       const context = entries.map((entry) => entry.message)
-      const activityInputIDs = currentActivityInputIDs(context)
+      const activityInputIDs = mergeInputIDs(activity.activityInputIDs, currentActivityInputIDs(context))
+      activity.activityInputIDs = activityInputIDs
+      if (!activity.started) {
+        yield* events.publish(SessionEvent.Turn.Started, {
+          sessionID: session.id,
+          timestamp: activity.turnStartedAt,
+          turnID: activity.turnID,
+          turnStartedAt: activity.turnStartedAt,
+          activityInputIDs,
+        })
+        activity.started = true
+      }
       const toolMaterialization = yield* tools.materialize(agent.info?.permissions)
       const promptCacheKey = /^ses_[0-9a-f]{64}$/.test(session.id) ? session.id.slice(4) : session.id
       const request = LLM.request({
@@ -226,6 +274,9 @@ export const layer = Layer.effect(
           .map(SystemPart.make),
         messages: toLLMMessages(context, model),
         tools: toolMaterialization.definitions,
+        http: agent.info
+          ? { headers: agent.info.request.headers, body: agent.info.request.body }
+          : undefined,
       })
       if (yield* compaction.compactIfNeeded({ sessionID: session.id, entries, model, request }))
         return yield* Effect.die(rebuildPreparedTurn())
@@ -264,6 +315,7 @@ export const layer = Layer.effect(
                 toolMaterialization.settle({
                   sessionID: session.id,
                   agent: agent.id,
+                  turnID: activity.turnID,
                   assistantMessageID,
                   activityInputIDs,
                   call: event,
@@ -344,31 +396,32 @@ export const layer = Layer.effect(
     type RunTurn = (
       sessionID: SessionSchema.ID,
       promotion: SessionInput.Delivery | undefined,
+      activity: Activity,
     ) => Effect.Effect<boolean, RunError>
 
-    const runAfterOverflowCompaction: RunTurn = Effect.fnUntraced(function* (sessionID, promotion) {
-      return yield* runTurnAttempt(sessionID, promotion).pipe(
+    const runAfterOverflowCompaction: RunTurn = Effect.fnUntraced(function* (sessionID, promotion, activity) {
+      return yield* runTurnAttempt(sessionID, promotion, activity).pipe(
         Effect.catchDefect(
           Effect.fnUntraced(function* (defect) {
             if (!(defect instanceof TurnTransitionError)) return yield* Effect.die(defect)
             if (defect.transition._tag === "ContinueAfterOverflowCompaction")
               return yield* Effect.die("Post-compaction provider attempt cannot recover another overflow")
             yield* Effect.yieldNow
-            return yield* runAfterOverflowCompaction(sessionID, defect.transition.promotion)
+            return yield* runAfterOverflowCompaction(sessionID, defect.transition.promotion, activity)
           }),
         ),
       )
     })
 
-    const runTurn: RunTurn = Effect.fnUntraced(function* (sessionID, promotion) {
-      return yield* runTurnAttempt(sessionID, promotion, compaction.compactAfterOverflow).pipe(
+    const runTurn: RunTurn = Effect.fnUntraced(function* (sessionID, promotion, activity) {
+      return yield* runTurnAttempt(sessionID, promotion, activity, compaction.compactAfterOverflow).pipe(
         Effect.catchDefect(
           Effect.fnUntraced(function* (defect) {
             if (!(defect instanceof TurnTransitionError)) return yield* Effect.die(defect)
             yield* Effect.yieldNow
             if (defect.transition._tag === "ContinueAfterOverflowCompaction")
-              return yield* runAfterOverflowCompaction(sessionID, undefined)
-            return yield* runTurn(sessionID, defect.transition.promotion)
+              return yield* runAfterOverflowCompaction(sessionID, undefined, activity)
+            return yield* runTurn(sessionID, defect.transition.promotion, activity)
           }),
         ),
       )
@@ -385,15 +438,55 @@ export const layer = Layer.effect(
       let promotion: SessionInput.Delivery | undefined = hasSteer ? "steer" : hasQueue ? "queue" : undefined
       let openActivity = input.force === true || hasSteer || hasQueue
       while (openActivity) {
-        let needsContinuation = true
-        for (let step = 0; step < MAX_STEPS; step++) {
-          needsContinuation = yield* runTurn(input.sessionID, promotion)
-          promotion = "steer"
-          if (!needsContinuation) needsContinuation = yield* SessionInput.hasPending(db, input.sessionID, "steer")
-          if (!needsContinuation) break
+        const activity: Activity = {
+          turnID: SessionMessage.ID.create(),
+          turnStartedAt: yield* DateTime.now,
+          started: false,
+          activityInputIDs: [],
         }
-        if (needsContinuation)
-          return yield* new StepLimitExceededError({ sessionID: input.sessionID, limit: MAX_STEPS })
+        const activityExit = yield* Effect.uninterruptibleMask((restore) =>
+          restore(
+            Effect.gen(function* () {
+              const session = yield* getSession(input.sessionID)
+              const agent = yield* agents.select(session.agent)
+              const maxSteps = agent.info?.steps ?? DEFAULT_MAX_STEPS
+              let needsContinuation = true
+              for (let step = 0; step < maxSteps; step++) {
+                needsContinuation = yield* runTurn(input.sessionID, promotion, activity)
+                promotion = "steer"
+                if (!needsContinuation)
+                  needsContinuation = yield* SessionInput.hasPending(db, input.sessionID, "steer")
+                if (!needsContinuation) break
+              }
+              if (needsContinuation)
+                return yield* new StepLimitExceededError({ sessionID: input.sessionID, limit: maxSteps })
+            }),
+          ).pipe(
+            Effect.exit,
+            Effect.tap((exit) => {
+              if (!activity.started) return Effect.void
+              const interrupted = Exit.isFailure(exit) && Cause.hasInterrupts(exit.cause)
+              const error = Exit.isFailure(exit) ? Option.getOrUndefined(Cause.findErrorOption(exit.cause)) : undefined
+              return events.publish(SessionEvent.Turn.Settled, {
+                sessionID: input.sessionID,
+                timestamp: DateTime.makeUnsafe(Date.now()),
+                schema: "opencode.turn_settled.v1",
+                turnID: activity.turnID,
+                turnStartedAt: activity.turnStartedAt,
+                activityInputIDs: activity.activityInputIDs,
+                outcome: interrupted ? "aborted" : Exit.isFailure(exit) ? "error" : "completed",
+                ...(Exit.isFailure(exit)
+                  ? {
+                      reason: error instanceof Error ? error.message : interrupted ? "Activity interrupted" : "Activity failed",
+                      errorClass: interrupted ? ("interrupt" as const) : ("unknown" as const),
+                      ...(interrupted ? { abortOrigin: "framework" as const } : {}),
+                    }
+                  : {}),
+              })
+            }),
+          ),
+        )
+        if (Exit.isFailure(activityExit)) return yield* Effect.failCause(activityExit.cause)
         openActivity = yield* SessionInput.hasPending(db, input.sessionID, "queue")
         promotion = openActivity ? "queue" : undefined
       }
@@ -425,3 +518,8 @@ const currentActivityInputIDs = (messages: ReadonlyArray<SessionMessage.Message>
   }
   return inputIDs
 }
+
+const mergeInputIDs = (
+  current: ReadonlyArray<SessionMessage.ID>,
+  added: ReadonlyArray<SessionMessage.ID>,
+): ReadonlyArray<SessionMessage.ID> => [...new Set([...current, ...added])]

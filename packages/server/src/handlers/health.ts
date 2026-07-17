@@ -13,7 +13,7 @@ export const HealthHandler = HttpApiBuilder.group(Api, "server.health", (handler
         sessionEventReplay: true,
         toolExecutionIdentity: true,
         transportActivityEvents: false,
-        activitySettlement: false,
+        activitySettlement: true,
         targetedInterrupt: false,
       },
     })),

@@ -2,15 +2,26 @@ export * as SystemContextRegistry from "./registry"
 
 import { Context, Effect, Layer, Ref, Scope } from "effect"
 import { SystemContext } from "./index"
+import { SessionSchema } from "../session/schema"
+import { SessionMessage } from "../session/message"
+import { AgentV2 } from "../agent"
+import { ModelV2 } from "../model"
+
+export interface Request {
+  readonly session: SessionSchema.Info
+  readonly agent: AgentV2.Selection
+  readonly activityInputIDs: ReadonlyArray<SessionMessage.ID>
+  readonly effectiveModel?: ModelV2.Ref
+}
 
 export interface Entry {
   readonly key: SystemContext.Key
-  readonly load: Effect.Effect<SystemContext.SystemContext>
+  readonly load: (request: Request) => Effect.Effect<SystemContext.SystemContext>
 }
 
 export interface Interface {
   readonly register: (entry: Entry) => Effect.Effect<void, never, Scope.Scope>
-  readonly load: () => Effect.Effect<SystemContext.SystemContext>
+  readonly load: (request: Request) => Effect.Effect<SystemContext.SystemContext>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/v2/SystemContextRegistry") {}
@@ -35,10 +46,10 @@ export const layer = Layer.effect(
           (entry) => Ref.update(entries, (current) => current.filter((item) => item !== entry)),
         )
       }),
-      load: Effect.fn("SystemContextRegistry.load")(function* () {
+      load: Effect.fn("SystemContextRegistry.load")(function* (request) {
         const current = (yield* Ref.get(entries)).toSorted((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0))
         return SystemContext.combine(
-          yield* Effect.forEach(current, (entry) => entry.load, { concurrency: "unbounded" }),
+          yield* Effect.forEach(current, (entry) => entry.load(request), { concurrency: "unbounded" }),
         )
       }),
     })

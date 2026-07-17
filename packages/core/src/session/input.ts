@@ -195,6 +195,49 @@ export const hasPending = Effect.fn("SessionInput.hasPending")(function* (
   return row !== undefined
 })
 
+/**
+ * Returns the exact input identity that a promotion will admit into the current
+ * activity. This is intentionally read before promotion so session-aware system
+ * context contributors receive the same identity as the eventual prompt, tool,
+ * and turn-settlement events.
+ */
+export const pendingActivityIDs = Effect.fn("SessionInput.pendingActivityIDs")(function* (
+  db: DatabaseService,
+  sessionID: SessionSchema.ID,
+  delivery: Delivery,
+  cutoff: number,
+) {
+  const pending = and(
+    eq(SessionInputTable.session_id, sessionID),
+    isNull(SessionInputTable.promoted_seq),
+  )
+  const queued =
+    delivery === "queue"
+      ? yield* db
+          .select({ id: SessionInputTable.id })
+          .from(SessionInputTable)
+          .where(and(pending, eq(SessionInputTable.delivery, "queue")))
+          .orderBy(asc(SessionInputTable.admitted_seq))
+          .limit(1)
+          .all()
+          .pipe(Effect.orDie)
+      : []
+  const steers = yield* db
+    .select({ id: SessionInputTable.id })
+    .from(SessionInputTable)
+    .where(
+      and(
+        pending,
+        eq(SessionInputTable.delivery, "steer"),
+        lte(SessionInputTable.admitted_seq, cutoff),
+      ),
+    )
+    .orderBy(asc(SessionInputTable.admitted_seq))
+    .all()
+    .pipe(Effect.orDie)
+  return [...queued, ...steers].map((row) => SessionMessage.ID.make(row.id))
+})
+
 export const equivalent = (
   input: Admitted,
   expected: {

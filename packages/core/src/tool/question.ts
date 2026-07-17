@@ -59,13 +59,10 @@ export const layer = Layer.effectDiscard(
           ],
           execute: (input, context) =>
             permission
-              .assert({
+              .assert(Tool.permissionRequest(context, {
                 action: "question",
                 resources: ["*"],
-                sessionID: context.sessionID,
-                agent: context.agent,
-                source: { type: "tool", messageID: context.assistantMessageID, callID: context.toolCallID },
-              })
+              }))
               .pipe(
                 Effect.mapError(() => new ToolFailure({ message: "Permission denied: question" })),
                 Effect.andThen(

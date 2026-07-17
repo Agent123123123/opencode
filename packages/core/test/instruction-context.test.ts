@@ -12,6 +12,9 @@ import { SystemContextRegistry } from "@opencode-ai/core/system-context/registry
 import { location } from "./fixture/location"
 import { tmpdir } from "./fixture/tmpdir"
 import { testEffect } from "./lib/effect"
+import { systemContextRequest } from "./fixture/system-context"
+
+const contextRequest = systemContextRequest()
 
 const it = testEffect(Layer.empty)
 
@@ -40,7 +43,7 @@ describe("InstructionContext", () => {
           })
 
           const load = SystemContextRegistry.Service.pipe(
-            Effect.flatMap((service) => service.load()),
+            Effect.flatMap((service) => service.load(contextRequest)),
             Effect.provide(InstructionContext.layer.pipe(Layer.provideMerge(SystemContextRegistry.layer))),
             Effect.provide(FSUtil.defaultLayer),
             Effect.provide(Global.layerWith({ config: global })),
@@ -106,7 +109,7 @@ describe("InstructionContext", () => {
           const file = path.join(tmp.path, "AGENTS.md")
           yield* Effect.promise(() => fs.writeFile(file, ""))
           const context = yield* SystemContextRegistry.Service.pipe(
-            Effect.flatMap((service) => service.load()),
+            Effect.flatMap((service) => service.load(contextRequest)),
             Effect.provide(InstructionContext.layer.pipe(Layer.provideMerge(SystemContextRegistry.layer))),
             Effect.provide(FSUtil.defaultLayer),
             Effect.provide(Global.layerWith({ config: path.join(tmp.path, "global") })),
@@ -135,7 +138,7 @@ describe("InstructionContext", () => {
         ),
       ).pipe(Layer.provide(FSUtil.defaultLayer))
       const context = yield* SystemContextRegistry.Service.pipe(
-        Effect.flatMap((service) => service.load()),
+        Effect.flatMap((service) => service.load(contextRequest)),
         Effect.provide(InstructionContext.layer.pipe(Layer.provideMerge(SystemContextRegistry.layer))),
         Effect.provide(failingFS),
         Effect.provide(Global.layerWith({ config: "/global" })),
@@ -171,7 +174,7 @@ describe("InstructionContext", () => {
         ),
       ).pipe(Layer.provide(FSUtil.defaultLayer))
       const context = yield* SystemContextRegistry.Service.pipe(
-        Effect.flatMap((service) => service.load()),
+        Effect.flatMap((service) => service.load(contextRequest)),
         Effect.provide(InstructionContext.layer.pipe(Layer.provideMerge(SystemContextRegistry.layer))),
         Effect.provide(racingFS),
         Effect.provide(Global.layerWith({ config: "/global" })),
@@ -211,7 +214,7 @@ describe("InstructionContext", () => {
       ).pipe(Layer.provide(FSUtil.defaultLayer))
 
       yield* SystemContextRegistry.Service.pipe(
-        Effect.flatMap((service) => service.load()),
+        Effect.flatMap((service) => service.load(contextRequest)),
         Effect.provide(InstructionContext.layer.pipe(Layer.provideMerge(SystemContextRegistry.layer))),
         Effect.provide(observingFS),
         Effect.provide(Global.layerWith({ config: "/global" })),
@@ -240,7 +243,7 @@ describe("InstructionContext", () => {
       process.env.OPENCODE_DISABLE_PROJECT_CONFIG = "1"
 
       yield* SystemContextRegistry.Service.pipe(
-        Effect.flatMap((service) => service.load()),
+        Effect.flatMap((service) => service.load(contextRequest)),
         Effect.provide(InstructionContext.layer.pipe(Layer.provideMerge(SystemContextRegistry.layer))),
         Effect.provide(
           Layer.effect(
@@ -270,7 +273,7 @@ describe("InstructionContext", () => {
     Effect.gen(function* () {
       let scanned = false
       yield* SystemContextRegistry.Service.pipe(
-        Effect.flatMap((service) => service.load()),
+        Effect.flatMap((service) => service.load(contextRequest)),
         Effect.provide(InstructionContext.layer.pipe(Layer.provideMerge(SystemContextRegistry.layer))),
         Effect.provide(
           Layer.effect(

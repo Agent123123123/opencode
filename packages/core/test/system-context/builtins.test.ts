@@ -10,12 +10,14 @@ import { SystemContextBuiltIns } from "@opencode-ai/core/system-context/builtins
 import { SystemContextRegistry } from "@opencode-ai/core/system-context/registry"
 import { location } from "../fixture/location"
 import { testEffect } from "../lib/effect"
+import { systemContextRequest } from "../fixture/system-context"
 
 const directory = AbsolutePath.make(FSUtil.resolve("/repo/packages/core"))
 const projectDirectory = AbsolutePath.make(FSUtil.resolve("/repo"))
 const instructionFile = FSUtil.resolve("/repo/AGENTS.md")
 const timestamp = Date.parse("2026-06-03T12:00:00.000Z")
 const localDate = (time: number) => new Date(time).toDateString()
+const request = systemContextRequest(directory)
 const locationLayer = Layer.succeed(
   Location.Service,
   Location.Service.of(
@@ -57,7 +59,7 @@ describe("SystemContextBuiltIns", () => {
     Effect.gen(function* () {
       yield* TestClock.setTime(timestamp)
       const context = yield* SystemContextRegistry.Service
-      const initialized = yield* SystemContext.initialize(yield* context.load())
+      const initialized = yield* SystemContext.initialize(yield* context.load(request))
 
       expect(initialized.baseline).toBe(
         [
@@ -79,10 +81,10 @@ describe("SystemContextBuiltIns", () => {
     Effect.gen(function* () {
       yield* TestClock.setTime(timestamp)
       const context = yield* SystemContextRegistry.Service
-      const initialized = yield* SystemContext.initialize(yield* context.load())
+      const initialized = yield* SystemContext.initialize(yield* context.load(request))
 
       yield* TestClock.setTime(timestamp + 24 * 60 * 60 * 1000)
-      const refreshed = yield* SystemContext.reconcile(yield* context.load(), initialized.snapshot)
+      const refreshed = yield* SystemContext.reconcile(yield* context.load(request), initialized.snapshot)
 
       expect(refreshed).toMatchObject({
         _tag: "Updated",
@@ -95,10 +97,10 @@ describe("SystemContextBuiltIns", () => {
     Effect.gen(function* () {
       yield* TestClock.setTime(timestamp)
       const context = yield* SystemContextRegistry.Service
-      const initialized = yield* SystemContext.initialize(yield* context.load())
+      const initialized = yield* SystemContext.initialize(yield* context.load(request))
 
       yield* TestClock.setTime(timestamp + 60 * 60 * 1000)
-      expect(yield* SystemContext.reconcile(yield* context.load(), initialized.snapshot)).toEqual({ _tag: "Unchanged" })
+      expect(yield* SystemContext.reconcile(yield* context.load(request), initialized.snapshot)).toEqual({ _tag: "Unchanged" })
     }),
   )
 
@@ -107,7 +109,7 @@ describe("SystemContextBuiltIns", () => {
       yield* TestClock.setTime(timestamp)
       const context = yield* SystemContextRegistry.Service
 
-      expect((yield* SystemContext.initialize(yield* context.load())).baseline).toBe(
+      expect((yield* SystemContext.initialize(yield* context.load(request))).baseline).toBe(
         [
           "Here is some useful information about the environment you are running in:",
           "<env>",

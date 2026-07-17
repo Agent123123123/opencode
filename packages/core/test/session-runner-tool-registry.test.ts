@@ -6,6 +6,7 @@ import { SessionV2 } from "@opencode-ai/core/session"
 import { SessionMessage } from "@opencode-ai/core/session/message"
 import { ToolOutputStore } from "@opencode-ai/core/tool-output-store"
 import { ToolRegistry } from "@opencode-ai/core/tool/registry"
+import { ToolExecutionPolicy } from "@opencode-ai/core/tool/execution-policy"
 import { executeTool, settleTool, toolDefinitions } from "./lib/tool"
 import { Cause, Deferred, Effect, Exit, Fiber, Layer, Option, Schema, SchemaGetter, SchemaIssue, Scope } from "effect"
 import { testEffect } from "./lib/effect"
@@ -27,11 +28,16 @@ const outputStore = Layer.mock(ToolOutputStore.Service, {
     )
   },
 })
-const registry = ToolRegistry.layer.pipe(Layer.provide(ApplicationTools.layer), Layer.provide(outputStore))
+const registry = ToolRegistry.layer.pipe(
+  Layer.provide(ApplicationTools.layer),
+  Layer.provide(outputStore),
+  Layer.provide(ToolExecutionPolicy.emptyLayer),
+)
 const it = testEffect(registry)
 const integrated = testEffect(Layer.mergeAll(ApplicationTools.layer, registry))
 const identity = {
   agent: AgentV2.ID.make("build"),
+  turnID: SessionMessage.ID.make("msg_turn_registry"),
   assistantMessageID: SessionMessage.ID.make("msg_registry"),
   activityInputIDs: [SessionMessage.ID.make("msg_input_registry")],
 }

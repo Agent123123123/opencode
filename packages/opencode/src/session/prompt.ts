@@ -58,6 +58,7 @@ import * as DateTime from "effect/DateTime"
 import { eq } from "drizzle-orm"
 import { SessionTable } from "@opencode-ai/core/session/sql"
 import { SessionReminders } from "./reminders"
+import { LocationServiceMapLive } from "@opencode-ai/core/location-layer"
 import { SessionTools } from "./tools"
 import { LLMEvent } from "@opencode-ai/llm"
 
@@ -1546,17 +1547,17 @@ export const layer = Layer.effect(
   }),
 )
 
-export const defaultLayer = Layer.suspend(() =>
+export const sharedDefaultLayer = Layer.suspend(() =>
   layer.pipe(
     Layer.provide(SessionRunState.defaultLayer),
     Layer.provide(SessionStatus.defaultLayer),
-    Layer.provide(SessionCompaction.defaultLayer),
-    Layer.provide(SessionProcessor.defaultLayer),
+    Layer.provide(SessionCompaction.sharedDefaultLayer),
+    Layer.provide(SessionProcessor.sharedDefaultLayer),
     Layer.provide(Command.defaultLayer),
     Layer.provide(Permission.defaultLayer),
     Layer.provide(MCP.defaultLayer),
     Layer.provide(LSP.defaultLayer),
-    Layer.provide(ToolRegistry.defaultLayer),
+    Layer.provide(ToolRegistry.sharedDefaultLayer),
     Layer.provide(Truncate.defaultLayer),
     Layer.provide(Provider.defaultLayer),
     Layer.provide(Config.defaultLayer),
@@ -1569,9 +1570,9 @@ export const defaultLayer = Layer.suspend(() =>
     Layer.provide(Image.defaultLayer),
     Layer.provide(
       Layer.mergeAll(
-        Agent.defaultLayer,
+        Agent.sharedDefaultLayer,
         Database.defaultLayer,
-        SystemPrompt.defaultLayer,
+        SystemPrompt.sharedDefaultLayer,
         LLM.defaultLayer,
         CrossSpawnSpawner.defaultLayer,
         RuntimeFlags.defaultLayer,
@@ -1580,6 +1581,8 @@ export const defaultLayer = Layer.suspend(() =>
     ),
   ),
 )
+
+export const defaultLayer = sharedDefaultLayer.pipe(Layer.provide(LocationServiceMapLive))
 const ModelRef = Schema.Struct({
   providerID: ProviderV2.ID,
   modelID: ModelV2.ID,

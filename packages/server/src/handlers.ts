@@ -29,7 +29,6 @@ import { ConnectorHandler } from "./handlers/connector"
 export const liveSessions = SessionV2.layer.pipe(
   Layer.provide(SessionProjector.layer),
   Layer.provide(SessionExecutionLocal.layer),
-  Layer.provide(LocationServiceMap.layer),
   Layer.provide(SessionStore.layer),
   Layer.provide(EventV2.layer),
   Layer.provide(Database.defaultLayer),
@@ -58,5 +57,4 @@ export const handlers = Layer.mergeAll(
   Layer.provide(locationLayer),
   Layer.provide(liveSessions),
   Layer.provide(PermissionSaved.defaultLayer),
-  Layer.provide(LocationServiceMap.layer),
 )

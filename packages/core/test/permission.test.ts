@@ -11,6 +11,7 @@ import { Project } from "@opencode-ai/core/project"
 import { ProjectTable } from "@opencode-ai/core/project/sql"
 import { AbsolutePath } from "@opencode-ai/core/schema"
 import { SessionV2 } from "@opencode-ai/core/session"
+import { SessionMessage } from "@opencode-ai/core/session/message"
 import { SessionTable } from "@opencode-ai/core/session/sql"
 import { SessionExecution } from "@opencode-ai/core/session/execution"
 import { SessionStore } from "@opencode-ai/core/session/store"
@@ -87,8 +88,12 @@ function assertion(input: Partial<PermissionV2.AssertInput> = {}) {
   return {
     id: PermissionV2.ID.create("per_test"),
     sessionID: SessionV2.ID.make("ses_test"),
+    turnID: SessionMessage.ID.make("msg_turn_test"),
+    assistantMessageID: SessionMessage.ID.make("msg_assistant_test"),
+    activityInputIDs: [SessionMessage.ID.make("msg_input_test")],
     action: "read",
     resources: ["src/index.ts"],
+    source: { type: "tool", messageID: "msg_assistant_test", callID: "call_test" },
     ...input,
   } satisfies PermissionV2.AssertInput
 }
@@ -100,7 +105,10 @@ function waitForRequest() {
     const asked = yield* Deferred.make<PermissionV2.Request>()
     const unsubscribe = yield* events.listen((event) =>
       event.type === PermissionV2.Event.Asked.type
-        ? Deferred.succeed(asked, event.data as PermissionV2.Request).pipe(Effect.asVoid)
+        ? Deferred.succeed(asked, (() => {
+            const { timestamp: _timestamp, ...request } = event.data as PermissionV2.Request & { timestamp: unknown }
+            return request as PermissionV2.Request
+          })()).pipe(Effect.asVoid)
         : Effect.void,
     )
     yield* Effect.addFinalizer(() => unsubscribe)
@@ -111,6 +119,54 @@ function waitForRequest() {
 }
 
 describe("PermissionV2", () => {
+  it.effect("retains v1 decoders while publishing identity-complete v2 events", () =>
+    Effect.gen(function* () {
+      expect(PermissionV2.Event.AskedV1.sync?.version).toBe(1)
+      expect(PermissionV2.Event.RepliedV1.sync?.version).toBe(1)
+      expect(PermissionV2.Event.Asked.sync?.version).toBe(2)
+      expect(PermissionV2.Event.Replied.sync?.version).toBe(2)
+      const events = yield* EventV2.Service
+      const sessionID = SessionV2.ID.make("ses_legacy_permission")
+      yield* events.replay({
+        id: EventV2.ID.create(),
+        type: EventV2.versionedType(PermissionV2.Event.AskedV1.type, 1),
+        seq: 0,
+        aggregateID: sessionID,
+        data: {
+          timestamp: Date.now(),
+          sessionID,
+          id: PermissionV2.ID.create("per_legacy"),
+          action: "read",
+          resources: ["AGENTS.md"],
+        },
+      })
+      yield* events.replay({
+        id: EventV2.ID.create(),
+        type: EventV2.versionedType(PermissionV2.Event.RepliedV1.type, 1),
+        seq: 1,
+        aggregateID: sessionID,
+        data: {
+          timestamp: Date.now(),
+          sessionID,
+          requestID: PermissionV2.ID.create("per_legacy"),
+          reply: "once",
+        },
+      })
+      const history = yield* events.aggregateHistory({ aggregateID: sessionID })
+      expect(history).toHaveLength(2)
+      expect(history[0]?.event).toMatchObject({
+        type: PermissionV2.Event.AskedV1.type,
+        version: 1,
+        data: { sessionID, action: "read", resources: ["AGENTS.md"] },
+      })
+      expect(history[1]?.event).toMatchObject({
+        type: PermissionV2.Event.RepliedV1.type,
+        version: 1,
+        data: { sessionID, requestID: PermissionV2.ID.create("per_legacy"), reply: "once" },
+      })
+    }),
+  )
+
   it.effect("returns the evaluated effect and only queues prompts", () =>
     Effect.gen(function* () {
       yield* setup([{ action: "read", resource: "*", effect: "allow" }])
@@ -157,6 +213,24 @@ describe("PermissionV2", () => {
       yield* setRules([{ action: "read", resource: "*", effect: "deny" }])
       const denied = yield* service.assert(assertion()).pipe(Effect.flip)
       expect(denied).toBeInstanceOf(PermissionV2.DeniedError)
+      expect(yield* service.list()).toEqual([])
+    }),
+  )
+
+  it.effect("fails hidden agents closed instead of creating an approval wait", () =>
+    Effect.gen(function* () {
+      yield* setup()
+      const agents = yield* AgentV2.Service
+      yield* agents.update((editor) =>
+        editor.update(AgentV2.ID.make("test"), (agent) => {
+          agent.hidden = true
+          agent.permissions = []
+        }),
+      )
+      const service = yield* PermissionV2.Service
+
+      expect(yield* service.ask(assertion())).toMatchObject({ effect: "deny" })
+      expect(yield* service.assert(assertion()).pipe(Effect.flip)).toBeInstanceOf(PermissionV2.DeniedError)
       expect(yield* service.list()).toEqual([])
     }),
   )
@@ -263,11 +337,32 @@ describe("PermissionV2", () => {
     Effect.gen(function* () {
       yield* setup()
       const { service, fiber, request } = yield* waitForRequest()
+      const events = yield* EventV2.Service
+      const replied = yield* Deferred.make<typeof PermissionV2.Event.Replied.Type>()
+      const unsubscribe = yield* events.listen((event) =>
+        event.type === PermissionV2.Event.Replied.type
+          ? Deferred.succeed(replied, event.data as typeof PermissionV2.Event.Replied.Type).pipe(Effect.asVoid)
+          : Effect.void,
+      )
+      yield* Effect.addFinalizer(() => unsubscribe)
       expect(yield* service.list()).toEqual([request])
+      expect(request).toMatchObject({
+        turnID: SessionMessage.ID.make("msg_turn_test"),
+        assistantMessageID: SessionMessage.ID.make("msg_assistant_test"),
+        activityInputIDs: [SessionMessage.ID.make("msg_input_test")],
+        source: { type: "tool", messageID: "msg_assistant_test", callID: "call_test" },
+      })
       expect(yield* service.forSession(request.sessionID)).toEqual([request])
       expect(yield* service.forSession(SessionV2.ID.make("ses_other"))).toEqual([])
       expect(yield* service.get(request.id)).toEqual(request)
       yield* service.reply({ requestID: request.id, reply: "once" })
+      expect(yield* Deferred.await(replied)).toMatchObject({
+        turnID: request.turnID,
+        assistantMessageID: request.assistantMessageID,
+        activityInputIDs: request.activityInputIDs,
+        requestID: request.id,
+        reply: "once",
+      })
       yield* Fiber.join(fiber)
       expect(yield* service.list()).toEqual([])
       expect(yield* service.get(request.id)).toBeUndefined()

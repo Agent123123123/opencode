@@ -3,10 +3,13 @@ import { Cause, Effect, Exit, Schema, Scope } from "effect"
 import { SystemContext } from "@opencode-ai/core/system-context"
 import { SystemContextRegistry } from "@opencode-ai/core/system-context/registry"
 import { testEffect } from "../lib/effect"
+import { systemContextRequest } from "../fixture/system-context"
+
+const request = systemContextRequest()
 
 const entry = (key: string, text: string, sourceKey = key) => ({
   key: SystemContext.Key.make(key),
-  load: Effect.succeed(
+  load: () => Effect.succeed(
     SystemContext.make({
       key: SystemContext.Key.make(sourceKey),
       codec: Schema.toCodecJson(Schema.String),
@@ -24,7 +27,7 @@ describe("SystemContextRegistry", () => {
     Effect.gen(function* () {
       const registry = yield* SystemContextRegistry.Service
 
-      expect(yield* SystemContext.initialize(yield* registry.load())).toEqual({ baseline: "", snapshot: {} })
+      expect(yield* SystemContext.initialize(yield* registry.load(request))).toEqual({ baseline: "", snapshot: {} })
     }),
   )
 
@@ -34,7 +37,7 @@ describe("SystemContextRegistry", () => {
       yield* registry.register(entry("test/second", "second"))
       yield* registry.register(entry("test/first", "first"))
 
-      expect((yield* SystemContext.initialize(yield* registry.load())).baseline).toBe("first\n\nsecond")
+      expect((yield* SystemContext.initialize(yield* registry.load(request))).baseline).toBe("first\n\nsecond")
     }),
   )
 
@@ -44,14 +47,14 @@ describe("SystemContextRegistry", () => {
       let loads = 0
       yield* registry.register({
         key: SystemContext.Key.make("test/dynamic"),
-        load: Effect.sync(() => {
+        load: () => Effect.sync(() => {
           loads++
           return SystemContext.empty
         }),
       })
 
-      yield* registry.load()
-      yield* registry.load()
+      yield* registry.load(request)
+      yield* registry.load(request)
 
       expect(loads).toBe(2)
     }),
@@ -61,9 +64,9 @@ describe("SystemContextRegistry", () => {
     Effect.gen(function* () {
       const registry = yield* SystemContextRegistry.Service
       const failure = new Error("entry failed")
-      yield* registry.register({ key: SystemContext.Key.make("test/failure"), load: Effect.die(failure) })
+      yield* registry.register({ key: SystemContext.Key.make("test/failure"), load: () => Effect.die(failure) })
 
-      const exit = yield* registry.load().pipe(Effect.exit)
+      const exit = yield* registry.load(request).pipe(Effect.exit)
 
       expect(Exit.isFailure(exit)).toBe(true)
       if (Exit.isFailure(exit)) expect(Cause.squash(exit.cause)).toBe(failure)
@@ -76,7 +79,7 @@ describe("SystemContextRegistry", () => {
       yield* registry.register(entry("test/first", "first", "test/duplicate"))
       yield* registry.register(entry("test/second", "second", "test/duplicate"))
 
-      const exit = yield* registry.load().pipe(Effect.exit)
+      const exit = yield* registry.load(request).pipe(Effect.exit)
 
       expect(Exit.isFailure(exit)).toBe(true)
       if (Exit.isFailure(exit)) {
@@ -104,10 +107,10 @@ describe("SystemContextRegistry", () => {
       const scope = yield* Scope.make()
       yield* registry.register(entry("test/scoped", "scoped")).pipe(Scope.provide(scope))
 
-      expect((yield* SystemContext.initialize(yield* registry.load())).baseline).toBe("scoped")
+      expect((yield* SystemContext.initialize(yield* registry.load(request))).baseline).toBe("scoped")
 
       yield* Scope.close(scope, Exit.void)
-      expect(yield* SystemContext.initialize(yield* registry.load())).toEqual({ baseline: "", snapshot: {} })
+      expect(yield* SystemContext.initialize(yield* registry.load(request))).toEqual({ baseline: "", snapshot: {} })
     }),
   )
 })

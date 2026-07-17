@@ -144,15 +144,12 @@ export const layer = Layer.effectDiscard(
                 catch: (error) => error,
               })
 
-              yield* permission.assert({
+              yield* permission.assert(Tool.permissionRequest(context, {
                 action: name,
                 resources: [input.url],
                 save: ["*"],
                 metadata: input,
-                sessionID: context.sessionID,
-                agent: context.agent,
-                source: { type: "tool", messageID: context.assistantMessageID, callID: context.toolCallID },
-              })
+              }))
 
               const { body, contentType } = yield* Effect.gen(function* () {
                 const response = yield* execute(http, input.url, input.format).pipe(

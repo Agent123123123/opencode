@@ -5,6 +5,8 @@ import { Effect, Layer, Schema } from "effect"
 import { AgentV2 } from "@opencode-ai/core/agent"
 import { Config } from "@opencode-ai/core/config"
 import { ConfigAgentPlugin } from "@opencode-ai/core/config/plugin/agent"
+import { ConfigMigrateV1 } from "@opencode-ai/core/v1/config/migrate"
+import { ConfigV1 } from "@opencode-ai/core/v1/config/config"
 import { FSUtil } from "@opencode-ai/core/fs-util"
 import { PermissionV2 } from "@opencode-ai/core/permission"
 import { AbsolutePath } from "@opencode-ai/core/schema"
@@ -15,6 +17,61 @@ const it = testEffect(Layer.mergeAll(AgentV2.locationLayer, FSUtil.defaultLayer)
 const decode = Schema.decodeUnknownSync(Config.Info)
 
 describe("ConfigAgentPlugin.Plugin", () => {
+  it.effect("materializes the Motryx managed V1 projection into complete native AgentV2 roles", () =>
+    Effect.gen(function* () {
+      const sidecar = path.resolve(import.meta.dir, "../../../../../ic-plugin/src/sidecar/main.ts")
+      const legacy = yield* Effect.promise(async () => {
+        const process = Bun.spawn(
+          [
+            "bun",
+            sidecar,
+            "managed-agent-v1-config",
+            "--strong-model",
+            "openai/gpt-5.5",
+            "--weak-model",
+            "zai-coding-plan/glm-5.1",
+          ],
+          { stdout: "pipe", stderr: "pipe" },
+        )
+        const [exitCode, stdout, stderr] = await Promise.all([
+          process.exited,
+          new Response(process.stdout).text(),
+          new Response(process.stderr).text(),
+        ])
+        if (exitCode !== 0) throw new Error(`managed config compiler failed: ${stderr}`)
+        return JSON.parse(stdout) as Record<string, unknown>
+      })
+      const migrated = ConfigMigrateV1.migrate(
+        Schema.decodeUnknownSync(ConfigV1.Info)({ agent: legacy }),
+      )
+      const config = Config.Service.of({
+        entries: () =>
+          Effect.succeed([
+            new Config.Document({ type: "document", info: decode(migrated) }),
+          ]),
+      })
+      const agents = yield* AgentV2.Service
+
+      yield* ConfigAgentPlugin.Plugin.effect.pipe(
+        Effect.provideService(Config.Service, config),
+        Effect.provideService(AgentV2.Service, agents),
+      )
+
+      const analyst = yield* agents.get(AgentV2.ID.make("analyst"))
+      expect(analyst).toMatchObject({
+        model: { providerID: "openai", id: "gpt-5.5", variant: "high" },
+        mode: "subagent",
+        hidden: true,
+        description: expect.any(String),
+        system: expect.stringContaining("Analyst"),
+      })
+      expect(analyst?.permissions).toContainEqual({ action: "question", resource: "*", effect: "deny" })
+      expect(PermissionV2.evaluate("read", "README.md", analyst?.permissions ?? []).effect).toBe("allow")
+      expect(yield* agents.get(AgentV2.ID.make("build"))).toBeUndefined()
+      expect(yield* agents.get(AgentV2.ID.make("plan"))).toBeUndefined()
+    }),
+  )
+
   it.effect("applies all global permissions before agent-specific permissions", () =>
     Effect.gen(function* () {
       const agents = yield* AgentV2.Service
