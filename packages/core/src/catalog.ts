@@ -89,6 +89,8 @@ export class Service extends Context.Service<Service, Interface>()("@opencode/v2
 
 enableMapSet()
 
+const OPENAI_CODEX_BASE_URL = "https://chatgpt.com/backend-api/codex"
+
 export const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
@@ -103,15 +105,32 @@ export const layer = Layer.effect(
       const credential = active.get(ConnectorSchema.ID.make(provider.id))
       if (!credential) return provider
       const body = { ...provider.request.body }
+      const headers = { ...provider.request.headers }
+      let api = provider.api
       if (credential.value.type === "key") {
         body.apiKey = credential.value.key
         Object.assign(body, credential.value.metadata ?? {})
       }
-      if (credential.value.type === "oauth") body.apiKey = credential.value.access
+      if (credential.value.type === "oauth") {
+        body.apiKey = credential.value.access
+        if (
+          provider.id === ProviderV2.ID.openai &&
+          credential.methodID.startsWith("chatgpt-") &&
+          api.type === "aisdk" &&
+          api.package === "@ai-sdk/openai"
+        ) {
+          api = { ...api, url: OPENAI_CODEX_BASE_URL }
+          body.store = false
+          headers.originator = "opencode"
+          const accountID = credential.value.metadata?.accountID
+          if (accountID) headers["ChatGPT-Account-Id"] = accountID
+        }
+      }
       return new ProviderV2.Info({
         ...provider,
+        api,
         enabled: { via: "credential", credentialID: credential.id },
-        request: { ...provider.request, body },
+        request: { ...provider.request, headers, body },
       })
     }
 

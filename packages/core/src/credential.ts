@@ -108,7 +108,11 @@ export const legacyImportLayer = Layer.effectDiscard(
     const global = yield* Global.Service
     const name = "credential.auth-json"
     if (yield* db.select().from(DataMigrationTable).where(eq(DataMigrationTable.name, name)).get()) return
-    const raw = yield* fs.readJson(path.join(global.data, "auth.json")).pipe(Effect.option)
+    const raw = yield* fs.readJson(
+      process.env.MOTRYX_EFFECTIVE_AUTH_FILE ??
+        process.env.MOTRYX_AUTH_FILE ??
+        path.join(global.data, "auth.json"),
+    ).pipe(Effect.option)
     if (Option.isNone(raw) || typeof raw.value !== "object" || raw.value === null || Array.isArray(raw.value)) return
     const decode = Schema.decodeUnknownOption(LegacyValue)
     const values = Object.entries(raw.value).flatMap(([connectorID, value]) => {

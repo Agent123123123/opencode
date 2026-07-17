@@ -59,7 +59,7 @@ describe("ConfigAgentPlugin.Plugin", () => {
 
       const analyst = yield* agents.get(AgentV2.ID.make("analyst"))
       expect(analyst).toMatchObject({
-        model: { providerID: "openai", id: "gpt-5.5", variant: "high" },
+        model: { providerID: "openai", id: "gpt-5.5", variant: undefined },
         mode: "subagent",
         hidden: true,
         description: expect.any(String),

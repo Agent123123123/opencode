@@ -27,6 +27,61 @@ const it = testEffect(
 )
 
 describe("CatalogV2", () => {
+  it.effect("routes imported OpenAI ChatGPT OAuth through the Codex endpoint", () => {
+    const connectorID = Connector.ID.make("openai")
+    const credential = new Credential.Info({
+      id: Credential.ID.create(),
+      connectorID,
+      methodID: Connector.MethodID.make("chatgpt-browser"),
+      label: "Motryx",
+      value: new Credential.OAuth({
+        type: "oauth",
+        refresh: "refresh",
+        access: "access",
+        expires: Date.now() + 60_000,
+        metadata: { accountID: "account" },
+      }),
+    })
+    const layer = Catalog.locationLayer.pipe(
+      Layer.fresh,
+      Layer.provideMerge(EventV2.defaultLayer),
+      Layer.provideMerge(locationLayer),
+      Layer.provideMerge(
+        Layer.mock(Credential.Service)({ activeAll: () => Effect.succeed(new Map([[connectorID, credential]])) }),
+      ),
+    )
+
+    return Effect.gen(function* () {
+      const catalog = yield* Catalog.Service
+      const transform = yield* catalog.transform()
+      yield* transform((editor) => {
+        editor.provider.update(ProviderV2.ID.openai, (provider) => {
+          provider.api = { type: "aisdk", package: "@ai-sdk/openai" }
+        })
+        editor.model.update(ProviderV2.ID.openai, ModelV2.ID.make("gpt-5.5"), () => {})
+      })
+
+      expect(yield* catalog.provider.get(ProviderV2.ID.openai)).toMatchObject({
+        api: {
+          type: "aisdk",
+          package: "@ai-sdk/openai",
+          url: "https://chatgpt.com/backend-api/codex",
+        },
+        request: {
+          headers: { originator: "opencode", "ChatGPT-Account-Id": "account" },
+          body: { apiKey: "access", store: false },
+        },
+      })
+      expect(yield* catalog.model.get(ProviderV2.ID.openai, ModelV2.ID.make("gpt-5.5"))).toMatchObject({
+        api: { url: "https://chatgpt.com/backend-api/codex" },
+        request: {
+          headers: { originator: "opencode", "ChatGPT-Account-Id": "account" },
+          body: { apiKey: "access", store: false },
+        },
+      })
+    }).pipe(Effect.provide(layer))
+  })
+
   it.effect("projects active credentials without rebuilding catalog state", () => {
     const connectorID = Connector.ID.make("test")
     const methodID = Connector.MethodID.make("api-key")

@@ -22,6 +22,63 @@ function testLayer(directory: string) {
 }
 
 describe("Credential", () => {
+  it.live("imports credentials from the Motryx effective auth store", () =>
+    Effect.acquireRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ).pipe(
+      Effect.flatMap((tmp) =>
+        Effect.acquireUseRelease(
+          Effect.sync(() => {
+            const previous = process.env.MOTRYX_EFFECTIVE_AUTH_FILE
+            process.env.MOTRYX_EFFECTIVE_AUTH_FILE = path.join(tmp.path, "motryx-auth.json")
+            return previous
+          }),
+          () =>
+            Effect.gen(function* () {
+              yield* Effect.promise(() =>
+                Bun.write(
+                  process.env.MOTRYX_EFFECTIVE_AUTH_FILE!,
+                  JSON.stringify({
+                    openai: { type: "oauth", refresh: "refresh", access: "access", expires: 123 },
+                    "zai-coding-plan": { type: "api", key: "zai-key" },
+                  }),
+                ),
+              )
+              const database = Database.layerFromPath(path.join(tmp.path, "credential.db")).pipe(Layer.fresh)
+              const importer = Credential.legacyImportLayer.pipe(
+                Layer.provide(database),
+                Layer.provide(FSUtil.defaultLayer),
+                Layer.provide(Global.layerWith({ data: path.join(tmp.path, "unrelated-global-data") })),
+              )
+              const credentials = Credential.layer.pipe(
+                Layer.provide(database),
+                Layer.provide(EventV2.defaultLayer),
+                Layer.provideMerge(importer),
+              )
+              const result = yield* Effect.gen(function* () {
+                return yield* (yield* Credential.Service).all()
+              }).pipe(Effect.provide(credentials), Effect.scoped)
+
+              expect(result.map((item) => item.connectorID).sort()).toEqual([
+                Connector.ID.make("openai"),
+                Connector.ID.make("zai-coding-plan"),
+              ])
+              expect(result.find((item) => item.connectorID === "zai-coding-plan")?.value).toMatchObject({
+                type: "key",
+                key: "zai-key",
+              })
+            }),
+          (previous) =>
+            Effect.sync(() => {
+              if (previous === undefined) delete process.env.MOTRYX_EFFECTIVE_AUTH_FILE
+              else process.env.MOTRYX_EFFECTIVE_AUTH_FILE = previous
+            }),
+        ),
+      ),
+    ),
+  )
+
   it.live("imports supported legacy auth.json credentials once", () =>
     Effect.acquireRelease(
       Effect.promise(() => tmpdir()),
