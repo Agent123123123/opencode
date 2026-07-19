@@ -19,6 +19,13 @@ function catalogConfig() {
   const config = testProviderConfig(url)
   return {
     ...config,
+    agent: {
+      "hidden-worker": {
+        mode: "primary" as const,
+        hidden: true,
+        model: "test/test-model",
+      },
+    },
     provider: {
       ...config.provider,
       test: {
@@ -155,6 +162,20 @@ describe("v2 location HttpApi", () => {
     const readback = await request(`/api/session/${id}`, tmp.path)
     expect(readback.status).toBe(200)
     expect(await readback.json()).toMatchObject({ data: payload })
+
+    const hidden = await request("/api/session", tmp.path, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        ...payload,
+        id: "ses_hidden_primary",
+        agent: "hidden-worker",
+      }),
+    })
+    expect({ status: hidden.status, body: await hidden.json() }).toMatchObject({
+      status: 200,
+      body: { data: { id: "ses_hidden_primary", agent: "hidden-worker" } },
+    })
   })
 
   test("keeps standard plugin tools attached to the V2 session location", async () => {
