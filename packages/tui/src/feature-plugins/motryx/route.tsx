@@ -1,6 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 import type { TuiPluginApi } from "@opencode-ai/plugin/tui"
-import type { Message } from "@opencode-ai/sdk/v2"
+import type { SessionMessage, SessionV2Info } from "@opencode-ai/sdk/v2"
+import path from "node:path"
 import { useTerminalDimensions } from "@opentui/solid"
 import { For, Show, createMemo, createSignal, onCleanup, onMount } from "solid-js"
 import {
@@ -37,17 +38,57 @@ export function MotryxRoute(props: {
   const [connection, setConnection] = createSignal<MotryxProjectionState>(
     config ? { phase: "connecting" } : { phase: "unbound", detail: props.configError },
   )
+  const [conversation, setConversation] = createSignal<{
+    session: SessionV2Info
+    messages: SessionMessage[]
+  }>()
+  const [transcriptError, setTranscriptError] = createSignal<string>()
   const layout = createMemo(() => motryxProductLayout(dimensions()))
-  const session = createMemo(() => (config ? props.api.state.session.get(config.orchestratorSessionID) : undefined))
-  const transcript = createMemo(() => {
-    if (!config) return []
-    return projectTranscript(props.api.state.session.messages(config.orchestratorSessionID), (messageID) =>
-      props.api.state.part(messageID),
-    )
-  })
+  const transcript = createMemo(() => projectTranscript(conversation()?.messages ?? []))
+  let conversationRead = 0
+  let disposed = false
+
+  async function refreshConversation() {
+    if (!config) return
+    const read = ++conversationRead
+    try {
+      const [session, messages] = await Promise.all([
+        props.api.client.v2.session.get({ sessionID: config.orchestratorSessionID }, { throwOnError: true }),
+        props.api.client.v2.session.messages(
+          { sessionID: config.orchestratorSessionID, limit: 100, order: "desc" },
+          { throwOnError: true },
+        ),
+      ])
+      if (disposed || props.api.lifecycle.signal.aborted || read !== conversationRead) return
+      if (session.data.data.id !== config.orchestratorSessionID) {
+        throw new Error(`OpenCode returned unexpected session ${session.data.data.id}`)
+      }
+      if (path.resolve(session.data.data.location.directory) !== config.projectID) {
+        throw new Error(`OpenCode session location does not match ${config.projectID}`)
+      }
+      setConversation({
+        session: session.data.data,
+        messages: messages.data.data.toReversed(),
+      })
+      setTranscriptError(undefined)
+    } catch (error) {
+      if (disposed || props.api.lifecycle.signal.aborted || read !== conversationRead) return
+      setTranscriptError(error instanceof Error ? error.message : String(error))
+    }
+  }
 
   onMount(() => {
     if (!config) return
+    void refreshConversation()
+    const offPrompted = props.api.event.on("session.next.prompted", (event) => {
+      if (event.properties.sessionID === config.orchestratorSessionID) void refreshConversation()
+    })
+    const offSettled = props.api.event.on("session.turn.settled", (event) => {
+      if (event.properties.sessionID === config.orchestratorSessionID) void refreshConversation()
+    })
+    const offModel = props.api.event.on("session.next.model.switched", (event) => {
+      if (event.properties.sessionID === config.orchestratorSessionID) void refreshConversation()
+    })
     const controller = createMotryxProjectionController({
       config,
       fetcher: props.fetcher,
@@ -58,6 +99,11 @@ export function MotryxRoute(props: {
     props.onRefreshAvailable(controller.refresh)
     void controller.start()
     onCleanup(() => {
+      disposed = true
+      conversationRead += 1
+      offPrompted()
+      offSettled()
+      offModel()
       props.onRefreshAvailable(undefined)
       controller.dispose()
     })
@@ -113,9 +159,10 @@ export function MotryxRoute(props: {
           <Show when={layout().showTranscript}>
             <TranscriptPanel
               api={props.api}
-              session={session()}
+              session={conversation()?.session}
               items={transcript()}
               sessionID={config?.orchestratorSessionID ?? ""}
+              error={transcriptError()}
             />
           </Show>
         </box>
@@ -241,9 +288,10 @@ function LaneRow(props: { api: TuiPluginApi; lane: MotryxLaneProjection; ordinal
 
 function TranscriptPanel(props: {
   api: TuiPluginApi
-  session?: ReturnType<TuiPluginApi["state"]["session"]["get"]>
+  session?: SessionV2Info
   items: TranscriptItem[]
   sessionID: string
+  error?: string
 }) {
   const model = () => props.session?.model
   return (
@@ -279,7 +327,11 @@ function TranscriptPanel(props: {
       >
         <Show
           when={props.items.length > 0}
-          fallback={<text fg={props.api.theme.current.textMuted}>No visible conversation text yet.</text>}
+          fallback={
+            <text fg={props.api.theme.current.textMuted}>
+              {props.error ? `OpenCode conversation unavailable: ${props.error}` : "No visible conversation text yet."}
+            </text>
+          }
         >
           <For each={props.items}>
             {(item) => (
@@ -300,22 +352,25 @@ function TranscriptPanel(props: {
 }
 
 export function projectTranscript(
-  messages: readonly Message[],
-  parts: (messageID: string) => readonly { type: string; text?: string; ignored?: boolean; synthetic?: boolean }[],
+  messages: readonly SessionMessage[],
 ): TranscriptItem[] {
   return messages
     .flatMap((message) => {
-      const text = parts(message.id)
-        .filter((part) => part.type === "text" && !part.ignored && !part.synthetic && typeof part.text === "string")
-        .map((part) => part.text)
-        .join("\n")
+      if (message.type !== "user" && message.type !== "assistant") return []
+      const text =
+        message.type === "user"
+          ? message.text
+          : message.content
+              .filter((part) => part.type === "text")
+              .map((part) => part.text)
+              .join("\n")
       const visible = sanitizeTranscript(text)
       if (!visible) return []
       return [
         {
           id: message.id,
-          role: message.role,
-          label: message.role === "user" ? "you" : message.agent || "assistant",
+          role: message.type,
+          label: message.type === "user" ? "you" : message.agent || "assistant",
           text: visible,
         } satisfies TranscriptItem,
       ]
@@ -331,7 +386,10 @@ const INTERNAL_LOG = [
   /\bliveness recovery\b/i,
 ]
 
+const INTERNAL_MESSAGE = [/^\s*<ic_agent_wakeup>/i, /^\s*<active-inbox-item>/i]
+
 function sanitizeTranscript(value: string) {
+  if (INTERNAL_MESSAGE.some((pattern) => pattern.test(value))) return
   const text = value
     .trim()
     .split(/\r?\n/)
