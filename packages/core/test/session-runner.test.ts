@@ -573,7 +573,11 @@ describe("SessionRunnerLLM", () => {
             }),
         }),
       })
-      yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Use application context" }), resume: false })
+      const admitted = yield* session.prompt({
+        sessionID,
+        prompt: Prompt.make({ text: "Use application context" }),
+        resume: false,
+      })
       responses = [
         [
           LLMEvent.stepStart({ index: 0 }),
@@ -587,12 +591,16 @@ describe("SessionRunnerLLM", () => {
       yield* session.resume(sessionID)
 
       expect(requests[0]?.tools.map((tool) => tool.name)).toContain("application_context")
-      expect(contexts).toEqual([
+      expect(contexts).toMatchObject([
         {
           sessionID,
           agent: AgentV2.ID.make("build"),
           assistantMessageID: expect.stringMatching(/^msg_/),
+          activityInputIDs: [admitted.id],
           toolCallID: "call-application",
+          abort: expect.any(AbortSignal),
+          progress: expect.any(Function),
+          ask: expect.any(Function),
         },
       ])
       expect(yield* session.context(sessionID)).toMatchObject([

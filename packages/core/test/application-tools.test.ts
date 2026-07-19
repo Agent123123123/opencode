@@ -62,7 +62,7 @@ describe("ApplicationTools", () => {
           { type: "file", uri: "data:image/png;base64,aGVsbG8=", mime: "image/png", name: "result.png" },
         ],
       })
-      expect(contexts).toEqual([{ sessionID, agent, assistantMessageID, toolCallID: "call-opaque" }])
+      expect(contexts).toMatchObject([{ sessionID, agent, assistantMessageID, toolCallID: "call-opaque" }])
     }),
   )
 
@@ -101,7 +101,7 @@ describe("ApplicationTools", () => {
           call: { type: "tool-call", id: "call-denied", name: "application_context", input: { query: "hello" } },
         }),
       ).toMatchObject({ result: { type: "content" } })
-      expect(contexts).toEqual([{ sessionID, agent, assistantMessageID, toolCallID: "call-denied" }])
+      expect(contexts).toMatchObject([{ sessionID, agent, assistantMessageID, toolCallID: "call-denied" }])
     }),
   )
 
@@ -139,7 +139,7 @@ describe("ApplicationTools", () => {
           ],
         },
       })
-      expect(contexts).toEqual([{ sessionID, agent, assistantMessageID, toolCallID: "call-context" }])
+      expect(contexts).toMatchObject([{ sessionID, agent, assistantMessageID, toolCallID: "call-context" }])
     }),
   )
 
@@ -252,8 +252,8 @@ describe("ApplicationTools", () => {
         call: { type: "tool-call", id: "call-first", name: "contextual", input: { query: "first" } },
       })
 
-      expect(secondContexts).toEqual([{ sessionID, agent, assistantMessageID, toolCallID: "call-second" }])
-      expect(firstContexts).toEqual([{ sessionID, agent, assistantMessageID, toolCallID: "call-first" }])
+      expect(secondContexts).toMatchObject([{ sessionID, agent, assistantMessageID, toolCallID: "call-second" }])
+      expect(firstContexts).toMatchObject([{ sessionID, agent, assistantMessageID, toolCallID: "call-first" }])
     }),
   )
 
@@ -280,7 +280,7 @@ describe("ApplicationTools", () => {
           call: { type: "tool-call", id: "call-shared", name: "shared", input: { query: "location" } },
         }),
       ).toMatchObject({ result: { type: "content" } })
-      expect(locationContexts).toEqual([{ sessionID, agent, assistantMessageID, toolCallID: "call-shared" }])
+      expect(locationContexts).toMatchObject([{ sessionID, agent, assistantMessageID, toolCallID: "call-shared" }])
       expect(applicationContexts).toEqual([])
     }),
   )

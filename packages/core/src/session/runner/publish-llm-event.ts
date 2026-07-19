@@ -236,6 +236,20 @@ export const createLLMEventPublisher = (events: EventV2.Interface, input: Input)
     return tool ? Effect.succeed(tool.assistantMessageID) : Effect.die(`Unknown tool call: ${callID}`)
   }
 
+  const progress = Effect.fn("SessionRunner.publishToolProgress")(function* (callID: string, output: ToolOutput) {
+    const tool = tools.get(callID)
+    if (!tool?.called) return yield* Effect.die(`Tool progress before call: ${callID}`)
+    if (tool.settled) return yield* Effect.die(`Tool progress after settlement: ${callID}`)
+    yield* events.publish(SessionEvent.Tool.Progress, {
+      sessionID: input.sessionID,
+      timestamp: yield* timestamp,
+      assistantMessageID: tool.assistantMessageID,
+      callID,
+      structured: record(output.structured),
+      content: output.content,
+    })
+  })
+
   const publish = Effect.fn("SessionRunner.publishLLMEvent")(function* (
     event: LLMEvent,
     outputPaths: ReadonlyArray<string> = [],
@@ -419,5 +433,6 @@ export const createLLMEventPublisher = (events: EventV2.Interface, input: Input)
     stepSettlement: () => stepSettlement,
     startAssistant,
     assistantMessageID: assistantMessageIDForTool,
+    progress,
   }
 }

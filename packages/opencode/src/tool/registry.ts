@@ -122,14 +122,7 @@ const layer = Layer.effect(
           // boxed at the registry boundary and give the LLM the original JSON Schema.
           // Normalize missing args to `{}` once — pre-1.14.49 the code was
           // `z.object(def.args)` and Zod silently tolerated undefined (#27451, #27630).
-          const args = def.args ?? {}
-          const entries = Object.entries(args)
-          const allZod = entries.every((entry) => isZodType(entry[1]))
-          const zodParams = allZod ? z.object(args) : undefined
-          const jsonSchema = zodParams ? zodJsonSchema(zodParams) : legacyJsonSchema(entries)
-          const parameters = zodParams
-            ? Schema.declare<unknown>((u): u is unknown => zodParams.safeParse(u).success)
-            : Schema.Unknown
+          const { parameters, jsonSchema } = pluginToolSchema(def)
           return {
             id,
             parameters,
@@ -345,6 +338,20 @@ const layer = Layer.effect(
 
 function isZodType(value: unknown): value is z.ZodType {
   return typeof value === "object" && value !== null && "_zod" in value
+}
+
+/** Standard plugin argument compatibility shared by the V1 and V2 execution paths. */
+export function pluginToolSchema(definition: ToolDefinition) {
+  const args = definition.args ?? {}
+  const entries = Object.entries(args)
+  const allZod = entries.every((entry) => isZodType(entry[1]))
+  const zodParams = allZod ? z.object(args) : undefined
+  return {
+    parameters: zodParams
+      ? Schema.declare<unknown>((value): value is unknown => zodParams.safeParse(value).success)
+      : Schema.Unknown,
+    jsonSchema: zodParams ? zodJsonSchema(zodParams) : legacyJsonSchema(entries),
+  }
 }
 
 function isPluginTool(value: unknown): value is ToolDefinition {

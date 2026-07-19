@@ -76,9 +76,9 @@ const layer = Layer.effectDiscard(
               ),
             },
           ],
-          execute: (input, context) =>
-            Effect.gen(function* () {
-              yield* permission.assert({
+          authorize: (input, context) =>
+            permission
+              .assert({
                 action: name,
                 resources: [input.pattern],
                 save: ["*"],
@@ -92,6 +92,9 @@ const layer = Layer.effectDiscard(
                 agent: context.agent,
                 source: { type: "tool", messageID: context.assistantMessageID, callID: context.toolCallID },
               })
+              .pipe(Effect.mapError(() => new ToolFailure({ message: `Unable to grep for ${input.pattern}` }))),
+          execute: (input) =>
+            Effect.gen(function* () {
               const target = path.resolve(location.directory, input.path ?? ".")
               const info = yield* fs.stat(target).pipe(Effect.catch(() => Effect.succeed(undefined)))
               return yield* ripgrep

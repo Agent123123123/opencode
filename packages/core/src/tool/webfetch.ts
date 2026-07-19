@@ -128,7 +128,7 @@ const layer = Layer.effectDiscard(
           input: Input,
           output: Output,
           toModelOutput: ({ output }) => [{ type: "text", text: output.output }],
-          execute: (input, context) =>
+          authorize: (input, context) =>
             Effect.gen(function* () {
               yield* Effect.try({
                 try: () => assertHttpUrl(new URL(input.url)),
@@ -144,7 +144,9 @@ const layer = Layer.effectDiscard(
                 agent: context.agent,
                 source: { type: "tool", messageID: context.assistantMessageID, callID: context.toolCallID },
               })
-
+            }).pipe(Effect.mapError(() => new ToolFailure({ message: `Unable to fetch ${input.url}` }))),
+          execute: (input) =>
+            Effect.gen(function* () {
               const { body, contentType } = yield* Effect.gen(function* () {
                 const response = yield* execute(http, input.url, input.format).pipe(
                   Effect.catchIf(isCloudflareChallenge, () => execute(http, input.url, input.format, "opencode")),

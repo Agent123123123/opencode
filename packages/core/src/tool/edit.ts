@@ -106,7 +106,7 @@ const layer = Layer.effectDiscard(
             toModelOutput: ({ input, output }) => [
               { type: "text", text: toModelOutput(output, input.oldString, input.newString) },
             ],
-            execute: (input, context) => {
+            authorize: (input, context) => {
               const unableToEdit = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
                 effect.pipe(
                   Effect.mapError((error) =>
@@ -158,6 +158,22 @@ const layer = Layer.effectDiscard(
                     source: permissionSource,
                   }),
                 )
+                return target
+              })
+            },
+            execute: (input, _context, target) => {
+              const unableToEdit = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+                effect.pipe(
+                  Effect.mapError((error) =>
+                    error instanceof FileMutation.StaleContentError
+                      ? new ToolFailure({
+                          message: "File changed after permission approval. Read it again before editing.",
+                        })
+                      : new ToolFailure({ message: `Unable to edit ${input.path}` }),
+                  ),
+                )
+
+              return Effect.gen(function* () {
                 const source = decodeUtf8(yield* unableToEdit(fs.readFile(target.canonical)))
                 const ending = detectLineEnding(source.text)
                 const oldString = convertToLineEnding(input.oldString, ending)

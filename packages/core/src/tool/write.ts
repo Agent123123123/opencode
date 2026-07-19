@@ -60,7 +60,7 @@ const layer = Layer.effectDiscard(
             input: Input,
             output: Output,
             toModelOutput: ({ output }) => [{ type: "text", text: toModelOutput(output) }],
-            execute: (input, context) =>
+            authorize: (input, context) =>
               Effect.gen(function* () {
                 const source = {
                   type: "tool" as const,
@@ -84,8 +84,12 @@ const layer = Layer.effectDiscard(
                   agent: context.agent,
                   source,
                 })
-                return yield* files.writeTextPreservingBom({ target, content: input.content })
+                return target
               }).pipe(Effect.mapError(() => new ToolFailure({ message: `Unable to write ${input.path}` }))),
+            execute: (input, _context, target) =>
+              files
+                .writeTextPreservingBom({ target, content: input.content })
+                .pipe(Effect.mapError(() => new ToolFailure({ message: `Unable to write ${input.path}` }))),
           }),
           "edit",
         ),

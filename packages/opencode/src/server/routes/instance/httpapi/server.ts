@@ -21,6 +21,7 @@ import { MCP } from "@/mcp"
 import { McpAuth } from "@/mcp/auth"
 import { Permission } from "@/permission"
 import { Plugin } from "@/plugin"
+import { V2StandardPluginBridge } from "@/plugin/v2-standard-bridge"
 import { PluginPtyEnvironment } from "@/plugin/pty-environment"
 import { InstanceStore } from "@/project/instance-store"
 import { Project } from "@/project/project"
@@ -222,6 +223,7 @@ const app = LayerNode.group([
   Storage.node,
   Snapshot.node,
   Plugin.node,
+  V2StandardPluginBridge.node,
   ModelsDev.node,
   Provider.node,
   ProviderAuth.node,
