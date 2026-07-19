@@ -59,7 +59,7 @@ const layer = Layer.effectDiscard(
           toModelOutput: ({ input, output }) => [
             { type: "text", text: toModelOutput(input.questions, output.answers) },
           ],
-          execute: (input, context) =>
+          authorize: (_input, context) =>
             permission
               .assert({
                 action: "question",
@@ -68,17 +68,16 @@ const layer = Layer.effectDiscard(
                 agent: context.agent,
                 source: { type: "tool", messageID: context.assistantMessageID, callID: context.toolCallID },
               })
+              .pipe(Effect.mapError(() => new ToolFailure({ message: "Permission denied: question" }))),
+          execute: (input, context) =>
+            question
+              .ask({
+                sessionID: context.sessionID,
+                questions: input.questions,
+                tool: { messageID: context.assistantMessageID, callID: context.toolCallID },
+              })
               .pipe(
-                Effect.mapError(() => new ToolFailure({ message: "Permission denied: question" })),
-                Effect.andThen(
-                  question
-                    .ask({
-                      sessionID: context.sessionID,
-                      questions: input.questions,
-                      tool: { messageID: context.assistantMessageID, callID: context.toolCallID },
-                    })
-                    .pipe(Effect.orDie),
-                ),
+                Effect.orDie,
                 Effect.map((answers) => ({ answers })),
               ),
         }),

@@ -73,16 +73,8 @@ const layer = Layer.effectDiscard(
             input: Input,
             output: Output,
             toModelOutput: ({ output }) => [{ type: "text", text: toModelOutput(output) }],
-            execute: (input, context) => {
-              const applied: Array<typeof Applied.Type> = []
-              const fail = (path: string) => {
-                const prefix =
-                  applied.length === 0
-                    ? `Unable to apply patch at ${path}`
-                    : `Patch partially applied before failing at ${path}. Applied: ${applied.map((item) => item.resource).join(", ")}`
-                return new ToolFailure({ message: prefix })
-              }
-              return Effect.gen(function* () {
+            authorize: (input, context) =>
+              Effect.gen(function* () {
                 const source = {
                   type: "tool" as const,
                   messageID: context.assistantMessageID,
@@ -121,6 +113,24 @@ const layer = Layer.effectDiscard(
                   agent: context.agent,
                   source,
                 })
+
+                return { hunks, targets }
+              }).pipe(
+                Effect.mapError((error) =>
+                  error instanceof ToolFailure ? error : new ToolFailure({ message: "Unable to apply patch at patch" }),
+                ),
+              ),
+            execute: (_input, _context, authorization) => {
+              const applied: Array<typeof Applied.Type> = []
+              const fail = (path: string) => {
+                const prefix =
+                  applied.length === 0
+                    ? `Unable to apply patch at ${path}`
+                    : `Patch partially applied before failing at ${path}. Applied: ${applied.map((item) => item.resource).join(", ")}`
+                return new ToolFailure({ message: prefix })
+              }
+              return Effect.gen(function* () {
+                const { targets } = authorization
 
                 const prepared: Prepared[] = []
                 for (const { hunk, target } of targets) {

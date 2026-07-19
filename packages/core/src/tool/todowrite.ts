@@ -36,9 +36,9 @@ const layer = Layer.effectDiscard(
           input: Input,
           output: Output,
           toModelOutput: ({ output }) => [{ type: "text", text: toModelOutput(output) }],
-          execute: (input, context) =>
-            Effect.gen(function* () {
-              yield* permission.assert({
+          authorize: (_input, context) =>
+            permission
+              .assert({
                 action: name,
                 resources: ["*"],
                 save: ["*"],
@@ -46,6 +46,9 @@ const layer = Layer.effectDiscard(
                 agent: context.agent,
                 source: { type: "tool", messageID: context.assistantMessageID, callID: context.toolCallID },
               })
+              .pipe(Effect.mapError(() => new ToolFailure({ message: "Unable to update todos" }))),
+          execute: (input, context) =>
+            Effect.gen(function* () {
               yield* todos.update({ sessionID: context.sessionID, todos: input.todos })
               return { todos: input.todos }
             }).pipe(Effect.mapError(() => new ToolFailure({ message: "Unable to update todos" }))),

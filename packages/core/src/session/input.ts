@@ -188,6 +188,44 @@ export const hasPending = Effect.fn("SessionInput.hasPending")(function* (
   return row !== undefined
 })
 
+/** Read the exact pending inputs that the next promotion will publish, without mutating inbox state. */
+export const pendingActivityIDs = Effect.fn("SessionInput.pendingActivityIDs")(function* (
+  db: DatabaseService,
+  sessionID: SessionSchema.ID,
+  delivery: Delivery,
+  cutoff: number,
+) {
+  const pending = and(eq(SessionInputTable.session_id, sessionID), isNull(SessionInputTable.promoted_seq))
+  if (delivery === "steer") {
+    return (yield* db
+      .select({ id: SessionInputTable.id })
+      .from(SessionInputTable)
+      .where(and(pending, eq(SessionInputTable.delivery, "steer"), lte(SessionInputTable.admitted_seq, cutoff)))
+      .orderBy(asc(SessionInputTable.admitted_seq))
+      .all()
+      .pipe(Effect.orDie)).map((row) => SessionMessage.ID.make(row.id))
+  }
+  const queued = yield* db
+    .select({ id: SessionInputTable.id })
+    .from(SessionInputTable)
+    .where(and(pending, eq(SessionInputTable.delivery, "queue")))
+    .orderBy(asc(SessionInputTable.admitted_seq))
+    .limit(1)
+    .get()
+    .pipe(Effect.orDie)
+  const steers = yield* db
+    .select({ id: SessionInputTable.id })
+    .from(SessionInputTable)
+    .where(and(pending, eq(SessionInputTable.delivery, "steer"), lte(SessionInputTable.admitted_seq, cutoff)))
+    .orderBy(asc(SessionInputTable.admitted_seq))
+    .all()
+    .pipe(Effect.orDie)
+  return [
+    ...(queued ? [SessionMessage.ID.make(queued.id)] : []),
+    ...steers.map((row) => SessionMessage.ID.make(row.id)),
+  ]
+})
+
 export const equivalent = (
   input: Admitted,
   expected: {

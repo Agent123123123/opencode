@@ -57,9 +57,9 @@ const layer = Layer.effectDiscard(
               ),
             },
           ],
-          execute: (input, context) =>
-            Effect.gen(function* () {
-              yield* permission.assert({
+          authorize: (input, context) =>
+            permission
+              .assert({
                 action: name,
                 resources: [input.pattern],
                 save: ["*"],
@@ -72,26 +72,29 @@ const layer = Layer.effectDiscard(
                 agent: context.agent,
                 source: { type: "tool", messageID: context.assistantMessageID, callID: context.toolCallID },
               })
-              const cwd = path.resolve(location.directory, input.path ?? ".")
-              return yield* ripgrep
-                .glob({
-                  cwd,
-                  pattern: input.pattern,
-                  limit: input.limit ?? Number.MAX_SAFE_INTEGER,
-                })
-                .pipe(
-                  Effect.map((result) =>
-                    result.map((entry) =>
-                      FileSystem.Entry.make({
-                        ...entry,
-                        path: RelativePath.make(path.relative(location.directory, path.resolve(cwd, entry.path))),
-                      }),
-                    ),
+              .pipe(
+                Effect.mapError(() => new ToolFailure({ message: `Unable to find files matching ${input.pattern}` })),
+              ),
+          execute: (input) => {
+            const cwd = path.resolve(location.directory, input.path ?? ".")
+            return ripgrep
+              .glob({
+                cwd,
+                pattern: input.pattern,
+                limit: input.limit ?? Number.MAX_SAFE_INTEGER,
+              })
+              .pipe(
+                Effect.map((result) =>
+                  result.map((entry) =>
+                    FileSystem.Entry.make({
+                      ...entry,
+                      path: RelativePath.make(path.relative(location.directory, path.resolve(cwd, entry.path))),
+                    }),
                   ),
-                )
-            }).pipe(
-              Effect.mapError(() => new ToolFailure({ message: `Unable to find files matching ${input.pattern}` })),
-            ),
+                ),
+                Effect.mapError(() => new ToolFailure({ message: `Unable to find files matching ${input.pattern}` })),
+              )
+          },
         }),
       })
       .pipe(Effect.orDie)

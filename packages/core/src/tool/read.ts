@@ -50,8 +50,8 @@ const layer = Layer.effectDiscard(
               { type: "file", data: output.content, mime: output.mime, name: input.path },
             ]
           },
-          execute: (input, context) => {
-            return Effect.gen(function* () {
+          authorize: (input, context) =>
+            Effect.gen(function* () {
               const source = {
                 type: "tool" as const,
                 messageID: context.assistantMessageID,
@@ -77,6 +77,11 @@ const layer = Layer.effectDiscard(
                 agent: context.agent,
                 source,
               })
+              return { target, resource, absolute, type }
+            }).pipe(Effect.mapError(() => new ToolFailure({ message: `Unable to read ${input.path}` }))),
+          execute: (input, _context, authorization) => {
+            return Effect.gen(function* () {
+              const { resource, absolute, type } = authorization
               if (type === "directory")
                 return yield* reader.list(absolute, { offset: input.offset, limit: input.limit })
               const content = yield* reader.read(absolute, resource, {

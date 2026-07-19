@@ -119,7 +119,7 @@ const layer = Layer.effectDiscard(
             { type: "text", text: output.output },
             { type: "text", text: modelOutput(output) },
           ],
-          execute: (input, context) =>
+          authorize: (input, context) =>
             Effect.gen(function* () {
               const source = {
                 type: "tool" as const,
@@ -147,7 +147,11 @@ const layer = Layer.effectDiscard(
                 agent: context.agent,
                 source,
               })
-
+              return { target, warnings }
+            }).pipe(Effect.mapError(() => new ToolFailure({ message: `Unable to execute command: ${input.command}` }))),
+          execute: (input, _context, authorization) =>
+            Effect.gen(function* () {
+              const { target, warnings } = authorization
               if ((yield* fs.stat(target.canonical)).type !== "Directory")
                 return yield* Effect.fail(new Error(`Working directory is not a directory: ${target.canonical}`))
 

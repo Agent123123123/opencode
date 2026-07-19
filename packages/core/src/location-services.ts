@@ -37,6 +37,7 @@ import { SystemContextRegistry } from "./system-context/registry"
 import { BuiltInTools } from "./tool/builtins"
 import { ReadToolFileSystem } from "./tool/read-filesystem"
 import { ToolRegistry } from "./tool/registry"
+import { ToolExecution } from "./tool/execution"
 import { ToolOutputStore } from "./tool-output-store"
 
 export { LocationServiceMap } from "./location-service-map"
@@ -67,6 +68,7 @@ export const locationServices = LayerNode.group([
   FileMutation.node,
   PermissionV2.node,
   ToolOutputStore.node,
+  ToolExecution.node,
   ToolRegistry.node,
   ToolRegistry.toolsNode,
   Image.node,

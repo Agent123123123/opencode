@@ -12,12 +12,18 @@ import { ApplicationTools } from "./application-tools"
 import { definition, permission, settle, validateName, type AnyTool, type RegistrationError } from "./tool"
 import { Tools } from "./tools"
 import { makeLocationNode } from "../effect/app-node"
+import { ToolExecution } from "./execution"
+import type { ToolOutput as CoreToolOutput } from "@opencode-ai/llm"
+import type { PermissionRequestInput } from "./tool"
 
 export type ExecuteInput = {
   readonly sessionID: SessionSchema.ID
   readonly agent: AgentV2.ID
   readonly assistantMessageID: SessionMessage.ID
+  readonly activityInputIDs?: ReadonlyArray<SessionMessage.ID>
   readonly call: ToolCall
+  readonly progress?: (output: CoreToolOutput) => Effect.Effect<void>
+  readonly ask?: (request: PermissionRequestInput) => Effect.Effect<void, unknown>
 }
 
 export interface Interface {
@@ -44,6 +50,7 @@ const registryLayer = Layer.effect(
   Effect.gen(function* () {
     const applications = yield* ApplicationTools.Service
     const resources = yield* ToolOutputStore.Service
+    const execution = yield* ToolExecution.Service
     type Registration = { readonly identity: object; readonly tool: AnyTool }
     const local = new Map<string, Array<{ readonly token: object; readonly registration: Registration }>>()
 
@@ -59,12 +66,27 @@ const registryLayer = Layer.effect(
         }
       if (advertised && registration.identity !== advertised)
         return { result: { type: "error" as const, value: `Stale tool call: ${input.call.name}` } }
-      const pending = yield* settle(registration.tool, input.call, {
-        sessionID: input.sessionID,
-        agent: input.agent,
-        assistantMessageID: input.assistantMessageID,
-        toolCallID: input.call.id,
-      }).pipe(
+      const controller = new AbortController()
+      const pending = yield* settle(
+        registration.tool,
+        input.call.name,
+        input.call,
+        {
+          sessionID: input.sessionID,
+          agent: input.agent,
+          assistantMessageID: input.assistantMessageID,
+          activityInputIDs: input.activityInputIDs ?? [],
+          toolCallID: input.call.id,
+          abort: controller.signal,
+          progress: input.progress ?? (() => Effect.void),
+          ask:
+            input.ask ??
+            (() => Effect.fail(new Error("Tool permission prompting is unavailable outside a session runner"))),
+        },
+        execution,
+      ).pipe(
+        Effect.onInterrupt(() => Effect.sync(() => controller.abort("Tool execution interrupted"))),
+        Effect.ensuring(Effect.sync(() => controller.abort())),
         Effect.map((output) => ({ output })),
         Effect.catchTag("LLM.ToolFailure", (failure) =>
           Effect.succeed({ result: { type: "error" as const, value: failure.message } }),
@@ -137,11 +159,11 @@ function whollyDisabled(action: string, rules: PermissionV2.Ruleset) {
 export const node = makeLocationNode({
   service: Service,
   layer,
-  deps: [ApplicationTools.node, ToolOutputStore.node],
+  deps: [ApplicationTools.node, ToolOutputStore.node, ToolExecution.node],
 })
 
 export const toolsNode = makeLocationNode({
   service: Tools.Service,
   layer,
-  deps: [ApplicationTools.node, ToolOutputStore.node],
+  deps: [ApplicationTools.node, ToolOutputStore.node, ToolExecution.node],
 })

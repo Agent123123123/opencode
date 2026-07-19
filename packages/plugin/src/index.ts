@@ -211,6 +211,18 @@ export type ProviderHookContext = {
   auth?: Auth
 }
 
+export type ToolExecutionHookInput = {
+  tool: string
+  sessionID: string
+  callID: string
+  /** Exact execution facts when the host runner exposes them. */
+  agent?: string
+  activityIdentity?: {
+    inputIDs: ReadonlyArray<string>
+    assistantMessageID: string
+  }
+}
+
 export type ProviderHook = {
   id: string
   models?: (provider: ProviderV2, ctx: ProviderHookContext) => Promise<Record<string, ModelV2>>
@@ -263,16 +275,13 @@ export interface Hooks {
     input: { command: string; sessionID: string; arguments: string },
     output: { parts: Part[] },
   ) => Promise<void>
-  "tool.execute.before"?: (
-    input: { tool: string; sessionID: string; callID: string },
-    output: { args: any },
-  ) => Promise<void>
+  "tool.execute.before"?: (input: ToolExecutionHookInput, output: { args: any }) => Promise<void>
   "shell.env"?: (
     input: { cwd: string; sessionID?: string; callID?: string },
     output: { env: Record<string, string> },
   ) => Promise<void>
   "tool.execute.after"?: (
-    input: { tool: string; sessionID: string; callID: string; args: any },
+    input: ToolExecutionHookInput & { args: any },
     output: {
       title: string
       output: string
@@ -293,6 +302,16 @@ export interface Hooks {
     output: {
       system: string[]
     },
+  ) => Promise<void>
+  /** Add execution-scoped system context using facts supplied by the host runner. */
+  "system.context"?: (
+    input: {
+      sessionID: string
+      agentID: string
+      activityInputIDs: ReadonlyArray<string>
+      model?: { providerID: string; modelID: string; variant?: string }
+    },
+    output: { system: string[] },
   ) => Promise<void>
   "experimental.provider.small_model"?: (input: { provider: ProviderV2 }, output: { model?: ModelV2 }) => Promise<void>
   /**
@@ -331,5 +350,8 @@ export interface Hooks {
   /**
    * Modify tool definitions (description and parameters) sent to LLM
    */
-  "tool.definition"?: (input: { toolID: string }, output: { description: string; parameters: any }) => Promise<void>
+  "tool.definition"?: (
+    input: { toolID: string },
+    output: { description: string; parameters: any; jsonSchema?: unknown },
+  ) => Promise<void>
 }

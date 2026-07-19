@@ -203,10 +203,10 @@ const layer = Layer.effectDiscard(
           input: Input,
           output: Output,
           toModelOutput: ({ output }) => [{ type: "text", text: output.text }],
-          execute: (input, context) => {
+          authorize: (input, context) => {
             const provider = selectProvider(context.sessionID, config, config.provider)
-            return Effect.gen(function* () {
-              yield* permission.assert({
+            return permission
+              .assert({
                 action: name,
                 resources: [input.query],
                 save: ["*"],
@@ -215,7 +215,13 @@ const layer = Layer.effectDiscard(
                 agent: context.agent,
                 source: { type: "tool", messageID: context.assistantMessageID, callID: context.toolCallID },
               })
-
+              .pipe(
+                Effect.as(provider),
+                Effect.mapError(() => new ToolFailure({ message: `Unable to search the web for ${input.query}` })),
+              )
+          },
+          execute: (input, context, provider) =>
+            Effect.gen(function* () {
               const text =
                 provider === "exa"
                   ? yield* callMcp(http, exaUrl(config.exaApiKey), "web_search_exa", ExaArgs, {
@@ -245,8 +251,7 @@ const layer = Layer.effectDiscard(
                 provider,
                 text: text ?? NO_RESULTS,
               }
-            }).pipe(Effect.mapError(() => new ToolFailure({ message: `Unable to search the web for ${input.query}` })))
-          },
+            }).pipe(Effect.mapError(() => new ToolFailure({ message: `Unable to search the web for ${input.query}` }))),
         }),
       })
       .pipe(Effect.orDie)

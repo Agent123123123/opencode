@@ -96,6 +96,25 @@ test("provider-executed success retains its compatibility result", async () => {
   expect(success?.data).toHaveProperty("result")
 })
 
+test("runner progress transport publishes the durable tool checkpoint", async () => {
+  const { published, publisher } = capture()
+  await Effect.runPromise(publisher.publish(call))
+  await Effect.runPromise(
+    publisher.progress(call.id, {
+      structured: { title: "reading", metadata: { path: "pixel.png" } },
+      content: [{ type: "text", text: "checkpoint" }],
+    }),
+  )
+  expect(published).toContainEqual({
+    type: "session.next.tool.progress.1",
+    data: expect.objectContaining({
+      callID: call.id,
+      structured: { title: "reading", metadata: { path: "pixel.png" } },
+      content: [{ type: "text", text: "checkpoint" }],
+    }),
+  })
+})
+
 test("binary failure emits no success event", async () => {
   const { published, publisher } = capture()
   await Effect.runPromise(publisher.publish(call))

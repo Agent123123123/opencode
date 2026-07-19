@@ -67,35 +67,37 @@ const layer = Layer.effectDiscard(
           input: Input,
           output: Output,
           toModelOutput: ({ output }) => [{ type: "text", text: output.output }],
-          execute: (input, context) =>
+          authorize: (input, context) =>
             Effect.gen(function* () {
               const current = yield* skills.list()
               const skill = current.find((skill) => skill.name === input.name)
               if (!skill) return yield* unableToLoad(input.name)
-              return yield* Effect.gen(function* () {
-                yield* permission.assert({
-                  action: name,
-                  resources: [skill.name],
-                  save: [skill.name],
-                  sessionID: context.sessionID,
-                  agent: context.agent,
-                  source: { type: "tool", messageID: context.assistantMessageID, callID: context.toolCallID },
-                })
-                const directory = path.dirname(skill.location)
-                const files =
-                  path.basename(skill.location) === "SKILL.md"
-                    ? (yield* fs.glob("**/*", { cwd: directory, absolute: true, include: "file", dot: true }))
-                        .filter((file) => path.basename(file) !== "SKILL.md")
-                        .toSorted()
-                        .slice(0, FILE_LIMIT)
-                    : []
-                return {
-                  name: skill.name,
-                  directory,
-                  output: toModelOutput(skill, files),
-                }
-              }).pipe(Effect.mapError((error) => unableToLoad(input.name, error)))
-            }),
+              yield* permission.assert({
+                action: name,
+                resources: [skill.name],
+                save: [skill.name],
+                sessionID: context.sessionID,
+                agent: context.agent,
+                source: { type: "tool", messageID: context.assistantMessageID, callID: context.toolCallID },
+              })
+              return skill
+            }).pipe(Effect.mapError((error) => unableToLoad(input.name, error))),
+          execute: (input, _context, skill) =>
+            Effect.gen(function* () {
+              const directory = path.dirname(skill.location)
+              const files =
+                path.basename(skill.location) === "SKILL.md"
+                  ? (yield* fs.glob("**/*", { cwd: directory, absolute: true, include: "file", dot: true }))
+                      .filter((file) => path.basename(file) !== "SKILL.md")
+                      .toSorted()
+                      .slice(0, FILE_LIMIT)
+                  : []
+              return {
+                name: skill.name,
+                directory,
+                output: toModelOutput(skill, files),
+              }
+            }).pipe(Effect.mapError((error) => unableToLoad(input.name, error))),
         }),
       })
       .pipe(Effect.orDie)

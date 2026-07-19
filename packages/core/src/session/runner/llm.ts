@@ -29,6 +29,7 @@ import { SessionCompaction } from "../compaction"
 import { SessionEvent } from "../event"
 import { SessionHistory } from "../history"
 import { SessionInput } from "../input"
+import { SessionMessage } from "../message"
 import { SessionSchema } from "../schema"
 import { SessionStore } from "../store"
 import { type RunError, Service } from "./index"
@@ -97,6 +98,7 @@ const layer = Layer.effect(
     const llm = yield* LLMClient.Service
     const agents = yield* AgentV2.Service
     const tools = yield* ToolRegistry.Service
+    const permissions = yield* PermissionV2.Service
     const models = yield* SessionRunnerModel.Service
     const store = yield* SessionStore.Service
     const location = yield* Location.Service
@@ -165,10 +167,22 @@ const layer = Layer.effect(
     const continueAfterOverflowCompaction = (step: number) =>
       new TurnTransitionError({ _tag: "ContinueAfterOverflowCompaction", step })
 
-    const loadSystemContext = (agent: AgentV2.Selection) =>
-      Effect.all([systemContext.load(), skillGuidance.load(agent), referenceGuidance.load()], {
-        concurrency: "unbounded",
-      }).pipe(Effect.map(SystemContext.combine))
+    const loadSystemContext = (
+      session: SessionSchema.Info,
+      agent: AgentV2.Selection,
+      effectiveModel: ModelV2.Ref,
+      activityInputIDs: ReadonlyArray<SessionMessage.ID>,
+    ) =>
+      Effect.all(
+        [
+          systemContext.load({ session, agent, effectiveModel, activityInputIDs }),
+          skillGuidance.load(agent),
+          referenceGuidance.load(),
+        ],
+        {
+          concurrency: "unbounded",
+        },
+      ).pipe(Effect.map(SystemContext.combine))
 
     const runTurnAttempt = Effect.fn("SessionRunner.runTurn")(function* (
       sessionID: SessionSchema.ID,
@@ -180,12 +194,26 @@ const layer = Layer.effect(
       if (session.location.directory !== location.directory || session.location.workspaceID !== location.workspaceID)
         return yield* Effect.interrupt
       const agent = yield* agents.select(session.agent)
-      const initialized = yield* SessionContextEpoch.initialize(db, loadSystemContext(agent), session.id)
       const toolFibers = yield* FiberSet.make<void, ToolOutputStore.Error>()
       let needsContinuation = false
       let currentStep = step
+      const cutoff = promotion ? yield* EventV2.latestSequence(db, session.id) : -1
+      const pendingActivityInputIDs = promotion
+        ? yield* SessionInput.pendingActivityIDs(db, session.id, promotion, cutoff)
+        : []
+      const model = yield* models.resolve(session)
+      const effectiveModel = {
+        id: ModelV2.ID.make(model.id),
+        providerID: ProviderV2.ID.make(model.provider),
+        ...(session.model?.variant === undefined ? {} : { variant: session.model.variant }),
+      }
+      const activityBeforePromotion = mergeInputIDs(
+        currentActivityInputIDs(yield* getContext(session.id)),
+        pendingActivityInputIDs,
+      )
+      const contextSource = loadSystemContext(session, agent, effectiveModel, activityBeforePromotion)
+      const initialized = yield* SessionContextEpoch.initialize(db, contextSource, session.id)
       if (promotion) {
-        const cutoff = yield* EventV2.latestSequence(db, session.id)
         let promoted = 0
         if (promotion === "steer") promoted = yield* SessionInput.promoteSteers(db, events, session.id, cutoff)
         if (promotion === "queue") {
@@ -194,9 +222,11 @@ const layer = Layer.effect(
         }
         if (promoted > 0) currentStep = 1
       }
-      const system =
-        initialized ?? (yield* SessionContextEpoch.prepare(db, events, loadSystemContext(agent), session.id))
-      const model = yield* models.resolve(session)
+      const activityInputIDs = mergeInputIDs(
+        activityBeforePromotion,
+        currentActivityInputIDs(yield* getContext(session.id)),
+      )
+      const system = initialized ?? (yield* SessionContextEpoch.prepare(db, events, contextSource, session.id))
       const entries = yield* SessionHistory.entriesForRunner(db, session.id, system.baselineSeq)
       const context = entries.map((entry) => entry.message)
       const isLastStep = agent.info?.steps !== undefined && currentStep >= agent.info.steps
@@ -253,7 +283,16 @@ const layer = Layer.effect(
                   sessionID: session.id,
                   agent: agent.id,
                   assistantMessageID,
+                  activityInputIDs,
                   call: event,
+                  progress: (output) => withPublication(publisher.progress(event.id, output)),
+                  ask: (request) =>
+                    permissions.assert({
+                      ...request,
+                      sessionID: session.id,
+                      agent: agent.id,
+                      source: { type: "tool", messageID: assistantMessageID, callID: event.id },
+                    }),
                 }),
               ).pipe(
                 Effect.flatMap((settlement) =>
@@ -419,6 +458,7 @@ export const node = makeLocationNode({
     llmClient,
     AgentV2.node,
     ToolRegistry.node,
+    PermissionV2.node,
     SessionRunnerModel.node,
     SessionStore.node,
     Location.node,
@@ -430,3 +470,27 @@ export const node = makeLocationNode({
     Database.node,
   ],
 })
+
+/** User inputs belonging to the current activity, bounded by the previous assistant step. */
+const currentActivityInputIDs = (messages: ReadonlyArray<SessionMessage.Message>) => {
+  let latestUser = -1
+  for (let index = messages.length - 1; index >= 0; index--) {
+    if (messages[index]?.type === "user") {
+      latestUser = index
+      break
+    }
+  }
+  if (latestUser < 0) return []
+  const inputIDs: SessionMessage.ID[] = []
+  for (let index = latestUser; index >= 0; index--) {
+    const message = messages[index]!
+    if (message.type === "assistant") break
+    if (message.type === "user") inputIDs.unshift(message.id)
+  }
+  return inputIDs
+}
+
+const mergeInputIDs = (
+  current: ReadonlyArray<SessionMessage.ID>,
+  added: ReadonlyArray<SessionMessage.ID>,
+): ReadonlyArray<SessionMessage.ID> => [...new Set([...current, ...added])]
