@@ -23,6 +23,7 @@ import { ConfigProvider } from "./config/provider"
 import { ConfigReference } from "./config/reference"
 import { ConfigToolOutput } from "./config/tool-output"
 import { ConfigWatcher } from "./config/watcher"
+import { Flag } from "./flag/flag"
 import { ConfigV1 } from "./v1/config/config"
 import { ConfigMigrateV1 } from "./v1/config/migrate"
 
@@ -174,7 +175,7 @@ const layer = Layer.effect(
     const locationIsGlobal = path.resolve(location.directory) === path.resolve(global.config)
     // Read configuration once when this location opens. Later calls reuse these
     // values until the location is reopened.
-    const discovered = locationIsGlobal
+    const discovered = locationIsGlobal || Flag.OPENCODE_DISABLE_PROJECT_CONFIG
       ? []
       : yield* fs
           .up({
