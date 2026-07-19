@@ -1,7 +1,4 @@
 import { makeGlobalNode } from "@opencode-ai/core/effect/app-node"
-import { Location } from "@opencode-ai/core/location"
-import { LocationServiceMap } from "@opencode-ai/core/location-services"
-import { AbsolutePath } from "@opencode-ai/core/schema"
 import { SystemContext } from "@opencode-ai/core/system-context/index"
 import { SystemContextRegistry } from "@opencode-ai/core/system-context/registry"
 import { Tool } from "@opencode-ai/core/tool/tool"
@@ -17,10 +14,16 @@ import { pluginToolSchema } from "@/tool/registry"
 import { Plugin } from "."
 
 export interface Interface {
-  readonly init: (locations: LocationServiceMap.Interface) => Effect.Effect<void>
+  readonly init: (services: RegistrationServices) => Effect.Effect<void>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/V2StandardPluginBridge") {}
+
+export interface RegistrationServices {
+  readonly tools: Tools.Interface
+  readonly execution: ToolExecution.Interface
+  readonly contexts: SystemContextRegistry.Interface
+}
 
 const systemContextKey = SystemContext.Key.make("plugin/v1-system-context")
 
@@ -28,18 +31,17 @@ export const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const plugin = yield* Plugin.Service
-    const locationMaps = new Map<string, LocationServiceMap.Interface>()
+    const registrations = new Map<string, RegistrationServices>()
     const state = yield* InstanceState.make(
       Effect.fn("V2StandardPluginBridge.state")(function* (instance) {
-        const locations = locationMaps.get(instance.directory)
-        if (!locations) return yield* Effect.die(`Missing LocationServiceMap for ${instance.directory}`)
+        const services = registrations.get(instance.directory)
+        if (!services) return yield* Effect.die(`Missing location services for ${instance.directory}`)
         yield* Effect.addFinalizer(() =>
           Effect.sync(() => {
-            if (locationMaps.get(instance.directory) === locations) locationMaps.delete(instance.directory)
+            if (registrations.get(instance.directory) === services) registrations.delete(instance.directory)
           }),
         )
         const hooks = yield* plugin.list()
-        const location = locations.get(Location.Ref.make({ directory: AbsolutePath.make(instance.directory) }))
         yield* Effect.gen(function* () {
           const tools = yield* Tools.Service
           const execution = yield* ToolExecution.Service
@@ -48,13 +50,17 @@ export const layer = Layer.effect(
           yield* registerExecutionHooks(execution, hooks, new Set(Object.keys(definitions)))
           yield* registerSystemContext(contexts, hooks)
           if (Object.keys(definitions).length > 0) yield* tools.register(definitions).pipe(Effect.orDie)
-        }).pipe(Effect.provide(location))
+        }).pipe(
+          Effect.provideService(Tools.Service, services.tools),
+          Effect.provideService(ToolExecution.Service, services.execution),
+          Effect.provideService(SystemContextRegistry.Service, services.contexts),
+        )
       }),
     )
     return Service.of({
-      init: (locations) =>
+      init: (services) =>
         Effect.gen(function* () {
-          locationMaps.set((yield* InstanceState.context).directory, locations)
+          registrations.set((yield* InstanceState.context).directory, services)
           yield* InstanceState.get(state)
         }),
     })

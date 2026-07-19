@@ -11,8 +11,10 @@ import { HttpApiBuilder } from "effect/unstable/httpapi"
 import { InstanceHttpApi } from "../api"
 import { ApiVcsApplyError } from "../groups/instance"
 import { markInstanceForDisposal } from "../lifecycle"
-import { LocationServiceMap } from "@opencode-ai/core/location-services"
 import { V2StandardPluginBridge } from "@/plugin/v2-standard-bridge"
+import { SystemContextRegistry } from "@opencode-ai/core/system-context/registry"
+import { ToolExecution } from "@opencode-ai/core/tool/execution"
+import { Tools } from "@opencode-ai/core/tool/tools"
 
 export const instanceHandlers = HttpApiBuilder.group(InstanceHttpApi, "instance", (handlers) =>
   Effect.gen(function* () {
@@ -22,7 +24,6 @@ export const instanceHandlers = HttpApiBuilder.group(InstanceHttpApi, "instance"
     const lsp = yield* LSP.Service
     const skill = yield* Skill.Service
     const vcs = yield* Vcs.Service
-    const locations = yield* LocationServiceMap.Service
     const pluginBridge = yield* V2StandardPluginBridge.Service
 
     const dispose = Effect.fn("InstanceHttpApi.dispose")(function* () {
@@ -82,7 +83,11 @@ export const instanceHandlers = HttpApiBuilder.group(InstanceHttpApi, "instance"
     })
 
     const getAgent = Effect.fn("InstanceHttpApi.agent")(function* () {
-      yield* pluginBridge.init(locations)
+      yield* pluginBridge.init({
+        tools: yield* Tools.Service,
+        execution: yield* ToolExecution.Service,
+        contexts: yield* SystemContextRegistry.Service,
+      })
       return yield* agent.list()
     })
 

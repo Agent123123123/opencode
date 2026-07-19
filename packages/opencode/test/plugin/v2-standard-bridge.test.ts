@@ -145,9 +145,14 @@ test("standard hooks bridge V1 tools into V2 with real execution capabilities", 
 
   await Effect.runPromise(
     Effect.gen(function* () {
-      yield* V2StandardPluginBridge.Service.use((bridge) => bridge.init(locationMap)).pipe(
-        Effect.provideService(InstanceRef, instance),
-      )
+      yield* Effect.gen(function* () {
+        const services = {
+          tools: yield* Tools.Service,
+          execution: yield* ToolExecution.Service,
+          contexts: yield* SystemContextRegistry.Service,
+        }
+        yield* V2StandardPluginBridge.Service.use((bridge) => bridge.init(services))
+      }).pipe(Effect.provideService(InstanceRef, instance), Effect.provide(locationLayer))
       expect(Object.keys(tools).sort()).toEqual(["bridge_echo", "bridge_wait"])
       expect(Tool.definition("bridge_echo", tools.bridge_echo).description).toBe("advertised echo")
       expect(Tool.definition("bridge_echo", tools.bridge_echo).inputSchema).toMatchObject({
