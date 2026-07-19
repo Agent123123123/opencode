@@ -81,7 +81,9 @@ export const locationLayer = Layer.effect(
 
         const selectedAgent = yield* agents.select(input.agent)
         if (!selectedAgent.info) return yield* new AgentNotFoundError({ agent: selectedAgent.id })
-        if (selectedAgent.info.hidden || selectedAgent.info.mode === "subagent")
+        // Hidden controls discovery/default selection, not explicit addressability. Embedders
+        // may create sessions for a configured hidden primary agent when they know its exact ID.
+        if (selectedAgent.info.mode === "subagent" || (input.agent === undefined && selectedAgent.info.hidden))
           return yield* new AgentUnavailableError({ agent: selectedAgent.id })
 
         const requested = input.model ?? selectedAgent.info.model

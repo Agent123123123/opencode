@@ -94,11 +94,10 @@ describe("SessionSelection", () => {
     }),
   )
 
-  it.effect("rejects unknown and non-selectable agents", () =>
+  it.effect("rejects unknown agents and explicit subagents", () =>
     Effect.gen(function* () {
       for (const [agents, id, tag] of [
         [[agent("build")], "missing", "SessionSelection.AgentNotFoundError"],
-        [[agent("hidden", { hidden: true })], "hidden", "SessionSelection.AgentUnavailableError"],
         [[agent("child", { mode: "subagent" })], "child", "SessionSelection.AgentUnavailableError"],
       ] as const) {
         expect(
@@ -109,6 +108,23 @@ describe("SessionSelection", () => {
           ),
         ).toBe(tag)
       }
+    }),
+  )
+
+  it.effect("allows an explicitly addressed hidden primary agent", () =>
+    Effect.gen(function* () {
+      const selected = yield* resolve({ agent: AgentV2.ID.make("hidden") }).pipe(
+        Effect.provide(layer({ agents: [agent("hidden", { hidden: true, mode: "primary" })] })),
+      )
+
+      expect(selected).toEqual({
+        agent: AgentV2.ID.make("hidden"),
+        model: ModelV2.Ref.make({
+          providerID,
+          id: modelID,
+          variant: ModelV2.VariantID.make("default"),
+        }),
+      })
     }),
   )
 
