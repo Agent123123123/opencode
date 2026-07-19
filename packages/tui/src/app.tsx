@@ -631,8 +631,8 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
         title: "Switch model",
         suggested: true,
         category: "Agent",
-        slashName: "models",
-        // Bias /mo toward /models over /move without changing global fuzzy scoring.
+        slashName: "model",
+        // Bias /mo toward /model over /move without changing global fuzzy scoring.
         slashAliases: ["mo"],
         run: () => {
           dialog.replace(() => <DialogModel />)
