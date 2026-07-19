@@ -218,6 +218,7 @@ export type ToolExecutionHookInput = {
   /** Exact execution facts when the host runner exposes them. */
   agent?: string
   activityIdentity?: {
+    activityID: string
     inputIDs: ReadonlyArray<string>
     assistantMessageID: string
   }

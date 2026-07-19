@@ -242,6 +242,7 @@ function legacyInvocation(invocation: ToolExecution.Invocation) {
     callID: invocation.toolCallID,
     agent: invocation.agent,
     activityIdentity: {
+      activityID: invocation.turnID,
       inputIDs: [...invocation.activityInputIDs],
       assistantMessageID: invocation.assistantMessageID,
     },

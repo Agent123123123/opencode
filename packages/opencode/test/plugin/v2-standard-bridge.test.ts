@@ -19,6 +19,7 @@ import { V2StandardPluginBridge } from "../../src/plugin/v2-standard-bridge"
 
 test("standard hooks bridge V1 tools into V2 with real execution capabilities", async () => {
   const trace: string[] = []
+  const hookActivityIDs: Array<string | undefined> = []
   const tools: Record<string, Tool.AnyTool> = {}
   let policy: ToolExecution.Policy | undefined
   let systemEntry: SystemContextRegistry.Entry | undefined
@@ -71,6 +72,7 @@ test("standard hooks bridge V1 tools into V2 with real execution capabilities", 
       output.description = "advertised echo"
     },
     "tool.execute.before": async (input, output) => {
+      hookActivityIDs.push(input.activityIdentity?.activityID)
       const args = output.args as { text?: string }
       trace.push(`before:${input.tool}:${args.text ?? ""}`)
       if (input.tool === "bridge_echo") args.text = `${args.text}-hook`
@@ -190,6 +192,7 @@ test("standard hooks bridge V1 tools into V2 with real execution capabilities", 
         "ask:fine_grained:hello-hook",
         "after:bridge_echo",
       ])
+      expect(hookActivityIDs).toEqual([context.turnID])
 
       if (!systemEntry || typeof systemEntry.load !== "function") return yield* Effect.die("missing system entry")
       const system = yield* systemEntry.load({
