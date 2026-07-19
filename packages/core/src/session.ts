@@ -37,6 +37,7 @@ import { SessionRevert } from "./session/revert"
 import { Revert } from "@opencode-ai/schema/revert"
 import { FSUtil } from "./fs-util"
 import { SessionDurable } from "@opencode-ai/schema/durable-event-manifest"
+import { SessionSelection } from "./session/selection"
 
 export const RevertState = Revert.State
 export type RevertState = Revert.State
@@ -105,14 +106,27 @@ export class PromptConflictError extends Schema.TaggedErrorClass<PromptConflictE
   sessionID: SessionSchema.ID,
   messageID: SessionMessage.ID,
 }) {}
+
+export class CreateConflictError extends Schema.TaggedErrorClass<CreateConflictError>()("Session.CreateConflictError", {
+  sessionID: SessionSchema.ID,
+  reason: Schema.Literals(["location", "selection"]),
+}) {}
 export const MessageNotFoundError = SessionRevert.MessageNotFoundError
 export type MessageNotFoundError = SessionRevert.MessageNotFoundError
 
-export type Error = NotFoundError | MessageDecodeError | OperationUnavailableError | PromptConflictError
+export type Error =
+  | NotFoundError
+  | MessageDecodeError
+  | OperationUnavailableError
+  | PromptConflictError
+  | CreateConflictError
+  | SessionSelection.Error
 
 export interface Interface {
   readonly list: (input?: ListInput) => Effect.Effect<SessionSchema.Info[]>
-  readonly create: (input: CreateInput) => Effect.Effect<SessionSchema.Info>
+  readonly create: (
+    input: CreateInput,
+  ) => Effect.Effect<SessionSchema.Info, CreateConflictError | SessionSelection.Error>
   readonly get: (sessionID: SessionSchema.ID) => Effect.Effect<SessionSchema.Info, NotFoundError>
   readonly messages: (input: {
     sessionID: SessionSchema.ID
@@ -191,6 +205,26 @@ const layer = Layer.effect(
     const execution = yield* SessionExecution.Service
     const store = yield* SessionStore.Service
     const locations = yield* LocationServiceMap.Service
+    const sameLocation = (left: Location.Ref, right: Location.Ref) =>
+      left.directory === right.directory && left.workspaceID === right.workspaceID
+    const sameModel = (left: ModelV2.Ref | undefined, right: ModelV2.Ref) =>
+      left?.id === right.id &&
+      left.providerID === right.providerID &&
+      (left.variant ?? "default") === (right.variant ?? "default")
+    const conflict = (sessionID: SessionSchema.ID, reason: "location" | "selection") =>
+      new CreateConflictError({ sessionID, reason })
+    const selection = (input: { agent?: AgentV2.ID; model?: ModelV2.Ref }, location: Location.Ref) =>
+      SessionSelection.Service.use((service) => service.resolve(input)).pipe(Effect.provide(locations.get(location)))
+    const verify = (
+      session: SessionSchema.Info,
+      expected: SessionSelection.Selection,
+      location: Location.Ref,
+    ): Effect.Effect<SessionSchema.Info, CreateConflictError> => {
+      if (!sameLocation(session.location, location)) return Effect.fail(conflict(session.id, "location"))
+      if (session.agent !== expected.agent || !sameModel(session.model, expected.model))
+        return Effect.fail(conflict(session.id, "selection"))
+      return Effect.succeed(session)
+    }
     const decodeMessage = Schema.decodeUnknownEffect(SessionMessage.Message)
     const isDurableSessionEvent = Schema.is(SessionEvent.Durable)
     const decode = (row: typeof SessionMessageTable.$inferSelect) =>
@@ -208,7 +242,15 @@ const layer = Layer.effect(
       create: Effect.fn("V2Session.create")(function* (input) {
         const sessionID = input.id ?? SessionSchema.ID.create()
         const recorded = yield* store.get(sessionID)
-        if (recorded) return recorded
+        if (recorded) {
+          if (!sameLocation(recorded.location, input.location)) return yield* conflict(sessionID, "location")
+          const selected = yield* selection(
+            { agent: input.agent ?? recorded.agent, model: input.model ?? recorded.model },
+            input.location,
+          )
+          return yield* verify(recorded, selected, input.location)
+        }
+        const selected = yield* selection({ agent: input.agent, model: input.model }, input.location)
         const project = yield* projects.resolve(input.location.directory)
         yield* db
           .insert(ProjectTable)
@@ -226,14 +268,8 @@ const layer = Layer.effect(
           path: path.relative(project.directory, input.location.directory).replaceAll("\\", "/"),
           workspaceID: input.location.workspaceID ? WorkspaceV2.ID.make(input.location.workspaceID) : undefined,
           title: `New session - ${new Date(now).toISOString()}`,
-          agent: input.agent,
-          model: input.model
-            ? {
-                id: ModelV2.ID.make(input.model.id),
-                providerID: input.model.providerID,
-                variant: input.model.variant,
-              }
-            : undefined,
+          agent: selected.agent,
+          model: selected.model,
           cost: 0,
           tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
           time: { created: now, updated: now },
@@ -256,9 +292,12 @@ const layer = Layer.effect(
                 )
             }),
           )
-        if (projected.type === "existing") return projected.session
+        if (projected.type === "existing") return yield* verify(projected.session, selected, input.location)
         // TODO: Restore recorded sessions onto replacement synchronized workspaces in a future API slice.
-        return yield* result.get(sessionID).pipe(Effect.orDie)
+        return yield* result.get(sessionID).pipe(
+          Effect.orDie,
+          Effect.flatMap((created) => verify(created, selected, input.location)),
+        )
       }),
       get: Effect.fn("V2Session.get")(function* (sessionID) {
         const session = yield* store.get(sessionID)

@@ -8,6 +8,7 @@ import { AgentV2 } from "../agent"
 import { Catalog } from "../catalog"
 import { CommandV2 } from "../command"
 import { Config } from "../config"
+import { ConfigReadiness } from "../config/readiness"
 import { ConfigAgentPlugin } from "../config/plugin/agent"
 import { ConfigCommandPlugin } from "../config/plugin/command"
 import { ConfigExternalPlugin } from "../config/plugin/external"
@@ -68,6 +69,7 @@ const layer = Layer.effectDiscard(
     const integration = yield* Integration.Service
     const agents = yield* AgentV2.Service
     const config = yield* Config.Service
+    const readiness = yield* ConfigReadiness.Service
     const location = yield* Location.Service
     const modelsDev = yield* ModelsDev.Service
     const npm = yield* Npm.Service
@@ -105,7 +107,7 @@ const layer = Layer.effectDiscard(
       return plugin.add(PluginV2.ID.make(loaded.id), loaded.effect)
     }
 
-    yield* State.batch(
+    const boot = State.batch(
       Effect.gen(function* () {
         yield* add(ConfigReferencePlugin.Plugin)
         yield* add(AgentPlugin.Plugin)
@@ -120,7 +122,12 @@ const layer = Layer.effectDiscard(
         yield* add(ConfigProviderPlugin.Plugin)
         yield* add(VariantPlugin.Plugin)
       }),
-    ).pipe(Effect.withSpan("PluginInternal.boot"), Effect.forkScoped({ startImmediately: true }))
+    ).pipe(
+      Effect.onExit((exit) =>
+        Effect.all([readiness.complete("agent", exit), readiness.complete("provider", exit)], { discard: true }),
+      ),
+    )
+    yield* boot.pipe(Effect.withSpan("PluginInternal.boot"), Effect.forkScoped({ startImmediately: true }))
   }),
 )
 
@@ -134,6 +141,7 @@ export const node = makeLocationNode({
   layer,
   deps: [
     Catalog.node,
+    ConfigReadiness.node,
     CommandV2.node,
     PluginV2.node,
     Integration.node,

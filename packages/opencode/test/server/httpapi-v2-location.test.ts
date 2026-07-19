@@ -5,8 +5,26 @@ import { Context, Schema } from "effect"
 import { HttpApiApp } from "../../src/server/routes/instance/httpapi/server"
 import { resetDatabase } from "../fixture/db"
 import { disposeAllInstances, tmpdir } from "../fixture/fixture"
+import { testProviderConfig } from "../lib/test-provider"
 
 const context = Context.empty() as Context.Context<unknown>
+
+function catalogConfig() {
+  const url = "http://127.0.0.1:1"
+  const config = testProviderConfig(url)
+  return {
+    ...config,
+    provider: {
+      ...config.provider,
+      test: {
+        ...config.provider.test,
+        // V2 Catalog availability intentionally checks provider request facts, not SDK-only
+        // settings. No model request is made in these tests.
+        options: { baseURL: url, body: { apiKey: "test-key" } },
+      },
+    },
+  }
+}
 
 function request(route: string, directory: string, init: RequestInit = {}) {
   const headers = new Headers(init.headers)
@@ -103,6 +121,78 @@ describe("v2 location HttpApi", () => {
       expect(body.location.directory).toBe(tmp.path)
       expect(body.location.project.id).toBeTruthy()
     }
+  })
+
+  test("validates session create through the location catalog and returns exact readback", async () => {
+    await using tmp = await tmpdir({ git: true, config: catalogConfig() })
+    const id = "ses_catalog_validated"
+    const payload = {
+      id,
+      agent: "build",
+      model: { providerID: "test", id: "test-model", variant: "default" },
+      location: { directory: tmp.path },
+    }
+    const create = () =>
+      request("/api/session", tmp.path, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(payload),
+      })
+
+    const first = await create()
+    const firstBody = await first.json()
+    expect({ status: first.status, body: firstBody }).toMatchObject({ status: 200, body: { data: payload } })
+
+    const retried = await create()
+    expect(retried.status).toBe(200)
+    expect(await retried.json()).toMatchObject({ data: payload })
+
+    const readback = await request(`/api/session/${id}`, tmp.path)
+    expect(readback.status).toBe(200)
+    expect(await readback.json()).toMatchObject({ data: payload })
+  })
+
+  test("rejects invalid selections and conflicting session identities", async () => {
+    await using tmp = await tmpdir({ git: true, config: catalogConfig() })
+    await using other = await tmpdir({ git: true })
+    const id = "ses_catalog_conflict"
+    const base = {
+      id,
+      agent: "build",
+      model: { providerID: "test", id: "test-model", variant: "default" },
+      location: { directory: tmp.path },
+    }
+    const post = (payload: unknown, directory = tmp.path) =>
+      request("/api/session", directory, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(payload),
+      })
+
+    expect((await post({ ...base, id: "ses_unknown_agent", agent: "missing" })).status).toBe(400)
+    expect(
+      (
+        await post({
+          ...base,
+          id: "ses_unknown_model",
+          model: { providerID: "test", id: "missing", variant: "default" },
+        })
+      ).status,
+    ).toBe(400)
+    expect(
+      (
+        await post({
+          ...base,
+          id: "ses_unknown_variant",
+          model: { providerID: "test", id: "test-model", variant: "missing" },
+        })
+      ).status,
+    ).toBe(400)
+
+    const created = await post(base)
+    expect({ status: created.status, body: await created.json() }).toMatchObject({ status: 200 })
+    expect((await post({ ...base, agent: "plan" })).status).toBe(409)
+    expect((await post({ ...base, location: { directory: other.path } }, other.path)).status).toBe(409)
   })
 
   test("streams native EventV2 payloads across locations", async () => {

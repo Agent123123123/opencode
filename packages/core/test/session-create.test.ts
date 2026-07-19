@@ -24,8 +24,10 @@ import { SessionEvent } from "@opencode-ai/core/session/event"
 import { SessionTable } from "@opencode-ai/core/session/sql"
 import { SessionStore } from "@opencode-ai/core/session/store"
 import { WorkspaceV2 } from "@opencode-ai/core/workspace"
+import { LocationServiceMap } from "@opencode-ai/core/location-service-map"
 import { testEffect } from "./lib/effect"
 import { tmpdir } from "./fixture/tmpdir"
+import { sessionSelectionLocations } from "./fixture/session-selection"
 
 const projects = Layer.succeed(
   ProjectV2.Service,
@@ -41,6 +43,7 @@ const it = testEffect(
     [
       [ProjectV2.node, projects],
       [SessionExecution.node, SessionExecution.noopLayer],
+      [LocationServiceMap.node, sessionSelectionLocations],
     ],
   ),
 )
@@ -93,13 +96,13 @@ describe("SessionV2.create", () => {
     }),
   )
 
-  it.effect("returns the existing Session when one ID is reused with different create arguments", () =>
+  it.effect("rejects reuse of one ID with different immutable create arguments", () =>
     Effect.gen(function* () {
       const session = yield* SessionV2.Service
-      const created = yield* session.create({ id, location })
+      yield* session.create({ id, location })
       const changed = [
         { id, location: Location.Ref.make({ directory: AbsolutePath.make("/other") }) },
-        { id, location, agent: AgentV2.ID.make("build") },
+        { id, location, agent: AgentV2.ID.make("plan") },
         {
           id,
           location,
@@ -108,7 +111,12 @@ describe("SessionV2.create", () => {
       ]
 
       for (const input of changed) {
-        expect(yield* session.create(input)).toEqual(created)
+        expect(
+          yield* session.create(input).pipe(
+            Effect.flip,
+            Effect.map((error) => error._tag),
+          ),
+        ).toBe("Session.CreateConflictError")
       }
       expect(yield* session.list()).toHaveLength(1)
     }),
@@ -156,6 +164,7 @@ describe("SessionV2.create", () => {
           directory: created.location.directory,
           title: "updated",
           agent: "build",
+          model: created.model,
           time: { created: 0, updated: 1 },
         }),
       })
