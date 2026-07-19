@@ -4,6 +4,7 @@ import { AISDK } from "./aisdk"
 import { Catalog } from "./catalog"
 import { CommandV2 } from "./command"
 import { Config } from "./config"
+import { ConfigReadiness } from "./config/readiness"
 import { LayerNode } from "./effect/layer-node"
 import { Node } from "./effect/app-node"
 import { FileMutation } from "./file-mutation"
@@ -26,6 +27,7 @@ import { Reference } from "./reference"
 import { ReferenceGuidance } from "./reference/guidance"
 import * as SessionRunnerLLM from "./session/runner/llm"
 import { SessionRunnerModel } from "./session/runner/model"
+import { SessionSelection } from "./session/selection"
 import { SessionTodo } from "./session/todo"
 import { SkillV2 } from "./skill"
 import { SkillGuidance } from "./skill/guidance"
@@ -43,6 +45,7 @@ export const locationServices = LayerNode.group([
   Location.node,
   Policy.node,
   Config.node,
+  ConfigReadiness.node,
   AgentV2.node,
   CommandV2.node,
   Reference.node,
@@ -74,6 +77,7 @@ export const locationServices = LayerNode.group([
   ReadToolFileSystem.node,
   BuiltInTools.node,
   SessionRunnerModel.node,
+  SessionSelection.node,
   Snapshot.node,
   SessionRunnerLLM.node,
 ])

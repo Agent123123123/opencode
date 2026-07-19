@@ -5,6 +5,7 @@ import { Api } from "../api"
 import { SessionsCursor } from "@opencode-ai/protocol/groups/session"
 import {
   ConflictError,
+  InvalidRequestError,
   InvalidCursorError,
   MessageNotFoundError,
   ServiceUnavailableError,
@@ -67,13 +68,57 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
       .handle(
         "session.create",
         Effect.fn(function* (ctx) {
-          return {
-            data: yield* session.create({
+          const create = session
+            .create({
               id: ctx.payload.id,
               agent: ctx.payload.agent,
               model: ctx.payload.model,
               location: ctx.payload.location ?? { directory: AbsolutePath.make(process.cwd()) },
-            }),
+            })
+            .pipe(
+              Effect.catchTags({
+                "SessionSelection.AgentNotFoundError": (error) =>
+                  Effect.fail(new InvalidRequestError({ message: `Unknown agent: ${error.agent}`, field: "agent" })),
+                "SessionSelection.AgentUnavailableError": (error) =>
+                  Effect.fail(
+                    new InvalidRequestError({ message: `Agent is not selectable: ${error.agent}`, field: "agent" }),
+                  ),
+                "SessionSelection.ModelNotSelectedError": () =>
+                  Effect.fail(
+                    new ServiceUnavailableError({ message: "No supported model is available", service: "catalog" }),
+                  ),
+                "SessionSelection.ModelUnavailableError": (error) =>
+                  Effect.fail(
+                    new InvalidRequestError({
+                      message: `Unavailable model: ${error.model.providerID}/${error.model.id}`,
+                      field: "model",
+                    }),
+                  ),
+                "SessionSelection.ModelUnsupportedError": (error) =>
+                  Effect.fail(
+                    new InvalidRequestError({
+                      message: `Unsupported model: ${error.model.providerID}/${error.model.id}`,
+                      field: "model",
+                    }),
+                  ),
+                "SessionSelection.VariantNotFoundError": (error) =>
+                  Effect.fail(
+                    new InvalidRequestError({
+                      message: `Unknown model variant: ${error.model.variant}`,
+                      field: "model.variant",
+                    }),
+                  ),
+                "Session.CreateConflictError": (error) =>
+                  Effect.fail(
+                    new ConflictError({
+                      message: `Session ${error.sessionID} already exists with a different ${error.reason}`,
+                      resource: error.sessionID,
+                    }),
+                  ),
+              }),
+            )
+          return {
+            data: yield* create,
           }
         }),
       )

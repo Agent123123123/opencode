@@ -6,6 +6,7 @@ import { Tool } from "@opencode-ai/core/tool/tool"
 import { define } from "@opencode-ai/plugin/v2/effect"
 import { AgentV2 } from "@opencode-ai/core/agent"
 import { Catalog } from "@opencode-ai/core/catalog"
+import { ConfigReadiness } from "@opencode-ai/core/config/readiness"
 import { AppNodeBuilder } from "@opencode-ai/core/effect/app-node-builder"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { LocationServiceMap } from "@opencode-ai/core/location-services"
@@ -135,6 +136,71 @@ describe("LocationServiceMap", () => {
             "websearch",
             "write",
           ])
+        }),
+      ),
+    ),
+  )
+
+  it.live("publishes config readiness only after batched state is committed", () =>
+    Effect.acquireRelease(
+      Effect.promise(() => tmpdir()),
+      (dir) => Effect.promise(() => dir[Symbol.asyncDispose]()),
+    ).pipe(
+      Effect.flatMap((dir) =>
+        Effect.gen(function* () {
+          yield* Effect.promise(() =>
+            fs.writeFile(
+              path.join(dir.path, "opencode.json"),
+              JSON.stringify({
+                agents: {
+                  orchestrator: {
+                    description: "Managed orchestrator",
+                    mode: "primary",
+                  },
+                },
+                providers: {
+                  readiness: {
+                    name: "Readiness Provider",
+                    api: {
+                      type: "aisdk",
+                      package: "@ai-sdk/openai",
+                      url: "https://readiness.invalid/v1",
+                    },
+                    models: {
+                      ready: { name: "Ready Model" },
+                    },
+                  },
+                },
+              }),
+            ),
+          )
+
+          const location = Location.Ref.make({ directory: AbsolutePath.make(dir.path) })
+          const state = yield* Effect.gen(function* () {
+            const readiness = yield* ConfigReadiness.Service
+            const agents = yield* AgentV2.Service
+            const catalog = yield* Catalog.Service
+
+            yield* Effect.all([readiness.wait("agent"), readiness.wait("provider")], {
+              discard: true,
+              concurrency: "unbounded",
+            })
+
+            return {
+              agent: yield* agents.get(AgentV2.ID.make("orchestrator")),
+              model: yield* catalog.model.get(ProviderV2.ID.make("readiness"), ModelV2.ID.make("ready")),
+            }
+          }).pipe(Effect.scoped, Effect.provide(LocationServiceMap.Service.get(location)))
+
+          expect(state.agent).toMatchObject({
+            description: "Managed orchestrator",
+            mode: "primary",
+          })
+          expect(state.model).toMatchObject({
+            name: "Ready Model",
+            providerID: "readiness",
+            id: "ready",
+          })
         }),
       ),
     ),
