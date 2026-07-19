@@ -6,6 +6,7 @@ type Method = "get" | "post" | "put" | "delete" | "patch"
 type OpenApiSchema = {
   readonly $ref?: string
   readonly anyOf?: ReadonlyArray<OpenApiSchema>
+  readonly oneOf?: ReadonlyArray<OpenApiSchema>
   readonly type?: string
   readonly enum?: readonly unknown[]
   readonly properties?: Record<string, OpenApiSchema>
@@ -114,6 +115,29 @@ describe("PublicApi OpenAPI v2 errors", () => {
     expect(spec.paths["/api/event"]?.get?.responses?.["200"]?.content?.["text/event-stream"]?.schema).toEqual({
       $ref: "#/components/schemas/V2Event",
     })
+  })
+
+  test("exposes durable turn proofs through both session history and SSE schemas", () => {
+    const spec = OpenApi.fromApi(PublicApi) as OpenApiSpec
+    const turnSchemas = ["SessionTurnStarted", "SessionTurnNot_started", "SessionTurnSettled"]
+    const durableRefs = spec.components.schemas.SessionDurableEvent?.oneOf?.flatMap((schema) =>
+      schema.$ref ? [componentName(schema.$ref)] : [],
+    )
+
+    expect(durableRefs).toEqual(expect.arrayContaining(turnSchemas))
+    expect(
+      spec.paths["/api/session/{sessionID}/history"]?.get?.responses?.["200"]?.content?.["application/json"],
+    ).toMatchObject({ schema: { $ref: "#/components/schemas/SessionHistory" } })
+    expect(
+      spec.paths["/api/session/{sessionID}/event"]?.get?.responses?.["200"]?.content?.["text/event-stream"]?.schema,
+    ).toMatchObject({
+      properties: { data: { $ref: "#/components/schemas/SessionDurableEventStream" } },
+    })
+    expect(turnSchemas.map((name) => spec.components.schemas[name]?.properties?.type?.enum)).toEqual([
+      ["session.turn.started"],
+      ["session.turn.not_started"],
+      ["session.turn.settled"],
+    ])
   })
 
   test("preserves /api auth responses", () => {

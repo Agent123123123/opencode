@@ -311,6 +311,7 @@ const insertSession = (id: SessionV2.ID) =>
 
 const setup = Effect.gen(function* () {
   const { db } = yield* Database.Service
+  requests.length = 0
   response = []
   systemBaseline = "Initial context"
   systemRemoved = false
@@ -555,6 +556,115 @@ const verifyPartialFlushOnInterruption = (kind: FragmentKind) =>
   })
 
 describe("SessionRunnerLLM", () => {
+  it.effect("publishes one durable Started and Settled proof through history and replay streaming", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const admitted = yield* session.prompt({
+        sessionID,
+        prompt: Prompt.make({ text: "Prove this activity" }),
+        resume: false,
+      })
+      response = fragmentFixture("text", "text-turn-proof", ["Done"]).completeEvents
+
+      yield* session.resume(sessionID)
+
+      const history = yield* session.history({ sessionID, limit: 100 })
+      const turns = history.events.filter((event) => event.type.startsWith("session.turn."))
+      expect(turns.map((event) => event.type)).toEqual(["session.turn.started", "session.turn.settled"])
+      const started = turns[0]
+      const settled = turns[1]
+      if (started?.type !== "session.turn.started" || settled?.type !== "session.turn.settled")
+        return yield* Effect.die("Expected a complete durable turn proof")
+      expect(started.data.activityInputIDs).toEqual([admitted.id])
+      expect(settled.data).toMatchObject({
+        schema: "opencode.turn_settled.v1",
+        turnID: started.data.turnID,
+        turnStartedAt: started.data.turnStartedAt,
+        activityInputIDs: [admitted.id],
+        outcome: "completed",
+      })
+
+      const replayed = Array.from(
+        yield* session.events({ sessionID, after: Math.max(-1, (started.durable?.seq ?? 0) - 1) }).pipe(
+          Stream.filter((event) => event.type.startsWith("session.turn.")),
+          Stream.take(2),
+          Stream.runCollect,
+        ),
+      )
+      expect(replayed.map((event) => event.type)).toEqual(["session.turn.started", "session.turn.settled"])
+    }),
+  )
+
+  it.effect("publishes only NotStarted when a promoted activity fails before the start boundary", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Establish context" }), resume: false })
+      response = fragmentFixture("text", "text-before-prepare-failure", ["Ready"]).completeEvents
+      yield* session.resume(sessionID)
+
+      const admitted = yield* session.prompt({
+        sessionID,
+        prompt: Prompt.make({ text: "Fail while preparing" }),
+        resume: false,
+      })
+      systemLoadHook = Effect.die(new Error("context preparation failed"))
+      const exit = yield* session.resume(sessionID).pipe(Effect.exit)
+
+      expect(Exit.isFailure(exit)).toBe(true)
+      const history = yield* session.history({ sessionID, limit: 100 })
+      const notStarted = history.events.find(
+        (event) => event.type === "session.turn.not_started" && event.data.activityInputIDs.includes(admitted.id),
+      )
+      if (notStarted?.type !== "session.turn.not_started")
+        return yield* Effect.die("Expected a durable NotStarted proof")
+      expect(notStarted.data).toMatchObject({
+        schema: "opencode.turn_not_started.v1",
+        activityInputIDs: [admitted.id],
+        outcome: "failed",
+        errorClass: "unknown",
+      })
+      expect(
+        history.events.some(
+          (event) => event.type === "session.turn.started" && event.data.turnID === notStarted.data.turnID,
+        ),
+      ).toBe(false)
+    }),
+  )
+
+  it.effect("never emits NotStarted after entering the durable Started publish window", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const events = yield* EventV2.Service
+      const admitted = yield* session.prompt({
+        sessionID,
+        prompt: Prompt.make({ text: "Interrupt the Started observer" }),
+        resume: false,
+      })
+      const unsubscribe = yield* events.listen((event) =>
+        event.type === "session.turn.started" ? Effect.interrupt : Effect.void,
+      )
+
+      const exit = yield* session.resume(sessionID).pipe(Effect.exit)
+      yield* unsubscribe
+
+      expect(Exit.isFailure(exit)).toBe(true)
+      const history = yield* session.history({ sessionID, limit: 100 })
+      const started = history.events.find(
+        (event) => event.type === "session.turn.started" && event.data.activityInputIDs.includes(admitted.id),
+      )
+      if (started?.type !== "session.turn.started")
+        return yield* Effect.die("Expected Started to be committed before observer interruption")
+      expect(
+        history.events.some(
+          (event) => event.type === "session.turn.not_started" && event.data.turnID === started.data.turnID,
+        ),
+      ).toBe(false)
+    }),
+  )
+
   it.effect("advertises and executes a globally attached application tool", () =>
     Effect.gen(function* () {
       yield* setup
@@ -591,10 +701,14 @@ describe("SessionRunnerLLM", () => {
       yield* session.resume(sessionID)
 
       expect(requests[0]?.tools.map((tool) => tool.name)).toContain("application_context")
+      const history = yield* session.history({ sessionID, limit: 100 })
+      const started = history.events.find((event) => event.type === "session.turn.started")
+      if (started?.type !== "session.turn.started") return yield* Effect.die("Expected a durable turn identity")
       expect(contexts).toMatchObject([
         {
           sessionID,
           agent: AgentV2.ID.make("build"),
+          turnID: started.data.turnID,
           assistantMessageID: expect.stringMatching(/^msg_/),
           activityInputIDs: [admitted.id],
           toolCallID: "call-application",

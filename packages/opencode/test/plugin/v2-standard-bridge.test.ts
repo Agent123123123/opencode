@@ -158,6 +158,7 @@ test("standard hooks bridge V1 tools into V2 with real execution capabilities", 
       const context: Tool.Context = {
         sessionID: SessionV2.ID.make("ses_bridge"),
         agent: AgentV2.ID.make("analyst"),
+        turnID: SessionMessage.ID.make("msg_turn_bridge"),
         assistantMessageID: SessionMessage.ID.make("msg_bridge"),
         activityInputIDs: [SessionMessage.ID.make("msg_input")],
         toolCallID: "call_bridge",

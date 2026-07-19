@@ -19,6 +19,7 @@ import type { PermissionRequestInput } from "./tool"
 export type ExecuteInput = {
   readonly sessionID: SessionSchema.ID
   readonly agent: AgentV2.ID
+  readonly turnID: SessionMessage.ID
   readonly assistantMessageID: SessionMessage.ID
   readonly activityInputIDs?: ReadonlyArray<SessionMessage.ID>
   readonly call: ToolCall
@@ -74,6 +75,7 @@ const registryLayer = Layer.effect(
         {
           sessionID: input.sessionID,
           agent: input.agent,
+          turnID: input.turnID,
           assistantMessageID: input.assistantMessageID,
           activityInputIDs: input.activityInputIDs ?? [],
           toolCallID: input.call.id,

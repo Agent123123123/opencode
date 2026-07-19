@@ -8,7 +8,7 @@ import {
   isContextOverflowFailure,
   type ProviderErrorEvent,
 } from "@opencode-ai/llm"
-import { Cause, DateTime, Effect, FiberSet, Layer, Option, Semaphore, Stream } from "effect"
+import { Cause, DateTime, Effect, Exit, FiberSet, Layer, Option, Semaphore, Stream } from "effect"
 import { AgentV2 } from "../../agent"
 import { Config } from "../../config"
 import { Database } from "../../database/database"
@@ -163,6 +163,14 @@ const layer = Layer.effect(
       }
     }
 
+    type Activity = {
+      readonly turnID: SessionMessage.ID
+      startCommitEntered: boolean
+      started: boolean
+      turnStartedAt?: DateTime.Utc
+      activityInputIDs: ReadonlyArray<SessionMessage.ID>
+    }
+
     const continueAfterCompaction = (step: number) => new TurnTransitionError({ _tag: "ContinueAfterCompaction", step })
     const continueAfterOverflowCompaction = (step: number) =>
       new TurnTransitionError({ _tag: "ContinueAfterOverflowCompaction", step })
@@ -188,6 +196,7 @@ const layer = Layer.effect(
       sessionID: SessionSchema.ID,
       promotion: SessionInput.Delivery | undefined,
       step: number,
+      activity: Activity,
       recoverOverflow?: typeof compaction.compactAfterOverflow,
     ) {
       const session = yield* getSession(sessionID)
@@ -201,16 +210,18 @@ const layer = Layer.effect(
       const pendingActivityInputIDs = promotion
         ? yield* SessionInput.pendingActivityIDs(db, session.id, promotion, cutoff)
         : []
+      activity.activityInputIDs = mergeInputIDs(activity.activityInputIDs, pendingActivityInputIDs)
       const model = yield* models.resolve(session)
       const effectiveModel = {
         id: ModelV2.ID.make(model.id),
         providerID: ProviderV2.ID.make(model.provider),
         ...(session.model?.variant === undefined ? {} : { variant: session.model.variant }),
       }
-      const activityBeforePromotion = mergeInputIDs(
-        currentActivityInputIDs(yield* getContext(session.id)),
-        pendingActivityInputIDs,
-      )
+      const activityBeforePromotion =
+        activity.activityInputIDs.length > 0
+          ? activity.activityInputIDs
+          : currentActivityInputIDs(yield* getContext(session.id))
+      activity.activityInputIDs = activityBeforePromotion
       const contextSource = loadSystemContext(session, agent, effectiveModel, activityBeforePromotion)
       const initialized = yield* SessionContextEpoch.initialize(db, contextSource, session.id)
       if (promotion) {
@@ -226,6 +237,7 @@ const layer = Layer.effect(
         activityBeforePromotion,
         currentActivityInputIDs(yield* getContext(session.id)),
       )
+      activity.activityInputIDs = activityInputIDs
       const system = initialized ?? (yield* SessionContextEpoch.prepare(db, events, contextSource, session.id))
       const entries = yield* SessionHistory.entriesForRunner(db, session.id, system.baselineSeq)
       const context = entries.map((entry) => entry.message)
@@ -245,6 +257,22 @@ const layer = Layer.effect(
       if (yield* compaction.compactIfNeeded({ sessionID: session.id, entries, model, request }))
         return yield* Effect.die(continueAfterCompaction(currentStep))
       const startSnapshot = yield* snapshots.capture()
+      if (!activity.started) {
+        const turnStartedAt = yield* DateTime.now
+        activity.turnStartedAt = turnStartedAt
+        // A failure after entering the durable publish window is ambiguous
+        // until replay proves whether Started committed. Never emit a
+        // contradictory NotStarted proof from this window.
+        activity.startCommitEntered = true
+        yield* events.publish(SessionEvent.Turn.Started, {
+          sessionID: session.id,
+          timestamp: turnStartedAt,
+          turnID: activity.turnID,
+          turnStartedAt,
+          activityInputIDs,
+        })
+        activity.started = true
+      }
       const publisher = createLLMEventPublisher(events, {
         sessionID: session.id,
         agent: agent.id,
@@ -282,6 +310,7 @@ const layer = Layer.effect(
                 toolMaterialization.settle({
                   sessionID: session.id,
                   agent: agent.id,
+                  turnID: activity.turnID,
                   assistantMessageID,
                   activityInputIDs,
                   call: event,
@@ -389,31 +418,32 @@ const layer = Layer.effect(
       sessionID: SessionSchema.ID,
       promotion: SessionInput.Delivery | undefined,
       step: number,
+      activity: Activity,
     ) => Effect.Effect<{ readonly needsContinuation: boolean; readonly step: number }, RunError>
 
-    const runAfterOverflowCompaction: RunTurn = Effect.fnUntraced(function* (sessionID, promotion, step) {
-      return yield* runTurnAttempt(sessionID, promotion, step).pipe(
+    const runAfterOverflowCompaction: RunTurn = Effect.fnUntraced(function* (sessionID, promotion, step, activity) {
+      return yield* runTurnAttempt(sessionID, promotion, step, activity).pipe(
         Effect.catchDefect(
           Effect.fnUntraced(function* (defect) {
             if (!(defect instanceof TurnTransitionError)) return yield* Effect.die(defect)
             if (defect.transition._tag === "ContinueAfterOverflowCompaction")
               return yield* Effect.die("Post-compaction provider attempt cannot recover another overflow")
             yield* Effect.yieldNow
-            return yield* runAfterOverflowCompaction(sessionID, undefined, defect.transition.step)
+            return yield* runAfterOverflowCompaction(sessionID, undefined, defect.transition.step, activity)
           }),
         ),
       )
     })
 
-    const runTurn: RunTurn = Effect.fnUntraced(function* (sessionID, promotion, step) {
-      return yield* runTurnAttempt(sessionID, promotion, step, compaction.compactAfterOverflow).pipe(
+    const runTurn: RunTurn = Effect.fnUntraced(function* (sessionID, promotion, step, activity) {
+      return yield* runTurnAttempt(sessionID, promotion, step, activity, compaction.compactAfterOverflow).pipe(
         Effect.catchDefect(
           Effect.fnUntraced(function* (defect) {
             if (!(defect instanceof TurnTransitionError)) return yield* Effect.die(defect)
             yield* Effect.yieldNow
             if (defect.transition._tag === "ContinueAfterOverflowCompaction")
-              return yield* runAfterOverflowCompaction(sessionID, undefined, defect.transition.step)
-            return yield* runTurn(sessionID, undefined, defect.transition.step)
+              return yield* runAfterOverflowCompaction(sessionID, undefined, defect.transition.step, activity)
+            return yield* runTurn(sessionID, undefined, defect.transition.step, activity)
           }),
         ),
       )
@@ -430,15 +460,86 @@ const layer = Layer.effect(
       let promotion: SessionInput.Delivery | undefined = hasSteer ? "steer" : hasQueue ? "queue" : undefined
       let shouldRun = input.force || hasSteer || hasQueue
       while (shouldRun) {
-        let needsContinuation = true
-        let step = 1
-        while (needsContinuation) {
-          const result = yield* runTurn(input.sessionID, promotion, step)
-          needsContinuation = result.needsContinuation
-          step = result.step + 1
-          promotion = "steer"
-          if (!needsContinuation) needsContinuation = yield* SessionInput.hasPending(db, input.sessionID, "steer")
+        const activity: Activity = {
+          turnID: SessionMessage.ID.create(),
+          startCommitEntered: false,
+          started: false,
+          activityInputIDs: [],
         }
+        const activityExit = yield* Effect.uninterruptibleMask((restore) =>
+          restore(
+            Effect.gen(function* () {
+              let needsContinuation = true
+              let step = 1
+              while (needsContinuation) {
+                const result = yield* runTurn(input.sessionID, promotion, step, activity)
+                needsContinuation = result.needsContinuation
+                step = result.step + 1
+                promotion = "steer"
+                if (!needsContinuation) needsContinuation = yield* SessionInput.hasPending(db, input.sessionID, "steer")
+              }
+            }),
+          ).pipe(
+            Effect.exit,
+            Effect.tap((exit) =>
+              Effect.gen(function* () {
+                const interrupted = Exit.isFailure(exit) && Cause.hasInterrupts(exit.cause)
+                const error = Exit.isFailure(exit)
+                  ? (Option.getOrUndefined(Cause.findErrorOption(exit.cause)) ?? Cause.squash(exit.cause))
+                  : undefined
+                const failureReason = interrupted
+                  ? "Activity interrupted"
+                  : error instanceof Error
+                    ? error.message
+                    : typeof error === "string"
+                      ? error
+                      : "Activity failed"
+
+                if (!activity.started) {
+                  if (activity.startCommitEntered || !Exit.isFailure(exit) || activity.activityInputIDs.length === 0)
+                    return
+                  const promotedInputIDs: SessionMessage.ID[] = []
+                  for (const inputID of activity.activityInputIDs) {
+                    const admitted = yield* SessionInput.find(db, inputID)
+                    if (admitted?.promotedSeq !== undefined) promotedInputIDs.push(inputID)
+                  }
+                  if (promotedInputIDs.length === 0) return
+                  yield* events.publish(SessionEvent.Turn.NotStarted, {
+                    sessionID: input.sessionID,
+                    timestamp: yield* DateTime.now,
+                    schema: "opencode.turn_not_started.v1",
+                    turnID: activity.turnID,
+                    activityInputIDs: promotedInputIDs,
+                    outcome: interrupted ? "interrupted" : "failed",
+                    reason: failureReason,
+                    errorClass: interrupted ? "interrupt" : "unknown",
+                  })
+                  return
+                }
+
+                const turnStartedAt = activity.turnStartedAt
+                if (!turnStartedAt) return yield* Effect.die("Started activity is missing its start timestamp")
+                yield* events.publish(SessionEvent.Turn.Settled, {
+                  sessionID: input.sessionID,
+                  timestamp: yield* DateTime.now,
+                  schema: "opencode.turn_settled.v1",
+                  turnID: activity.turnID,
+                  turnStartedAt,
+                  activityInputIDs: activity.activityInputIDs,
+                  outcome: interrupted ? "aborted" : Exit.isFailure(exit) ? "error" : "completed",
+                  ...(Exit.isFailure(exit)
+                    ? {
+                        reason: failureReason,
+                        errorClass: interrupted ? ("interrupt" as const) : ("unknown" as const),
+                        ...(interrupted ? { abortOrigin: "framework" as const } : {}),
+                      }
+                    : {}),
+                })
+              }),
+            ),
+          ),
+        )
+        if (Exit.isFailure(activityExit)) return yield* Effect.failCause(activityExit.cause)
         shouldRun = yield* SessionInput.hasPending(db, input.sessionID, "queue")
         promotion = shouldRun ? "queue" : undefined
       }

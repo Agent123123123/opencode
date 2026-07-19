@@ -38,6 +38,7 @@ const integrated = testEffect(
 )
 const identity = {
   agent: AgentV2.ID.make("build"),
+  turnID: SessionMessage.ID.make("msg_turn_registry"),
   assistantMessageID: SessionMessage.ID.make("msg_registry"),
 }
 const sessionID = SessionV2.ID.make("ses_registry")

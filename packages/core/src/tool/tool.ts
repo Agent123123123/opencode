@@ -11,6 +11,7 @@ import type { ToolExecution } from "./execution"
 export interface Context {
   readonly sessionID: SessionSchema.ID
   readonly agent: AgentV2.ID
+  readonly turnID: SessionMessage.ID
   readonly assistantMessageID: SessionMessage.ID
   readonly activityInputIDs: ReadonlyArray<SessionMessage.ID>
   readonly toolCallID: string
@@ -126,6 +127,7 @@ export function make<
         const invocation = {
           sessionID: context.sessionID,
           agent: context.agent,
+          turnID: context.turnID,
           assistantMessageID: context.assistantMessageID,
           activityInputIDs: context.activityInputIDs,
           toolCallID: context.toolCallID,

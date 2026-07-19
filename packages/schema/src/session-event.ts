@@ -109,6 +109,56 @@ export const ContextUpdated = Event.define({
 })
 export type ContextUpdated = typeof ContextUpdated.Type
 
+export namespace Turn {
+  export const Started = Event.define({
+    type: "session.turn.started",
+    ...options,
+    schema: {
+      ...Base,
+      turnID: SessionMessage.ID,
+      turnStartedAt: DateTimeUtcFromMillis,
+      activityInputIDs: Schema.Array(SessionMessage.ID),
+    },
+  })
+  export type Started = typeof Started.Type
+
+  /**
+   * Durable proof that promoted inputs were consumed by a runner attempt but
+   * execution never crossed the durable Turn.Started commit boundary.
+   */
+  export const NotStarted = Event.define({
+    type: "session.turn.not_started",
+    ...options,
+    schema: {
+      ...Base,
+      schema: Schema.Literal("opencode.turn_not_started.v1"),
+      turnID: SessionMessage.ID,
+      activityInputIDs: Schema.Array(SessionMessage.ID),
+      outcome: Schema.Literals(["failed", "aborted", "interrupted"]),
+      reason: Schema.String,
+      errorClass: Schema.Literals(["transport", "resource", "protocol", "interrupt", "unknown"]),
+    },
+  })
+  export type NotStarted = typeof NotStarted.Type
+
+  export const Settled = Event.define({
+    type: "session.turn.settled",
+    ...options,
+    schema: {
+      ...Base,
+      schema: Schema.Literal("opencode.turn_settled.v1"),
+      turnID: SessionMessage.ID,
+      turnStartedAt: DateTimeUtcFromMillis,
+      activityInputIDs: Schema.Array(SessionMessage.ID),
+      outcome: Schema.Literals(["completed", "error", "aborted"]),
+      reason: Schema.String.pipe(optional),
+      errorClass: Schema.Literals(["transport", "resource", "protocol", "interrupt", "unknown"]).pipe(optional),
+      abortOrigin: Schema.Literals(["user", "framework", "runtime_shutdown", "unknown"]).pipe(optional),
+    },
+  })
+  export type Settled = typeof Settled.Type
+}
+
 export const Synthetic = Event.define({
   type: "session.next.synthetic",
   ...options,
@@ -452,6 +502,9 @@ export const DurableDefinitions = Event.inventory(
   Prompted,
   PromptAdmitted,
   ContextUpdated,
+  Turn.Started,
+  Turn.NotStarted,
+  Turn.Settled,
   Synthetic,
   Shell.Started,
   Shell.Ended,
@@ -483,6 +536,9 @@ export const Definitions = Event.inventory(
   Prompted,
   PromptAdmitted,
   ContextUpdated,
+  Turn.Started,
+  Turn.NotStarted,
+  Turn.Settled,
   Synthetic,
   Shell.Started,
   Shell.Ended,
