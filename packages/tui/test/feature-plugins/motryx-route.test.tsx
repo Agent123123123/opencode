@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 import { expect, test } from "bun:test"
 import type { TuiPluginApi } from "@opencode-ai/plugin/tui"
-import type { Message, Part, Session } from "@opencode-ai/sdk/v2"
+import type { SessionMessage, SessionV2Info } from "@opencode-ai/sdk/v2"
 import { ScrollBoxRenderable, type Renderable } from "@opentui/core"
 import { testRender } from "@opentui/solid"
 import path from "node:path"
@@ -21,54 +21,55 @@ test("Motryx plugin route renders sidecar workflow and OpenCode transcript witho
   const lifecycle = new AbortController()
   const session = {
     id: config.orchestratorSessionID,
+    projectID: "project-key",
     title: "Migration orchestrator",
     agent: "orchestrator",
     model: { providerID: "openai", id: "gpt-test", variant: "high" },
-  } as Session
-  const messages = [
-    { id: "msg_user", role: "user", agent: "orchestrator" },
-    { id: "msg_assistant", role: "assistant", agent: "orchestrator" },
-  ] as Message[]
+    cost: 0,
+    tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+    time: { created: 1, updated: 2 },
+    location: { directory: projectID },
+  } satisfies SessionV2Info
+  let messages = [
+    {
+      id: "msg_assistant",
+      type: "assistant",
+      agent: "orchestrator",
+      model: { providerID: "openai", id: "gpt-test" },
+      content: [{ id: "text_assistant", type: "text", text: "Using the standard plugin route" }],
+      time: { created: 2, completed: 3 },
+    },
+    { id: "msg_user", type: "user", text: "Migrate the TUI", time: { created: 1 } },
+  ] satisfies SessionMessage[]
+  let loadedSessionID: string | undefined
+  let messageQuery: { sessionID: string; limit?: number; order?: "asc" | "desc" } | undefined
+  let messageCalls = 0
+  const eventHandlers = new Map<string, (event: { properties: { sessionID: string } }) => void>()
   const base = createTuiPluginApi({
-    state: {
-      session: {
-        get: () => session,
-        messages: () => messages,
+    event: {
+      on(type, handler) {
+        eventHandlers.set(type, handler as (event: { properties: { sessionID: string } }) => void)
+        return () => eventHandlers.delete(type)
       },
     },
+    client: {
+      v2: {
+        session: {
+          async get(input: { sessionID: string }) {
+            loadedSessionID = input.sessionID
+            return { data: { data: session } }
+          },
+          async messages(input: { sessionID: string; limit?: number; order?: "asc" | "desc" }) {
+            messageCalls += 1
+            messageQuery = input
+            return { data: { data: messages, cursor: {} } }
+          },
+        },
+      },
+    } as TuiPluginApi["client"],
   })
-  const parts = new Map<string, Part[]>([
-    [
-      "msg_user",
-      [
-        {
-          id: "part_user",
-          sessionID: config.orchestratorSessionID,
-          messageID: "msg_user",
-          type: "text",
-          text: "Migrate the TUI",
-        },
-      ],
-    ],
-    [
-      "msg_assistant",
-      [
-        {
-          id: "part_assistant",
-          sessionID: config.orchestratorSessionID,
-          messageID: "msg_assistant",
-          type: "text",
-          text: "Using the standard plugin route",
-        },
-      ],
-    ],
-  ])
   const api = {
     ...base,
-    state: {
-      ...base.state,
-      part: (messageID: string) => parts.get(messageID) ?? [],
-    },
     lifecycle: {
       signal: lifecycle.signal,
       onDispose: () => () => {},
@@ -148,6 +149,8 @@ test("Motryx plugin route renders sidecar workflow and OpenCode transcript witho
       if (frame.includes("TUI migration") && frame.includes("Using the standard plugin route")) break
       await Bun.sleep(10)
     }
+    expect(loadedSessionID).toBe(config.orchestratorSessionID)
+    expect(messageQuery).toEqual({ sessionID: config.orchestratorSessionID, limit: 100, order: "desc" })
     expect(workflowCalls).toBe(1)
     expect(frame).toContain("MOTRYX")
     expect(frame).toContain("ROUTABLE")
@@ -155,6 +158,29 @@ test("Motryx plugin route renders sidecar workflow and OpenCode transcript witho
     expect(frame).toContain("TUI migration")
     expect(frame).toContain("Migrate the TUI")
     expect(frame).toContain("Using the standard plugin route")
+
+    messages = [
+      {
+        id: "msg_updated",
+        type: "assistant",
+        agent: "orchestrator",
+        model: { providerID: "openai", id: "gpt-test" },
+        content: [{ id: "text_updated", type: "text", text: "Durable V2 transcript refreshed" }],
+        time: { created: 4, completed: 5 },
+      },
+      ...messages,
+    ]
+    const callsBeforeRefresh = messageCalls
+    eventHandlers.get("session.turn.settled")?.({ properties: { sessionID: config.orchestratorSessionID } })
+    const refreshDeadline = Date.now() + 2_000
+    while (Date.now() < refreshDeadline) {
+      await app.renderOnce()
+      frame = app.captureCharFrame()
+      if (frame.includes("Durable V2 transcript refreshed")) break
+      await Bun.sleep(10)
+    }
+    expect(messageCalls).toBeGreaterThan(callsBeforeRefresh)
+    expect(frame).toContain("Durable V2 transcript refreshed")
 
     await app.waitFor(() => findScrollBoxes(app.renderer.root).some((box) => box.scrollHeight > box.viewport.height))
     const workflowScroll = findScrollBoxes(app.renderer.root).find((box) => box.scrollHeight > box.viewport.height)

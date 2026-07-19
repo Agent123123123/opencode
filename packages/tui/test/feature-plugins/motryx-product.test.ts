@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import type { Message } from "@opencode-ai/sdk/v2"
+import type { SessionMessage } from "@opencode-ai/sdk/v2"
 import { createBuiltinPlugins } from "../../src/feature-plugins/builtins"
 import { motryxProductLayout } from "../../src/feature-plugins/motryx/layout"
 import { projectTranscript } from "../../src/feature-plugins/motryx/route"
@@ -29,22 +29,29 @@ describe("Motryx product TUI", () => {
     expect(motryxProductLayout({ width: 120, height: 40 })).toMatchObject({ workflowWidth: 46 })
   })
 
-  test("derives transcript only from OpenCode messages/parts and hides internal hints", () => {
+  test("derives transcript only from OpenCode V2 conversation text and hides internal hints", () => {
     const messages = [
-      { id: "msg_user", role: "user", agent: "orchestrator" },
-      { id: "msg_assistant", role: "assistant", agent: "orchestrator" },
-    ] as Message[]
-    const parts = new Map([
-      ["msg_user", [{ type: "text", text: "Build the migration" }]],
-      [
-        "msg_assistant",
-        [
-          { type: "text", text: "runtime_liveness=READY\nWorking on SSE" },
-          { type: "text", text: "hidden", synthetic: true },
+      { id: "msg_user", type: "user", text: "Build the migration", time: { created: 1 } },
+      {
+        id: "msg_wake",
+        type: "user",
+        text: '<ic_agent_wakeup>\n{"wake_id":"internal"}\n</ic_agent_wakeup>',
+        time: { created: 2 },
+      },
+      { id: "msg_system", type: "system", text: "hidden system context", time: { created: 3 } },
+      {
+        id: "msg_assistant",
+        type: "assistant",
+        agent: "orchestrator",
+        model: { providerID: "openai", id: "gpt-test" },
+        content: [
+          { id: "text", type: "text", text: "runtime_liveness=READY\nWorking on SSE" },
+          { id: "reasoning", type: "reasoning", text: "hidden reasoning" },
         ],
-      ],
-    ])
-    expect(projectTranscript(messages, (id) => parts.get(id) ?? [])).toEqual([
+        time: { created: 4, completed: 5 },
+      },
+    ] satisfies SessionMessage[]
+    expect(projectTranscript(messages)).toEqual([
       { id: "msg_user", role: "user", label: "you", text: "Build the migration" },
       { id: "msg_assistant", role: "assistant", label: "orchestrator", text: "Working on SSE" },
     ])
