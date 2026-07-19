@@ -1,12 +1,17 @@
 export * as Credential from "./credential"
 
+import path from "path"
 import { asc, eq } from "drizzle-orm"
-import { Context, Effect, Layer, Schema } from "effect"
+import { Context, Effect, Layer, Option, Schema } from "effect"
 import { Credential } from "@opencode-ai/schema/credential"
 import { Integration } from "@opencode-ai/schema/integration"
+import { NonNegativeInt } from "@opencode-ai/schema/schema"
 import { Database } from "./database/database"
 import { makeGlobalNode } from "./effect/app-node"
 import { CredentialTable } from "./credential/sql"
+import { DataMigrationTable } from "./data-migration.sql"
+import { FSUtil } from "./fs-util"
+import { Global } from "./global"
 
 export const ID = Credential.ID
 export type ID = Credential.ID
@@ -19,6 +24,23 @@ export type Key = Credential.Key
 
 export const Value = Credential.Value
 export type Value = Credential.Value
+
+const LegacyOAuth = Schema.Struct({
+  type: Schema.Literal("oauth"),
+  refresh: Schema.String,
+  access: Schema.String,
+  expires: NonNegativeInt,
+  accountId: Schema.String.pipe(Schema.optional),
+  enterpriseUrl: Schema.String.pipe(Schema.optional),
+})
+
+const LegacyKey = Schema.Struct({
+  type: Schema.Literal("api"),
+  key: Schema.String,
+  metadata: Schema.Record(Schema.String, Schema.Unknown).pipe(Schema.optional),
+})
+
+const LegacyValue = Schema.Union([LegacyOAuth, LegacyKey])
 
 export class Info extends Schema.Class<Info>("Credential.Info")({
   id: ID,
@@ -52,6 +74,63 @@ const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const { db } = yield* Database.Service
+    const fs = yield* FSUtil.Service
+    const global = yield* Global.Service
+    yield* Effect.gen(function* () {
+      const migration = "credential.auth-json"
+      const completed = yield* db
+        .select()
+        .from(DataMigrationTable)
+        .where(eq(DataMigrationTable.name, migration))
+        .get()
+      if (completed) return
+      const raw = yield* fs.readJson(path.join(global.data, "auth.json")).pipe(Effect.option)
+      if (Option.isNone(raw) || typeof raw.value !== "object" || raw.value === null || Array.isArray(raw.value)) return
+      const decode = Schema.decodeUnknownOption(LegacyValue)
+      const values = Object.entries(raw.value).flatMap(([integrationID, value]) => {
+        const decoded = decode(value)
+        if (Option.isNone(decoded)) return []
+        const legacy = decoded.value
+        const credential: Value =
+          legacy.type === "api"
+            ? Key.make({ type: "key", key: legacy.key, metadata: legacy.metadata })
+            : OAuth.make({
+                type: "oauth",
+                methodID: Integration.MethodID.make(integrationID === "openai" ? "chatgpt-browser" : "oauth"),
+                refresh: legacy.refresh,
+                access: legacy.access,
+                expires: legacy.expires,
+                metadata: {
+                  ...(legacy.accountId ? { accountID: legacy.accountId } : {}),
+                  ...(legacy.enterpriseUrl ? { enterpriseURL: legacy.enterpriseUrl } : {}),
+                },
+              })
+        return [{ integrationID: Integration.ID.make(integrationID.replace(/\/+$/, "")), value: credential }]
+      })
+      yield* db.transaction((tx) =>
+        Effect.gen(function* () {
+          for (const item of values) {
+            const existing = yield* tx
+              .select({ id: CredentialTable.id })
+              .from(CredentialTable)
+              .where(eq(CredentialTable.integration_id, item.integrationID))
+              .get()
+            if (existing) continue
+            yield* tx.insert(CredentialTable).values({
+              id: ID.create(),
+              integration_id: item.integrationID,
+              label: "Imported",
+              value: item.value,
+            })
+          }
+          yield* tx
+            .insert(DataMigrationTable)
+            .values({ name: migration, time_completed: Date.now() })
+            .onConflictDoNothing()
+            .run()
+        }),
+      )
+    }).pipe(Effect.orDie)
     const decode = Schema.decodeUnknownSync(Value)
     const stored = (row: typeof CredentialTable.$inferSelect) => {
       if (!row.integration_id) return
@@ -135,4 +214,4 @@ const layer = Layer.effect(
   }),
 )
 
-export const node = makeGlobalNode({ service: Service, layer, deps: [Database.node] })
+export const node = makeGlobalNode({ service: Service, layer, deps: [Database.node, FSUtil.node, Global.node] })
