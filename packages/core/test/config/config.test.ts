@@ -795,4 +795,74 @@ describe("Config", () => {
       }),
     ),
   )
+
+  it.live("skips project configuration when project discovery is disabled", () =>
+    Effect.acquireRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ).pipe(
+      Effect.flatMap((tmp) => {
+        const previous = process.env.OPENCODE_DISABLE_PROJECT_CONFIG
+        const global = path.join(tmp.path, "global")
+        const root = path.join(tmp.path, "repo")
+        const directory = path.join(root, "work")
+        return Effect.acquireUseRelease(
+          Effect.sync(() => {
+            process.env.OPENCODE_DISABLE_PROJECT_CONFIG = "1"
+          }),
+          () =>
+            Effect.gen(function* () {
+              yield* Effect.promise(async () => {
+                await fs.mkdir(global, { recursive: true })
+                await fs.mkdir(path.join(directory, ".opencode"), { recursive: true })
+                await Promise.all([
+                  fs.writeFile(
+                    path.join(global, "opencode.json"),
+                    JSON.stringify({
+                      model: "managed/model",
+                      agents: { worker: { model: "managed/model" } },
+                    }),
+                  ),
+                  fs.writeFile(
+                    path.join(root, "opencode.json"),
+                    JSON.stringify({ model: "leaked/direct", agents: { leaked: { model: "leaked/direct" } } }),
+                  ),
+                  fs.writeFile(
+                    path.join(directory, ".opencode", "opencode.json"),
+                    JSON.stringify({ plugins: ["leaked-plugin"] }),
+                  ),
+                ])
+              })
+
+              return yield* Effect.gen(function* () {
+                const config = yield* Config.Service
+                const entries = yield* config.entries()
+                const documents = entries.filter((entry) => entry.type === "document")
+
+                expect(entries.filter((entry) => entry.type === "directory").map((entry) => entry.path)).toEqual([
+                  AbsolutePath.make(global),
+                ])
+                expect(documents).toHaveLength(1)
+                expect(Config.latest(entries, "model")).toBe("managed/model")
+                expect(documents[0]?.info.agents?.worker?.model).toBe("managed/model")
+                expect(documents[0]?.info.agents?.leaked).toBeUndefined()
+                expect(documents[0]?.info.plugins).toBeUndefined()
+              }).pipe(
+                Effect.provide(
+                  testLayer(directory, global, root, {
+                    type: "git",
+                    store: AbsolutePath.make(path.join(root, ".git")),
+                  }),
+                ),
+              )
+            }),
+          () =>
+            Effect.sync(() => {
+              if (previous === undefined) delete process.env.OPENCODE_DISABLE_PROJECT_CONFIG
+              else process.env.OPENCODE_DISABLE_PROJECT_CONFIG = previous
+            }),
+        )
+      }),
+    ),
+  )
 })
