@@ -1,10 +1,15 @@
 import { afterEach, describe, expect, test } from "bun:test"
 import { EventV2 } from "@opencode-ai/core/event"
+import { Global } from "@opencode-ai/core/global"
 import { Location } from "@opencode-ai/core/location"
-import { Context, Schema } from "effect"
+import { Context, Effect, Schema } from "effect"
+import path from "node:path"
+import { pathToFileURL } from "node:url"
 import { HttpApiApp } from "../../src/server/routes/instance/httpapi/server"
 import { resetDatabase } from "../fixture/db"
 import { disposeAllInstances, tmpdir } from "../fixture/fixture"
+import { markPluginDependenciesReady } from "../fixture/plugin"
+import { TestLLMServer } from "../lib/llm-server"
 import { testProviderConfig } from "../lib/test-provider"
 
 const context = Context.empty() as Context.Context<unknown>
@@ -151,6 +156,94 @@ describe("v2 location HttpApi", () => {
     expect(readback.status).toBe(200)
     expect(await readback.json()).toMatchObject({ data: payload })
   })
+
+  test("keeps standard plugin tools attached to the V2 session location", async () => {
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const llm = yield* TestLLMServer
+        const tmp = yield* Effect.acquireRelease(
+          Effect.promise(() => tmpdir({ git: true })),
+          (directory) => Effect.promise(() => directory[Symbol.asyncDispose]()),
+        )
+        const configDirectory = path.join(tmp.path, ".opencode")
+        yield* Effect.promise(() => markPluginDependenciesReady(configDirectory))
+        yield* Effect.promise(() => markPluginDependenciesReady(Global.Path.config))
+        const plugin = path.join(tmp.path, "standard-plugin.ts")
+        yield* Effect.promise(() =>
+          Bun.write(
+            plugin,
+            [
+              "export default async () => ({",
+              "  tool: {",
+              "    bridge_probe: {",
+              '      description: "Bridge probe",',
+              "      args: {},",
+              '      execute: async () => "bridged",',
+              "    },",
+              "  },",
+              "})",
+              "",
+            ].join("\n"),
+          ),
+        )
+        yield* Effect.promise(() =>
+          Bun.write(
+            path.join(tmp.path, "opencode.json"),
+            JSON.stringify({
+              ...testProviderConfig(llm.url),
+              provider: {
+                test: {
+                  ...testProviderConfig(llm.url).provider.test,
+                  options: { apiKey: "test-key", baseURL: llm.url, body: { apiKey: "test-key" } },
+                },
+              },
+              plugin: [pathToFileURL(plugin).href],
+            }),
+          ),
+        )
+
+        const payload = {
+          id: "ses_standard_plugin_bridge",
+          title: "Standard plugin bridge",
+          agent: "build",
+          model: { providerID: "test", id: "test-model", variant: "default" },
+          location: { directory: tmp.path },
+        }
+        const created = yield* Effect.promise(() =>
+          request("/api/session", tmp.path, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify(payload),
+          }),
+        )
+        expect({ status: created.status, body: yield* Effect.promise(() => created.json()) }).toMatchObject({
+          status: 200,
+        })
+
+        const initialized = yield* Effect.promise(() => request("/agent", tmp.path)).pipe(
+          Effect.timeoutOrElse({ duration: "15 seconds", orElse: () => Effect.fail(new Error("agent init timed out")) }),
+        )
+        expect({ status: initialized.status, body: yield* Effect.promise(() => initialized.json()) }).toMatchObject({
+          status: 200,
+        })
+        yield* llm.text("done")
+        const prompted = yield* Effect.promise(() =>
+          request(`/api/session/${payload.id}/prompt`, tmp.path, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ prompt: { text: "Use the bridge probe." }, delivery: "queue" }),
+          }),
+        ).pipe(
+          Effect.timeoutOrElse({ duration: "10 seconds", orElse: () => Effect.fail(new Error("prompt timed out")) }),
+        )
+        expect(prompted.status).toBe(200)
+        yield* llm.wait(1).pipe(
+          Effect.timeoutOrElse({ duration: "10 seconds", orElse: () => Effect.fail(new Error("LLM call timed out")) }),
+        )
+        expect(JSON.stringify((yield* llm.inputs)[0])).toContain('"name":"bridge_probe"')
+      }).pipe(Effect.provide(TestLLMServer.layer), Effect.scoped),
+    )
+  }, 60_000)
 
   test("rejects invalid selections and conflicting session identities", async () => {
     await using tmp = await tmpdir({ git: true, config: catalogConfig() })

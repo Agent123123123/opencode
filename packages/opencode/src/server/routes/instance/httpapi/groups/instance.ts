@@ -2,6 +2,7 @@ import { Agent } from "@/agent/agent"
 import { Command } from "@/command"
 import { Format } from "@/format"
 import { LSP } from "@/lsp/lsp"
+import { LocationMiddleware } from "@opencode-ai/server/location"
 import { Vcs } from "@/project/vcs"
 import { Skill } from "@/skill"
 import { Schema } from "effect"
@@ -149,13 +150,15 @@ export const InstanceApi = HttpApi.make("instance")
         HttpApiEndpoint.get("agent", InstancePaths.agent, {
           query: WorkspaceRoutingQuery,
           success: described(Schema.Array(Agent.Info), "List of agents"),
-        }).annotateMerge(
-          OpenApi.annotations({
-            identifier: "app.agents",
-            summary: "List agents",
-            description: "Get a list of all available AI agents in the OpenCode system.",
-          }),
-        ),
+        })
+          .annotateMerge(
+            OpenApi.annotations({
+              identifier: "app.agents",
+              summary: "List agents",
+              description: "Get a list of all available AI agents in the OpenCode system.",
+            }),
+          )
+          .middleware(LocationMiddleware),
         HttpApiEndpoint.get("skill", InstancePaths.skill, {
           query: WorkspaceRoutingQuery,
           success: described(Schema.Array(Skill.Info), "List of skills"),
