@@ -8,6 +8,7 @@ import type { Failure, Context as ToolContext } from "./tool"
 export interface Invocation {
   readonly sessionID: ToolContext["sessionID"]
   readonly agent: ToolContext["agent"]
+  readonly turnID: ToolContext["turnID"]
   readonly assistantMessageID: ToolContext["assistantMessageID"]
   readonly activityInputIDs: ToolContext["activityInputIDs"]
   readonly toolCallID: ToolContext["toolCallID"]

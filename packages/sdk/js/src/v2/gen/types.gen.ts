@@ -22,6 +22,9 @@ export type Event =
   | EventSessionNextPrompted
   | EventSessionNextPromptAdmitted
   | EventSessionNextContextUpdated
+  | EventSessionTurnStarted
+  | EventSessionTurnNotStarted
+  | EventSessionTurnSettled
   | EventSessionNextSynthetic
   | EventSessionNextShellStarted
   | EventSessionNextShellEnded
@@ -882,6 +885,47 @@ export type GlobalEvent = {
       }
     | {
         id: string
+        type: "session.turn.started"
+        properties: {
+          timestamp: number
+          sessionID: string
+          turnID: string
+          turnStartedAt: number
+          activityInputIDs: Array<string>
+        }
+      }
+    | {
+        id: string
+        type: "session.turn.not_started"
+        properties: {
+          timestamp: number
+          sessionID: string
+          schema: "opencode.turn_not_started.v1"
+          turnID: string
+          activityInputIDs: Array<string>
+          outcome: "failed" | "aborted" | "interrupted"
+          reason: string
+          errorClass: "transport" | "resource" | "protocol" | "interrupt" | "unknown"
+        }
+      }
+    | {
+        id: string
+        type: "session.turn.settled"
+        properties: {
+          timestamp: number
+          sessionID: string
+          schema: "opencode.turn_settled.v1"
+          turnID: string
+          turnStartedAt: number
+          activityInputIDs: Array<string>
+          outcome: "completed" | "error" | "aborted"
+          reason?: string
+          errorClass?: "transport" | "resource" | "protocol" | "interrupt" | "unknown"
+          abortOrigin?: "user" | "framework" | "runtime_shutdown" | "unknown"
+        }
+      }
+    | {
+        id: string
         type: "session.next.synthetic"
         properties: {
           timestamp: number
@@ -1614,6 +1658,9 @@ export type GlobalEvent = {
     | SyncEventSessionNextPrompted
     | SyncEventSessionNextPromptAdmitted
     | SyncEventSessionNextContextUpdated
+    | SyncEventSessionTurnStarted
+    | SyncEventSessionTurnNotStarted
+    | SyncEventSessionTurnSettled
     | SyncEventSessionNextSynthetic
     | SyncEventSessionNextShellStarted
     | SyncEventSessionNextShellEnded
@@ -2695,6 +2742,18 @@ export type InvalidCursorError = {
   message: string
 }
 
+export type ConflictError = {
+  _tag: "ConflictError"
+  message: string
+  resource?: string
+}
+
+export type ServiceUnavailableError = {
+  _tag: "ServiceUnavailableError"
+  message: string
+  service?: string
+}
+
 export type SessionActive = {
   type: "running"
 }
@@ -2709,18 +2768,6 @@ export type PromptInput = {
   text: string
   files?: Array<PromptInputFileAttachment>
   agents?: Array<PromptAgentAttachment>
-}
-
-export type ConflictError = {
-  _tag: "ConflictError"
-  message: string
-  resource?: string
-}
-
-export type ServiceUnavailableError = {
-  _tag: "ServiceUnavailableError"
-  message: string
-  service?: string
 }
 
 export type MessageNotFoundError = {
@@ -2743,6 +2790,9 @@ export type SessionDurableEvent =
   | SessionNextPrompted
   | SessionNextPromptAdmitted
   | SessionNextContextUpdated
+  | SessionTurnStarted
+  | SessionTurnNotStarted
+  | SessionTurnSettled
   | SessionNextSynthetic
   | SessionNextShellStarted
   | SessionNextShellEnded
@@ -2870,6 +2920,9 @@ export type V2Event =
   | SessionNextPrompted
   | SessionNextPromptAdmitted
   | SessionNextContextUpdated
+  | SessionTurnStarted
+  | SessionTurnNotStarted
+  | SessionTurnSettled
   | SessionNextSynthetic
   | SessionNextShellStarted
   | SessionNextShellEnded
@@ -3398,6 +3451,68 @@ export type SyncEventSessionNextContextUpdated = {
       sessionID: string
       messageID: string
       text: string
+    }
+  }
+}
+
+export type SyncEventSessionTurnStarted = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "session.turn.started.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      timestamp: number
+      sessionID: string
+      turnID: string
+      turnStartedAt: number
+      activityInputIDs: Array<string>
+    }
+  }
+}
+
+export type SyncEventSessionTurnNotStarted = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "session.turn.not_started.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      timestamp: number
+      sessionID: string
+      schema: "opencode.turn_not_started.v1"
+      turnID: string
+      activityInputIDs: Array<string>
+      outcome: "failed" | "aborted" | "interrupted"
+      reason: string
+      errorClass: "transport" | "resource" | "protocol" | "interrupt" | "unknown"
+    }
+  }
+}
+
+export type SyncEventSessionTurnSettled = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "session.turn.settled.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      timestamp: number
+      sessionID: string
+      schema: "opencode.turn_settled.v1"
+      turnID: string
+      turnStartedAt: number
+      activityInputIDs: Array<string>
+      outcome: "completed" | "error" | "aborted"
+      reason?: string
+      errorClass?: "transport" | "resource" | "protocol" | "interrupt" | "unknown"
+      abortOrigin?: "user" | "framework" | "runtime_shutdown" | "unknown"
     }
   }
 }
@@ -4281,6 +4396,77 @@ export type SessionNextContextUpdated = {
     sessionID: string
     messageID: string
     text: string
+  }
+}
+
+export type SessionTurnStarted = {
+  id: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  type: "session.turn.started"
+  durable?: {
+    aggregateID: string
+    seq: number
+    version: number
+  }
+  location?: LocationRef
+  data: {
+    timestamp: number
+    sessionID: string
+    turnID: string
+    turnStartedAt: number
+    activityInputIDs: Array<string>
+  }
+}
+
+export type SessionTurnNotStarted = {
+  id: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  type: "session.turn.not_started"
+  durable?: {
+    aggregateID: string
+    seq: number
+    version: number
+  }
+  location?: LocationRef
+  data: {
+    timestamp: number
+    sessionID: string
+    schema: "opencode.turn_not_started.v1"
+    turnID: string
+    activityInputIDs: Array<string>
+    outcome: "failed" | "aborted" | "interrupted"
+    reason: string
+    errorClass: "transport" | "resource" | "protocol" | "interrupt" | "unknown"
+  }
+}
+
+export type SessionTurnSettled = {
+  id: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  type: "session.turn.settled"
+  durable?: {
+    aggregateID: string
+    seq: number
+    version: number
+  }
+  location?: LocationRef
+  data: {
+    timestamp: number
+    sessionID: string
+    schema: "opencode.turn_settled.v1"
+    turnID: string
+    turnStartedAt: number
+    activityInputIDs: Array<string>
+    outcome: "completed" | "error" | "aborted"
+    reason?: string
+    errorClass?: "transport" | "resource" | "protocol" | "interrupt" | "unknown"
+    abortOrigin?: "user" | "framework" | "runtime_shutdown" | "unknown"
   }
 }
 
@@ -6313,6 +6499,50 @@ export type EventSessionNextContextUpdated = {
     sessionID: string
     messageID: string
     text: string
+  }
+}
+
+export type EventSessionTurnStarted = {
+  id: string
+  type: "session.turn.started"
+  properties: {
+    timestamp: number
+    sessionID: string
+    turnID: string
+    turnStartedAt: number
+    activityInputIDs: Array<string>
+  }
+}
+
+export type EventSessionTurnNotStarted = {
+  id: string
+  type: "session.turn.not_started"
+  properties: {
+    timestamp: number
+    sessionID: string
+    schema: "opencode.turn_not_started.v1"
+    turnID: string
+    activityInputIDs: Array<string>
+    outcome: "failed" | "aborted" | "interrupted"
+    reason: string
+    errorClass: "transport" | "resource" | "protocol" | "interrupt" | "unknown"
+  }
+}
+
+export type EventSessionTurnSettled = {
+  id: string
+  type: "session.turn.settled"
+  properties: {
+    timestamp: number
+    sessionID: string
+    schema: "opencode.turn_settled.v1"
+    turnID: string
+    turnStartedAt: number
+    activityInputIDs: Array<string>
+    outcome: "completed" | "error" | "aborted"
+    reason?: string
+    errorClass?: "transport" | "resource" | "protocol" | "interrupt" | "unknown"
+    abortOrigin?: "user" | "framework" | "runtime_shutdown" | "unknown"
   }
 }
 
@@ -11391,6 +11621,14 @@ export type V2SessionCreateErrors = {
    * UnauthorizedError
    */
   401: UnauthorizedError
+  /**
+   * ConflictError
+   */
+  409: ConflictError
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
 }
 
 export type V2SessionCreateError = V2SessionCreateErrors[keyof V2SessionCreateErrors]
