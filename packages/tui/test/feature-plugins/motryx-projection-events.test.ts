@@ -276,6 +276,48 @@ describe("Motryx projection controller", () => {
     controller.dispose()
   })
 
+  test("does not let a heartbeat resurrect a snapshot after a failed exact refresh", async () => {
+    const events = controlledStream()
+    const states: MotryxProjectionState[] = []
+    const snapshots: string[] = []
+    let revision = "server-generation:ic:one"
+    let failRefresh = false
+    const controller = createMotryxProjectionController({
+      config,
+      delay: holdUntilAbort,
+      fetcher: async (input) => {
+        const url = new URL(input instanceof Request ? input.url : input.toString())
+        if (url.pathname === "/ic/workflow") {
+          if (failRefresh) return Response.json({ schemaVersion: 1 })
+          return Response.json(validSnapshot(revision))
+        }
+        return new Response(events.body, { headers: { "content-type": "text/event-stream" } })
+      },
+      onSnapshot: (value) => snapshots.push(value.projectionRevision),
+      onState: (state) => states.push(state),
+    })
+    void controller.start()
+    await eventually(() => expect(states.at(-1)?.phase).toBe("live"))
+
+    failRefresh = true
+    await controller.refresh()
+    expect(states.at(-1)?.phase).toBe("schema-error")
+    events.controller().enqueue(encoder.encode(": heartbeat\n\n"))
+    await eventually(() => expect(states.at(-1)?.lastEventAt).toBeNumber())
+    expect(states.at(-1)?.phase).toBe("schema-error")
+
+    failRefresh = false
+    revision = "server-generation:ic:two"
+    events.controller().enqueue(
+      encoder.encode(`event: projection.changed\ndata: ${eventData(revision)}\n\n`),
+    )
+    await eventually(() => {
+      expect(states.at(-1)?.phase).toBe("live")
+      expect(snapshots.at(-1)).toBe(revision)
+    })
+    controller.dispose()
+  })
+
   test("treats auth as terminal and rejects an old generation event", async () => {
     let authCalls = 0
     const authStates: MotryxProjectionState[] = []

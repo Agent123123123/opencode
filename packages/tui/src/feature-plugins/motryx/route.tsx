@@ -1,9 +1,11 @@
 /** @jsxImportSource @opentui/solid */
 import type { TuiPluginApi } from "@opencode-ai/plugin/tui"
-import type { SessionMessage, SessionV2Info } from "@opencode-ai/sdk/v2"
+import { useTerminalDimensions, type JSX } from "@opentui/solid"
 import path from "node:path"
-import { useTerminalDimensions } from "@opentui/solid"
-import { For, Show, createMemo, createSignal, onCleanup, onMount } from "solid-js"
+import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from "solid-js"
+import { registerOpencodeSpinner } from "../../component/register-spinner"
+import { SPINNER_FRAMES } from "../../component/spinner"
+import { SessionSurface, type SessionSurfaceProps } from "../../routes/session"
 import {
   motryxControlConfigFromEnv,
   type MotryxControlConfig,
@@ -18,77 +20,181 @@ import {
 } from "./projection-events"
 import { motryxProductLayout } from "./layout"
 
-type TranscriptItem = {
-  id: string
-  role: "user" | "assistant"
-  label: string
-  text: string
+registerOpencodeSpinner()
+
+export type MotryxConversationRole = "orchestrator" | "coordinator" | "checker"
+
+export type MotryxConversationTarget = {
+  role: MotryxConversationRole
+  sessionID: string
+  laneID?: string
+  bindingGeneration?: number
+  projectionRevision?: string
 }
+
+export type MotryxRouteActions = {
+  refresh: () => Promise<void>
+  showFlow: () => void
+  showInspect: () => void
+  focusOrchestrator: () => void
+  focusCoordinator: () => void
+  focusChecker: () => void
+  moveLane: (delta: number) => void
+}
+
+type SessionSurfaceComponent = (props: SessionSurfaceProps) => JSX.Element
 
 export function MotryxRoute(props: {
   api: TuiPluginApi
   config?: MotryxControlConfig
   configError?: string
   fetcher?: MotryxFetcher
-  onRefreshAvailable: (refresh?: () => Promise<void>) => void
+  debugView?: boolean
+  sessionSurface?: SessionSurfaceComponent
+  onActionsAvailable: (actions?: MotryxRouteActions) => void
 }) {
   const dimensions = useTerminalDimensions()
   const config = props.config
+  const Surface = props.sessionSurface ?? SessionSurface
   const [snapshot, setSnapshot] = createSignal<MotryxControlSnapshot>()
   const [connection, setConnection] = createSignal<MotryxProjectionState>(
     config ? { phase: "connecting" } : { phase: "unbound", detail: props.configError },
   )
-  const [conversation, setConversation] = createSignal<{
-    session: SessionV2Info
-    messages: SessionMessage[]
-  }>()
-  const [transcriptError, setTranscriptError] = createSignal<string>()
+  const [panel, setPanel] = createSignal<"flow" | "inspect">("flow")
+  const [selectedLaneID, setSelectedLaneID] = createSignal<string>()
+  const [target, setTarget] = createSignal<MotryxConversationTarget | undefined>(
+    config ? { role: "orchestrator", sessionID: config.orchestratorSessionID } : undefined,
+  )
+  const [targetError, setTargetError] = createSignal<string>()
   const layout = createMemo(() => motryxProductLayout(dimensions()))
-  const transcript = createMemo(() => projectTranscript(conversation()?.messages ?? []))
-  let conversationRead = 0
-  let disposed = false
+  const selectedLane = createMemo(() => {
+    const value = snapshot()
+    if (!value) return undefined
+    return value.lanes.find((lane) => lane.id === selectedLaneID()) ?? value.lanes[0]
+  })
+  const targetLaneName = createMemo(() => {
+    const laneID = target()?.laneID
+    if (!laneID) return undefined
+    return snapshot()?.lanes.find((lane) => lane.id === laneID)?.name
+  })
+  const sidecarWidth = createMemo<number | "100%">(() =>
+    layout().direction === "row" ? (layout().sidecarWidth ?? 46) : "100%",
+  )
+  const sidecarHeight = createMemo(() => layout().sidecarHeight)
+  const conversationWidth = createMemo(() => {
+    if (layout().direction === "column") return Math.max(20, dimensions().width - 2)
+    return Math.max(20, dimensions().width - (layout().sidecarWidth ?? 46) - 3)
+  })
+  let targetRead = 0
+  let generation: string | undefined
 
-  async function refreshConversation() {
+  function focusOrchestrator() {
     if (!config) return
-    const read = ++conversationRead
+    targetRead += 1
+    setTarget({ role: "orchestrator", sessionID: config.orchestratorSessionID })
+    setTargetError(undefined)
+  }
+
+  async function focusWorker(role: "coordinator" | "checker", laneID?: string) {
+    if (!props.debugView) return
+    const value = snapshot()
+    const lane = laneID ? value?.lanes.find((item) => item.id === laneID) : selectedLane()
+    if (!value || connection().phase !== "live" || !lane) {
+      showTargetError(`${capitalize(role)} session is unavailable without a live selected lane.`)
+      return
+    }
+    const projected = resolveProjectedDebugTarget(value, lane.id, role)
+    if (!projected) {
+      showTargetError(`Lane ${lane.name} has no exact active ${role} session.`)
+      return
+    }
+    const read = ++targetRead
+    const revision = value.projectionRevision
     try {
-      const [session, messages] = await Promise.all([
-        props.api.client.v2.session.get({ sessionID: config.orchestratorSessionID }, { throwOnError: true }),
-        props.api.client.v2.session.messages(
-          { sessionID: config.orchestratorSessionID, limit: 100, order: "desc" },
-          { throwOnError: true },
-        ),
-      ])
-      if (disposed || props.api.lifecycle.signal.aborted || read !== conversationRead) return
-      if (session.data.data.id !== config.orchestratorSessionID) {
-        throw new Error(`OpenCode returned unexpected session ${session.data.data.id}`)
+      const response = await props.api.client.v2.session.get({ sessionID: projected.sessionID }, { throwOnError: true })
+      const exact = response.data.data
+      if (exact.id !== projected.sessionID) throw new Error(`OpenCode returned unexpected session ${exact.id}`)
+      if (path.resolve(exact.location.directory) !== value.projectID) {
+        throw new Error("OpenCode session belongs to a different project")
       }
-      if (path.resolve(session.data.data.location.directory) !== config.projectID) {
-        throw new Error(`OpenCode session location does not match ${config.projectID}`)
+      if (exact.agent !== role) throw new Error(`OpenCode session agent is ${exact.agent}, expected ${role}`)
+      const current = snapshot()
+      if (
+        read !== targetRead ||
+        !current ||
+        connection().phase !== "live" ||
+        current.projectionRevision !== revision ||
+        !resolveProjectedDebugTarget(current, lane.id, role)
+      ) {
+        throw new Error("Motryx projection changed while validating the debug target")
       }
-      setConversation({
-        session: session.data.data,
-        messages: messages.data.data.toReversed(),
-      })
-      setTranscriptError(undefined)
+      setSelectedLaneID(lane.id)
+      setTarget(projected)
+      setTargetError(undefined)
     } catch (error) {
-      if (disposed || props.api.lifecycle.signal.aborted || read !== conversationRead) return
-      setTranscriptError(error instanceof Error ? error.message : String(error))
+      if (read !== targetRead) return
+      showTargetError(error instanceof Error ? error.message : String(error))
     }
   }
 
+  function selectWorkerRole(role: "coordinator" | "checker") {
+    if (!props.debugView) return
+    void focusWorker(role)
+  }
+
+  function showTargetError(message: string) {
+    setTargetError(message)
+    props.api.ui.toast({ variant: "warning", message })
+  }
+
+  function selectLane(lane: MotryxLaneProjection) {
+    setSelectedLaneID(lane.id)
+    setPanel("inspect")
+  }
+
+  function moveLane(delta: number) {
+    const lanes = snapshot()?.lanes ?? []
+    if (lanes.length === 0) return
+    const current = Math.max(
+      0,
+      lanes.findIndex((lane) => lane.id === selectedLane()?.id),
+    )
+    selectLane(lanes[(current + delta + lanes.length) % lanes.length])
+  }
+
+  createEffect(() => {
+    const value = snapshot()
+    if (!value) return
+    const selected = selectedLaneID()
+    if (!selected || !value.lanes.some((lane) => lane.id === selected)) {
+      setSelectedLaneID(value.lanes[0]?.id)
+      if (selected)
+        props.api.ui.toast({ variant: "info", message: "Selected lane disappeared; moved to the first lane." })
+    }
+    const proofGeneration = `${value.route.serverGeneration}:${value.binding.bindingGeneration}`
+    if (generation === undefined) generation = proofGeneration
+    else if (generation !== proofGeneration) {
+      generation = proofGeneration
+      focusOrchestrator()
+      props.api.ui.toast({ variant: "info", message: "Binding generation changed; showing Orchestrator." })
+    }
+    const current = target()
+    if (!current || current.role === "orchestrator") return
+    if (!props.debugView || connection().phase !== "live" || !current.laneID) {
+      focusOrchestrator()
+      return
+    }
+    const projected = resolveProjectedDebugTarget(value, current.laneID, current.role)
+    if (!projected || projected.sessionID !== current.sessionID) focusOrchestrator()
+  })
+
+  createEffect(() => {
+    if (connection().phase === "live") return
+    if (target()?.role !== "orchestrator") focusOrchestrator()
+  })
+
   onMount(() => {
     if (!config) return
-    void refreshConversation()
-    const offPrompted = props.api.event.on("session.next.prompted", (event) => {
-      if (event.properties.sessionID === config.orchestratorSessionID) void refreshConversation()
-    })
-    const offSettled = props.api.event.on("session.turn.settled", (event) => {
-      if (event.properties.sessionID === config.orchestratorSessionID) void refreshConversation()
-    })
-    const offModel = props.api.event.on("session.next.model.switched", (event) => {
-      if (event.properties.sessionID === config.orchestratorSessionID) void refreshConversation()
-    })
     const controller = createMotryxProjectionController({
       config,
       fetcher: props.fetcher,
@@ -96,318 +202,690 @@ export function MotryxRoute(props: {
       onSnapshot: setSnapshot,
       onState: setConnection,
     })
-    props.onRefreshAvailable(controller.refresh)
+    const actions: MotryxRouteActions = {
+      refresh: controller.refresh,
+      showFlow: () => setPanel("flow"),
+      showInspect: () => setPanel("inspect"),
+      focusOrchestrator,
+      focusCoordinator: () => selectWorkerRole("coordinator"),
+      focusChecker: () => selectWorkerRole("checker"),
+      moveLane,
+    }
+    props.onActionsAvailable(actions)
     void controller.start()
     onCleanup(() => {
-      disposed = true
-      conversationRead += 1
-      offPrompted()
-      offSettled()
-      offModel()
-      props.onRefreshAvailable(undefined)
+      targetRead += 1
+      props.onActionsAvailable(undefined)
       controller.dispose()
     })
   })
 
   const status = createMemo(() => statusPresentation(connection().phase))
-  const workflowWidth = createMemo<number | "100%">(() =>
-    layout().direction === "row" ? (layout().workflowWidth ?? 38) : "100%",
+  const initialLoading = createMemo(
+    () => !snapshot() && (connection().phase === "connecting" || connection().phase === "starting"),
   )
-  const workflowHeight = createMemo(() => (layout().direction === "column" ? layout().workflowHeight : undefined))
 
   return (
-    <box flexGrow={1} minHeight={0} flexDirection="column" padding={1} gap={1}>
-      <box flexShrink={0} flexDirection="row" gap={1}>
-        <box flexDirection="row">
-          <text fg={props.api.theme.current.text}>MOTRY</text>
-          <text fg={props.api.theme.current.warning}>X</text>
-        </box>
-        <text fg={props.api.theme.current.textMuted}>IC workflow</text>
-        <box flexGrow={1} />
-        <text fg={statusColor(props.api, connection().phase)}>{status().label}</text>
-      </box>
+    <box
+      flexGrow={1}
+      minHeight={0}
+      flexDirection="column"
+    >
+      <MotryxHeader
+        api={props.api}
+        width={dimensions().width}
+        snapshot={snapshot()}
+        target={target()}
+        laneName={targetLaneName()}
+        debugView={props.debugView === true}
+        phase={connection().phase}
+        status={status()}
+      />
 
       <Show
-        when={layout().mode !== "safe"}
+        when={!initialLoading()}
         fallback={
-          <box
-            flexGrow={1}
-            minHeight={0}
-            flexDirection="column"
-            border={["top", "bottom", "left", "right"]}
-            borderColor={props.api.theme.current.border}
-            padding={1}
-          >
-            <text fg={statusColor(props.api, connection().phase)}>{status().label}</text>
-            <Show when={connection().detail}>
-              {(detail) => <text fg={props.api.theme.current.textMuted}>{detail()}</text>}
-            </Show>
-            <text fg={props.api.theme.current.textMuted}>Terminal too small.</text>
-            <text fg={props.api.theme.current.textMuted}>/motryx-session opens conversation.</text>
-          </box>
+          <MotryxLoadingPage
+            api={props.api}
+            width={dimensions().width}
+            height={dimensions().height - 1}
+            phase={connection().phase}
+          />
         }
       >
-        <box flexGrow={1} minHeight={0} flexDirection={layout().direction} gap={1}>
-          <WorkflowPanel
-            api={props.api}
-            snapshot={snapshot()}
-            state={connection()}
-            width={workflowWidth()}
-            height={workflowHeight()}
-            compact={layout().mode === "conversation-first"}
-          />
-          <Show when={layout().showTranscript}>
-            <TranscriptPanel
+        <box
+          flexGrow={1}
+          minHeight={0}
+          flexDirection={layout().direction}
+          gap={layout().collapsedSidecar ? 0 : 1}
+          paddingLeft={layout().collapsedSidecar ? 0 : 1}
+          paddingRight={layout().collapsedSidecar ? 0 : 1}
+          paddingBottom={layout().collapsedSidecar ? 0 : 1}
+        >
+          <box flexGrow={1} minWidth={0} minHeight={0} flexDirection="column">
+            <ConversationTargetBar
               api={props.api}
-              session={conversation()?.session}
-              items={transcript()}
-              sessionID={config?.orchestratorSessionID ?? ""}
-              error={transcriptError()}
+              debugView={props.debugView === true}
+              target={target()}
+              laneName={targetLaneName()}
+              error={targetError()}
+              compact={conversationWidth() < 84}
+              onOrchestrator={focusOrchestrator}
+            />
+            <Show
+              when={target()}
+              fallback={
+                <text fg={props.api.theme.current.error}>{props.configError ?? "Motryx session is unbound"}</text>
+              }
+            >
+              {(value) => (
+                <Surface
+                  sessionID={value().sessionID}
+                  width={conversationWidth()}
+                  showNativeSidebar={false}
+                  showIdleFooter={false}
+                  showExitEpilogue={false}
+                  interaction={value().role === "orchestrator" ? "interactive" : "read-only"}
+                  onSessionUnavailable={(error) => {
+                    showTargetError(error instanceof Error ? error.message : String(error))
+                    if (value().role !== "orchestrator" && target()?.sessionID === value().sessionID)
+                      focusOrchestrator()
+                  }}
+                />
+              )}
+            </Show>
+          </box>
+
+          <Show when={layout().showSidecar}>
+            <SidecarPanel
+              api={props.api}
+              snapshot={snapshot()}
+              state={connection()}
+              selectedLane={selectedLane()}
+              panel={panel()}
+              debugView={props.debugView === true}
+              width={sidecarWidth()}
+              height={sidecarHeight()}
+              collapsed={layout().collapsedSidecar}
+              onPanel={setPanel}
+              onLane={selectLane}
+              onConversation={(role, laneID) => void focusWorker(role, laneID)}
             />
           </Show>
         </box>
       </Show>
-
-      <box flexShrink={0} flexDirection="row" gap={2}>
-        <text fg={props.api.theme.current.textMuted}>/motryx-session conversation</text>
-        <text fg={props.api.theme.current.textMuted}>/motryx-refresh projection</text>
-        <box flexGrow={1} />
-        <Show when={snapshot()}>
-          {(value) => (
-            <text fg={props.api.theme.current.textMuted}>
-              gen {value().binding.bindingGeneration} · {shortRevision(value().projectionRevision)}
-            </text>
-          )}
-        </Show>
-      </box>
     </box>
   )
 }
 
-function WorkflowPanel(props: {
+function MotryxHeader(props: {
   api: TuiPluginApi
+  width: number
   snapshot?: MotryxControlSnapshot
-  state: MotryxProjectionState
-  width: number | "100%"
-  height?: number
-  compact: boolean
+  target?: MotryxConversationTarget
+  laneName?: string
+  debugView: boolean
+  phase: MotryxProjectionPhase
+  status?: string
 }) {
-  const snapshot = () => props.snapshot
+  const target = createMemo(() => {
+    if (!props.target) return "No active conversation"
+    const role = props.target.role
+    if (role === "orchestrator") return "Orchestrator"
+    return `${props.laneName ?? "Selected lane"} / ${capitalize(role)}`
+  })
+  const context = createMemo(() => {
+    const goal = props.snapshot?.workflow?.goal.trim()
+    if (props.width >= 120 && goal && goal !== props.laneName) return `${goal} / ${target()}`
+    return target()
+  })
+  const debugLabel = createMemo(() => (props.width < 64 ? "DBG" : "DEBUG"))
+
   return (
     <box
-      width={props.width}
-      height={props.height}
-      flexGrow={props.height === undefined ? 0 : undefined}
       flexShrink={0}
-      minHeight={0}
-      flexDirection="column"
-      border={["top", "bottom", "left", "right"]}
-      borderColor={props.state.phase === "live" ? props.api.theme.current.borderActive : props.api.theme.current.border}
+      height={1}
+      minWidth={0}
+      flexDirection="row"
+      gap={1}
       paddingLeft={1}
-      paddingRight={1}
+      paddingRight={2}
+      backgroundColor={props.api.theme.current.backgroundPanel}
     >
-      <Show
-        when={snapshot()}
-        fallback={
-          <box paddingTop={1}>
-            <text fg={statusColor(props.api, props.state.phase)}>{statusPresentation(props.state.phase).label}</text>
-            <Show when={props.state.detail}>
-              {(detail) => (
-                <text fg={props.api.theme.current.textMuted} wrapMode="word">
-                  {detail()}
-                </text>
-              )}
-            </Show>
-            <text fg={props.api.theme.current.textMuted}>Waiting for an exact ROUTABLE projection.</text>
-          </box>
-        }
-      >
-        {(value) => (
-          <>
-            <box flexShrink={0} flexDirection="row" gap={1}>
-              <text fg={props.api.theme.current.text}>Workflow</text>
-              <text fg={workflowColor(props.api, value().workflow?.status)}>
-                {value().workflow?.status.toLowerCase() ?? "idle"}
-              </text>
-              <box flexGrow={1} />
-              <text fg={props.api.theme.current.textMuted}>
-                {value().lanes.length} lanes · {value().agents.length} agents
-              </text>
-            </box>
-            <Show when={!props.compact && value().workflow?.goal}>
-              {(goal) => (
-                <text fg={props.api.theme.current.textMuted} wrapMode="word">
-                  {goal()}
-                </text>
-              )}
-            </Show>
-            <scrollbox
-              flexGrow={1}
-              minHeight={0}
-              verticalScrollbarOptions={{ visible: false }}
-              horizontalScrollbarOptions={{ visible: false }}
-            >
-              <Show
-                when={value().lanes.length > 0}
-                fallback={<text fg={props.api.theme.current.textMuted}>No lanes yet.</text>}
-              >
-                <For each={value().lanes}>
-                  {(lane, index) => (
-                    <LaneRow api={props.api} lane={lane} ordinal={index() + 1} compact={props.compact} />
-                  )}
-                </For>
-              </Show>
-            </scrollbox>
-          </>
-        )}
+      <box flexShrink={0} flexDirection="row">
+        <text fg={props.api.theme.current.text}>Motry</text>
+        <text fg={props.api.theme.current.primary}>X</text>
+      </box>
+      <text fg={props.api.theme.current.border}>│</text>
+      <text flexGrow={1} minWidth={0} fg={props.api.theme.current.textMuted} truncate>
+        {context()}
+      </text>
+      <Show when={props.debugView && (!props.status || props.width >= 72)}>
+        <text fg={props.api.theme.current.warning}>{debugLabel()}</text>
+      </Show>
+      <Show when={props.status}>
+        {(label) => <text fg={statusColor(props.api, props.phase)}>{label()}</text>}
       </Show>
     </box>
   )
 }
 
-function LaneRow(props: { api: TuiPluginApi; lane: MotryxLaneProjection; ordinal: number; compact: boolean }) {
-  const status = () => props.lane.status.toUpperCase()
+const MOTRYX_LOADING_MARK = ["██╲        ╱██", "██ ╲      ╱ ██", "██  ╲    ╱  ██", "██   ╲  ╱   ██", "██    ╲╱    ██"]
+
+function MotryxLoadingPage(props: {
+  api: TuiPluginApi
+  width: number
+  height: number
+  phase: MotryxProjectionPhase
+}) {
+  const compact = createMemo(() => props.width < 54 || props.height < 17)
+  const message = createMemo(() =>
+    props.phase === "starting" ? "Reconciling workflow…" : "Connecting conversation and workflow…",
+  )
   return (
-    <box flexDirection="column" paddingBottom={props.compact ? 0 : 1}>
+    <box flexGrow={1} minHeight={0} justifyContent="center" alignItems="center" flexDirection="column" gap={1}>
+      <Show when={!compact()}>
+        <box flexDirection="column">
+          <For each={MOTRYX_LOADING_MARK}>
+            {(line) => <text fg={props.api.theme.current.text}>{line}</text>}
+          </For>
+          <box flexDirection="row">
+            <text fg={props.api.theme.current.text}>██</text>
+            <box width={4} />
+            <text fg={props.api.theme.current.primary}>◀▶</text>
+            <box width={4} />
+            <text fg={props.api.theme.current.text}>██</text>
+          </box>
+        </box>
+      </Show>
+      <box flexDirection="row">
+        <text fg={props.api.theme.current.text}>Motry</text>
+        <text fg={props.api.theme.current.primary}>X</text>
+      </box>
       <box flexDirection="row" gap={1}>
-        <text fg={props.api.theme.current.textMuted}>{String(props.ordinal).padStart(2, "0")}</text>
+        <spinner frames={SPINNER_FRAMES} interval={80} color={props.api.theme.current.primary} />
+        <text fg={props.api.theme.current.textMuted}>{message()}</text>
+      </box>
+    </box>
+  )
+}
+
+function ConversationTargetBar(props: {
+  api: TuiPluginApi
+  debugView: boolean
+  target?: MotryxConversationTarget
+  laneName?: string
+  error?: string
+  compact: boolean
+  onOrchestrator: () => void
+}) {
+  const showWorker = () => props.debugView && props.target?.role !== "orchestrator"
+  return (
+    <Show when={showWorker()}>
+      <box flexShrink={0} flexDirection={props.compact ? "column" : "row"} gap={props.compact ? 0 : 1}>
+        <box minWidth={0} flexDirection="row" gap={1}>
+          <text fg={props.api.theme.current.primary}>{capitalize(props.target?.role ?? "unbound")}</text>
+          <Show when={props.laneName}>
+            {(laneName) => (
+              <text fg={props.api.theme.current.textMuted} truncate>
+                · {laneName()}
+              </text>
+            )}
+          </Show>
+          <Show when={props.error}>
+            {(error) => (
+              <text fg={props.api.theme.current.warning} truncate>
+                · {error()}
+              </text>
+            )}
+          </Show>
+        </box>
+        <Show when={!props.compact}>
+          <box flexGrow={1} />
+        </Show>
+        <TargetChoice api={props.api} label="← Back to Orchestrator" onPick={props.onOrchestrator} />
+      </box>
+    </Show>
+  )
+}
+
+function TargetChoice(props: { api: TuiPluginApi; label: string; onPick: () => void }) {
+  return (
+    <box onMouseUp={props.onPick} backgroundColor={props.api.theme.current.backgroundElement}>
+      <text fg={props.api.theme.current.primary}> {props.label} </text>
+    </box>
+  )
+}
+
+function SidecarPanel(props: {
+  api: TuiPluginApi
+  snapshot?: MotryxControlSnapshot
+  state: MotryxProjectionState
+  selectedLane?: MotryxLaneProjection
+  panel: "flow" | "inspect"
+  debugView: boolean
+  width: number | "100%"
+  height: number | "100%"
+  collapsed: boolean
+  onPanel: (panel: "flow" | "inspect") => void
+  onLane: (lane: MotryxLaneProjection) => void
+  onConversation: (role: "coordinator" | "checker", laneID: string) => void
+}) {
+  return (
+    <Show
+      when={props.collapsed}
+      fallback={
+        <box
+          width={props.width}
+          height={props.height}
+          flexShrink={0}
+          minHeight={0}
+          flexDirection="column"
+          border={["top", "bottom", "left", "right"]}
+          borderColor={
+            props.state.phase === "live" ? props.api.theme.current.borderActive : props.api.theme.current.border
+          }
+          paddingLeft={1}
+          paddingRight={1}
+        >
+          <SidecarTabs api={props.api} panel={props.panel} state={props.state} onPanel={props.onPanel} />
+          <Show
+            when={props.snapshot}
+            fallback={
+              <box paddingTop={1}>
+                <text fg={props.api.theme.current.textMuted} wrapMode="word">
+                  {props.state.detail ?? "Waiting for the workflow projection."}
+                </text>
+              </box>
+            }
+          >
+            {(value) => (
+              <Show
+                when={props.panel === "flow"}
+                fallback={
+                  <InspectPanel
+                    api={props.api}
+                    snapshot={value()}
+                    lane={props.selectedLane}
+                    debugView={props.debugView}
+                    projectionLive={props.state.phase === "live"}
+                    onConversation={props.onConversation}
+                  />
+                }
+              >
+                <FlowPanel
+                  api={props.api}
+                  snapshot={value()}
+                  selectedLaneID={props.selectedLane?.id}
+                  onLane={props.onLane}
+                />
+              </Show>
+            )}
+          </Show>
+        </box>
+      }
+    >
+      <box
+        width={props.width}
+        height={props.height}
+        flexShrink={0}
+        minHeight={0}
+        flexDirection="column"
+        border={["top"]}
+        borderColor={
+          props.state.phase === "live" ? props.api.theme.current.borderActive : props.api.theme.current.border
+        }
+        paddingLeft={1}
+        paddingRight={1}
+      >
+        <box minWidth={0} flexDirection="row" gap={1}>
+          <PanelTab api={props.api} label="FLOW" active={props.panel === "flow"} onPick={() => props.onPanel("flow")} />
+          <PanelTab
+            api={props.api}
+            label="INSPECT"
+            active={props.panel === "inspect"}
+            onPick={() => props.onPanel("inspect")}
+          />
+          <box minWidth={0} flexGrow={1}>
+            <text fg={props.api.theme.current.textMuted} truncate>
+              {props.selectedLane
+                ? `${props.selectedLane.name} · ${motryxLaneStatusLabel(props.selectedLane.status)}`
+                : (props.state.detail ?? "No lane selected")}
+            </text>
+          </box>
+          <Show when={statusPresentation(props.state.phase)}>
+            {(label) => <text fg={statusColor(props.api, props.state.phase)}>{label()}</text>}
+          </Show>
+        </box>
+      </box>
+    </Show>
+  )
+}
+
+function SidecarTabs(props: {
+  api: TuiPluginApi
+  panel: "flow" | "inspect"
+  state: MotryxProjectionState
+  onPanel: (panel: "flow" | "inspect") => void
+}) {
+  return (
+    <box flexShrink={0} flexDirection="row" gap={1}>
+      <PanelTab api={props.api} label="FLOW" active={props.panel === "flow"} onPick={() => props.onPanel("flow")} />
+      <PanelTab
+        api={props.api}
+        label="INSPECT"
+        active={props.panel === "inspect"}
+        onPick={() => props.onPanel("inspect")}
+      />
+      <box flexGrow={1} />
+      <Show when={statusPresentation(props.state.phase)}>
+        {(label) => <text fg={statusColor(props.api, props.state.phase)}>{label()}</text>}
+      </Show>
+    </box>
+  )
+}
+
+function PanelTab(props: { api: TuiPluginApi; label: string; active: boolean; onPick: () => void }) {
+  return (
+    <box onMouseUp={props.onPick}>
+      <text fg={props.active ? props.api.theme.current.primary : props.api.theme.current.textMuted}>
+        {props.active ? `[${props.label}]` : props.label}
+      </text>
+    </box>
+  )
+}
+
+function FlowPanel(props: {
+  api: TuiPluginApi
+  snapshot: MotryxControlSnapshot
+  selectedLaneID?: string
+  onLane: (lane: MotryxLaneProjection) => void
+}) {
+  return (
+    <Show
+      when={props.snapshot.workflow}
+      fallback={
+        <box flexDirection="column" paddingTop={1} gap={1}>
+          <text fg={props.api.theme.current.text}>No workflow yet.</text>
+          <text fg={props.api.theme.current.textMuted} wrapMode="word">
+            Continue the Orchestrator conversation; lanes will appear when a workflow starts.
+          </text>
+        </box>
+      }
+    >
+      {(workflow) => (
+        <>
+          <box flexShrink={0} maxHeight={4} overflow="hidden">
+            <text fg={props.api.theme.current.textMuted} wrapMode="word">
+              {workflow().goal}
+            </text>
+          </box>
+          <scrollbox
+            flexGrow={1}
+            minHeight={0}
+            verticalScrollbarOptions={{ visible: true }}
+            horizontalScrollbarOptions={{ visible: false }}
+          >
+            <Show
+              when={props.snapshot.lanes.length > 0}
+              fallback={<text fg={props.api.theme.current.textMuted}>No lanes yet.</text>}
+            >
+              <For each={props.snapshot.lanes}>
+                {(lane, index) => (
+                  <LaneRow
+                    api={props.api}
+                    lane={lane}
+                    ordinal={index() + 1}
+                    selected={lane.id === props.selectedLaneID}
+                    onPick={() => props.onLane(lane)}
+                  />
+                )}
+              </For>
+            </Show>
+          </scrollbox>
+        </>
+      )}
+    </Show>
+  )
+}
+
+function LaneRow(props: {
+  api: TuiPluginApi
+  lane: MotryxLaneProjection
+  ordinal: number
+  selected: boolean
+  onPick: () => void
+}) {
+  const status = () => props.lane.status.toUpperCase()
+  const attention = () => status() === "BLOCKED" || props.lane.pendingCheckSummary !== undefined
+  return (
+    <box
+      flexDirection="column"
+      paddingBottom={1}
+      paddingLeft={props.selected ? 1 : 0}
+      backgroundColor={props.selected ? props.api.theme.current.backgroundElement : undefined}
+      onMouseUp={props.onPick}
+    >
+      <box flexDirection="row" gap={1}>
+        <text fg={props.selected ? props.api.theme.current.primary : props.api.theme.current.textMuted}>
+          {props.selected ? "›" : String(props.ordinal).padStart(2, "0")}
+        </text>
+        <Show when={attention()}>
+          <text fg={props.api.theme.current.warning}>!</text>
+        </Show>
         <text fg={props.api.theme.current.text} truncate>
           {props.lane.name}
         </text>
         <box flexGrow={1} />
-        <text fg={laneColor(props.api, status())}>{statusLabel(status())}</text>
+        <text fg={laneColor(props.api, status())}>{motryxLaneStatusLabel(status())}</text>
       </box>
-      <Show when={!props.compact && (props.lane.pendingCheckSummary || props.lane.lastCheckResult)}>
+      <Show when={props.lane.pendingCheckSummary || props.lane.lastCheckResult}>
         <text fg={props.api.theme.current.textMuted} wrapMode="word">
           {props.lane.pendingCheckSummary || props.lane.lastCheckResult}
         </text>
+      </Show>
+      <Show
+        when={!props.lane.pendingCheckSummary && !props.lane.lastCheckResult && props.lane.dependsOnLaneIDs.length > 0}
+      >
+        <text fg={props.api.theme.current.textMuted}>depends on {props.lane.dependsOnLaneIDs.length}</text>
       </Show>
     </box>
   )
 }
 
-function TranscriptPanel(props: {
+function InspectPanel(props: {
   api: TuiPluginApi
-  session?: SessionV2Info
-  items: TranscriptItem[]
-  sessionID: string
-  error?: string
+  snapshot: MotryxControlSnapshot
+  lane?: MotryxLaneProjection
+  debugView: boolean
+  projectionLive: boolean
+  onConversation: (role: "coordinator" | "checker", laneID: string) => void
 }) {
-  const model = () => props.session?.model
+  const agents = createMemo(() =>
+    props.snapshot.agents.filter((agent) => props.lane && agent.laneIDs.includes(props.lane.id)),
+  )
+  const artifacts = createMemo(() =>
+    props.snapshot.artifacts.filter((artifact) => artifact.producedByLaneID === props.lane?.id),
+  )
+  const instanceIDs = createMemo(() => new Set(agents().map((agent) => agent.instanceID)))
+  const inbox = createMemo(() => props.snapshot.inboxItems.filter((item) => instanceIDs().has(item.instanceID)))
+  const fences = createMemo(() => props.snapshot.deliveryFences.filter((fence) => instanceIDs().has(fence.instanceID)))
+  const slots = createMemo(() =>
+    props.snapshot.functionSlots.filter((slot) => slot.instanceID && instanceIDs().has(slot.instanceID)),
+  )
+  const dependencies = createMemo(() => {
+    const ids = props.lane?.dependsOnLaneIDs ?? []
+    if (ids.length === 0) return "none"
+    const lanes = new Map(props.snapshot.lanes.map((lane) => [lane.id, lane.name]))
+    const names = ids.flatMap((id) => {
+      const name = lanes.get(id)
+      return name ? [name] : []
+    })
+    const unavailable = ids.length - names.length
+    if (unavailable > 0) names.push(`${unavailable} unavailable ${unavailable === 1 ? "dependency" : "dependencies"}`)
+    return names.join(", ")
+  })
+  return (
+    <scrollbox
+      flexGrow={1}
+      minHeight={0}
+      verticalScrollbarOptions={{ visible: true }}
+      horizontalScrollbarOptions={{ visible: false }}
+    >
+      <Show when={props.lane} fallback={<text fg={props.api.theme.current.textMuted}>Select a lane in FLOW.</text>}>
+        {(lane) => (
+          <box flexDirection="column" gap={1}>
+            <text fg={props.api.theme.current.text}>{lane().name}</text>
+            <text fg={laneColor(props.api, lane().status.toUpperCase())}>{motryxLaneStatusLabel(lane().status)}</text>
+            <Show when={props.debugView}>
+              <text fg={props.api.theme.current.warning}>DEBUG conversation</text>
+              <box flexDirection="row" flexWrap="wrap" gap={1}>
+                <DebugConversationChoice
+                  api={props.api}
+                  label="Open Coordinator"
+                  enabled={
+                    props.projectionLive &&
+                    resolveProjectedDebugTarget(props.snapshot, lane().id, "coordinator") !== undefined
+                  }
+                  onPick={() => props.onConversation("coordinator", lane().id)}
+                />
+                <DebugConversationChoice
+                  api={props.api}
+                  label="Open Checker"
+                  enabled={
+                    props.projectionLive && resolveProjectedDebugTarget(props.snapshot, lane().id, "checker") !== undefined
+                  }
+                  onPick={() => props.onConversation("checker", lane().id)}
+                />
+              </box>
+            </Show>
+            <Show when={lane().pendingCheckSummary}>
+              {(summary) => <InspectValue api={props.api} label="now" value={summary()} />}
+            </Show>
+            <InspectValue api={props.api} label="depends" value={dependencies()} />
+            <InspectValue
+              api={props.api}
+              label="repair"
+              value={`${lane().repairCycle} · reopen ${lane().reopenCount}`}
+            />
+            <InspectValue api={props.api} label="last activity" value={lane().updatedAt} />
+            <InspectValue api={props.api} label="last check" value={lane().lastCheckResult ?? "not available"} />
+            <InspectValue
+              api={props.api}
+              label="agents"
+              value={
+                agents()
+                  .map((agent) => `${agent.role}:${agent.status}`)
+                  .join(", ") || "none"
+              }
+            />
+            <InspectValue
+              api={props.api}
+              label="artifacts"
+              value={
+                artifacts()
+                  .map((artifact) => artifact.title)
+                  .join(", ") || "none"
+              }
+            />
+            <InspectValue
+              api={props.api}
+              label="function slots"
+              value={
+                slots()
+                  .map((slot) => `${slot.slotKey}:${slot.status}`)
+                  .join(", ") || "none"
+              }
+            />
+            <InspectValue
+              api={props.api}
+              label="inbox"
+              value={
+                inbox()
+                  .map((item) => `${item.envelopeClass}:${item.status}`)
+                  .join(", ") || "none"
+              }
+            />
+            <InspectValue
+              api={props.api}
+              label="fences"
+              value={
+                fences()
+                  .map((fence) => `${fence.state}@${fence.fenceGeneration}`)
+                  .join(", ") || "none"
+              }
+            />
+            <Show when={props.debugView}>
+              <text fg={props.api.theme.current.warning}>DEBUG identity</text>
+              <InspectValue api={props.api} label="lane" value={lane().id} />
+              <InspectValue
+                api={props.api}
+                label="coordinator session"
+                value={lane().coordinatorSessionID ?? "not assigned"}
+              />
+              <InspectValue api={props.api} label="checker session" value={lane().checkerSessionID ?? "not assigned"} />
+            </Show>
+          </box>
+        )}
+      </Show>
+    </scrollbox>
+  )
+}
+
+function DebugConversationChoice(props: { api: TuiPluginApi; label: string; enabled: boolean; onPick: () => void }) {
   return (
     <box
-      flexGrow={1}
-      minWidth={0}
-      minHeight={0}
-      flexDirection="column"
-      border={["top", "bottom", "left", "right"]}
-      borderColor={props.api.theme.current.border}
-      paddingLeft={1}
-      paddingRight={1}
+      onMouseUp={props.enabled ? props.onPick : undefined}
+      backgroundColor={props.enabled ? props.api.theme.current.backgroundElement : undefined}
     >
-      <box flexShrink={0} flexDirection="row" gap={1}>
-        <text fg={props.api.theme.current.text}>Orchestrator</text>
-        <text fg={props.api.theme.current.textMuted} truncate>
-          {props.session?.title ?? props.sessionID}
-        </text>
-        <box flexGrow={1} />
-        <Show when={model()}>
-          {(value) => (
-            <text fg={props.api.theme.current.textMuted}>
-              {props.session?.agent ?? "agent"} · {value().providerID}/{value().id}
-            </text>
-          )}
-        </Show>
-      </box>
-      <scrollbox
-        flexGrow={1}
-        minHeight={0}
-        verticalScrollbarOptions={{ visible: false }}
-        horizontalScrollbarOptions={{ visible: false }}
-      >
-        <Show
-          when={props.items.length > 0}
-          fallback={
-            <text fg={props.api.theme.current.textMuted}>
-              {props.error ? `OpenCode conversation unavailable: ${props.error}` : "No visible conversation text yet."}
-            </text>
-          }
-        >
-          <For each={props.items}>
-            {(item) => (
-              <box flexDirection="column" paddingBottom={1}>
-                <text fg={item.role === "user" ? props.api.theme.current.accent : props.api.theme.current.secondary}>
-                  {item.label}
-                </text>
-                <text fg={props.api.theme.current.text} wrapMode="word">
-                  {item.text}
-                </text>
-              </box>
-            )}
-          </For>
-        </Show>
-      </scrollbox>
+      <text fg={props.enabled ? props.api.theme.current.primary : props.api.theme.current.textMuted}>
+        [{props.label}]
+      </text>
     </box>
   )
 }
 
-export function projectTranscript(
-  messages: readonly SessionMessage[],
-): TranscriptItem[] {
-  return messages
-    .flatMap((message) => {
-      if (message.type !== "user" && message.type !== "assistant") return []
-      const text =
-        message.type === "user"
-          ? message.text
-          : message.content
-              .filter((part) => part.type === "text")
-              .map((part) => part.text)
-              .join("\n")
-      const visible = sanitizeTranscript(text)
-      if (!visible) return []
-      return [
-        {
-          id: message.id,
-          role: message.type,
-          label: message.type === "user" ? "you" : message.agent || "assistant",
-          text: visible,
-        } satisfies TranscriptItem,
-      ]
-    })
-    .slice(-16)
+function InspectValue(props: { api: TuiPluginApi; label: string; value: string }) {
+  return (
+    <box flexDirection="column">
+      <text fg={props.api.theme.current.textMuted}>{props.label}</text>
+      <text fg={props.api.theme.current.text} wrapMode="word">
+        {props.value}
+      </text>
+    </box>
+  )
 }
 
-const INTERNAL_LOG = [
-  /\bruntime_liveness\b/i,
-  /\bwake_ack\b/i,
-  /\bwake_id=/i,
-  /\bsession_title=\[/i,
-  /\bliveness recovery\b/i,
-]
-
-const INTERNAL_MESSAGE = [/^\s*<ic_agent_wakeup>/i, /^\s*<active-inbox-item>/i]
-
-function sanitizeTranscript(value: string) {
-  if (INTERNAL_MESSAGE.some((pattern) => pattern.test(value))) return
-  const text = value
-    .trim()
-    .split(/\r?\n/)
-    .filter((line) => !INTERNAL_LOG.some((pattern) => pattern.test(line)))
-    .join("\n")
-    .trim()
-  return text || undefined
+export function resolveProjectedDebugTarget(
+  snapshot: MotryxControlSnapshot,
+  laneID: string,
+  role: "coordinator" | "checker",
+): MotryxConversationTarget | undefined {
+  const lane = snapshot.lanes.find((item) => item.id === laneID)
+  const sessionID = role === "coordinator" ? lane?.coordinatorSessionID : lane?.checkerSessionID
+  if (!lane || !sessionID) return undefined
+  const agent = snapshot.agents.find(
+    (item) => item.sessionID === sessionID && item.role === role && item.laneIDs.includes(laneID),
+  )
+  if (!agent) return undefined
+  return {
+    role,
+    laneID,
+    sessionID,
+    bindingGeneration: snapshot.binding.bindingGeneration,
+    projectionRevision: snapshot.projectionRevision,
+  }
 }
 
 function statusPresentation(phase: MotryxProjectionPhase) {
-  if (phase === "live") return { label: "ROUTABLE" }
-  if (phase === "connecting") return { label: "CONNECTING" }
-  if (phase === "starting") return { label: "RECONCILING" }
-  if (phase === "auth-error") return { label: "AUTH ERROR" }
-  if (phase === "schema-error") return { label: "SCHEMA ERROR" }
-  if (phase === "unbound") return { label: "UNBOUND" }
-  if (phase === "disposed") return { label: "CLOSED" }
-  return { label: "STALE" }
+  if (phase === "live") return
+  if (phase === "connecting") return "CONNECTING"
+  if (phase === "starting") return "RECONCILING"
+  if (phase === "auth-error") return "AUTH ERROR"
+  if (phase === "schema-error") return "SCHEMA ERROR"
+  if (phase === "unbound") return "UNBOUND"
+  if (phase === "disposed") return "CLOSED"
+  return "STALE"
 }
 
 function statusColor(api: TuiPluginApi, phase: MotryxProjectionPhase) {
@@ -415,13 +893,6 @@ function statusColor(api: TuiPluginApi, phase: MotryxProjectionPhase) {
   if (phase === "connecting" || phase === "starting") return api.theme.current.warning
   if (phase === "disposed") return api.theme.current.textMuted
   return api.theme.current.error
-}
-
-function workflowColor(api: TuiPluginApi, status?: string) {
-  if (!status) return api.theme.current.textMuted
-  if (["done", "complete", "completed"].includes(status.toLowerCase())) return api.theme.current.success
-  if (["blocked", "failed", "error"].includes(status.toLowerCase())) return api.theme.current.error
-  return api.theme.current.info
 }
 
 function laneColor(api: TuiPluginApi, status: string) {
@@ -432,14 +903,32 @@ function laneColor(api: TuiPluginApi, status: string) {
   return api.theme.current.textMuted
 }
 
-function statusLabel(status: string) {
-  if (status === "AWAITING_CHECK") return "AWAIT CHECK"
-  return status.replaceAll("_", " ")
+const MOTRYX_KNOWN_LANE_STATUSES = new Set([
+  "OPEN",
+  "READY",
+  "REOPENED",
+  "WORKING",
+  "AWAITING_CHECK",
+  "CHECKING",
+  "PENDING",
+  "BLOCKED",
+  "DONE",
+  "WAIVED",
+])
+
+export function motryxLaneStatusLabel(status: string) {
+  const normalized = status.toUpperCase()
+  if (normalized === "AWAITING_CHECK") return "AWAIT CHECK"
+  const label = normalized.replaceAll("_", " ")
+  return MOTRYX_KNOWN_LANE_STATUSES.has(normalized) ? label : `UNKNOWN · ${label}`
 }
 
-function shortRevision(value: string) {
-  const revision = value.split(":").at(-1) ?? value
-  return revision.slice(0, 8)
+function capitalize(value: string) {
+  return value.charAt(0).toUpperCase() + value.slice(1)
+}
+
+export function motryxDebugViewFromEnv(env: Record<string, string | undefined> = process.env) {
+  return env.MOTRYX_DEBUG_VIEW === "1"
 }
 
 export function motryxRouteConfig(env: Record<string, string | undefined> = process.env) {

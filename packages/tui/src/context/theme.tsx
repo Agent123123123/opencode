@@ -41,12 +41,30 @@ const themeSource: ThemeSource = {
       directories.push(path.join(current, ".opencode"))
       if (path.dirname(current) === current) break
     }
-    return discoverThemes(directories)
+    return discoverThemes(
+      themeDirectories(directories, {
+        configDir: process.env.OPENCODE_CONFIG_DIR,
+        tuiConfig: process.env.OPENCODE_TUI_CONFIG,
+      }),
+    )
   },
   subscribeRefresh(refresh) {
     process.on("SIGUSR2", refresh)
     return () => process.off("SIGUSR2", refresh)
   },
+}
+
+export function themeDirectories(
+  discovered: string[],
+  configured: { configDir?: string; tuiConfig?: string },
+) {
+  return [
+    ...new Set([
+      ...discovered,
+      configured.configDir,
+      configured.tuiConfig ? path.dirname(configured.tuiConfig) : undefined,
+    ].filter((directory): directory is string => directory !== undefined)),
+  ]
 }
 
 export async function discoverThemes(directories: string[]) {
@@ -106,6 +124,18 @@ export const { use: useTheme, provider: ThemeProvider } = createSimpleContext({
     const config = useTuiConfig()
     const kv = useKV()
     const themes = props.source ?? themeSource
+    const allowlist = config.theme_allowlist?.length ? [...new Set(config.theme_allowlist)] : undefined
+    const allowed = (name: string) => allowlist === undefined || allowlist.includes(name)
+    const fallbackName = () => allowlist?.[0] ?? "opencode"
+    const availableThemes = () => {
+      if (!allowlist) return store.themes
+      return Object.fromEntries(
+        allowlist.flatMap((name) => {
+          const value = store.themes[name]
+          return value ? [[name, value] as const] : []
+        }),
+      )
+    }
     const pick = (value: unknown) => {
       if (value === "dark" || value === "light") return value
       return
@@ -118,15 +148,15 @@ export const { use: useTheme, provider: ThemeProvider } = createSimpleContext({
         if (!lock && pick(kv.get("theme_mode")) !== undefined) kv.set("theme_mode", undefined)
         draft.mode = mode
         draft.lock = lock
-        const active = config.theme ?? kv.get("theme", "opencode")
-        draft.active = typeof active === "string" ? active : "opencode"
+        const active = config.theme ?? kv.get("theme", fallbackName())
+        draft.active = typeof active === "string" && allowed(active) ? active : fallbackName()
         draft.ready = false
       }),
     )
 
     createEffect(() => {
       const theme = config.theme
-      if (theme) setStore("active", theme)
+      if (theme && allowed(theme)) setStore("active", theme)
     })
 
     function syncCustomThemes() {
@@ -140,7 +170,7 @@ export const { use: useTheme, provider: ThemeProvider } = createSimpleContext({
             }, {}),
           )
         })
-        .catch(() => setStore("active", "opencode"))
+        .catch(() => setStore("active", fallbackName()))
     }
 
     onMount(() => {
@@ -159,7 +189,7 @@ export const { use: useTheme, provider: ThemeProvider } = createSimpleContext({
           if (!colors.palette[0]) {
             if (hasResolvedSystemTheme) return
             setSystemTheme(undefined)
-            if (store.active === "system") setStore("active", "opencode")
+            if (store.active === "system") setStore("active", fallbackName())
             return
           }
           const next = store.lock ?? terminalMode(colors) ?? mode
@@ -174,7 +204,7 @@ export const { use: useTheme, provider: ThemeProvider } = createSimpleContext({
         .catch(() => {
           if (hasResolvedSystemTheme) return
           setSystemTheme(undefined)
-          if (store.active === "system") setStore("active", "opencode")
+          if (store.active === "system") setStore("active", fallbackName())
         })
     }
 
@@ -255,14 +285,19 @@ export const { use: useTheme, provider: ThemeProvider } = createSimpleContext({
 
     const values = createMemo(() => {
       const active = store.themes[store.active]
-      if (active) return resolveTheme(active, store.mode)
+      if (active && allowed(store.active)) return resolveTheme(active, store.mode)
 
       const saved = kv.get("theme")
-      if (typeof saved === "string") {
+      if (typeof saved === "string" && allowed(saved)) {
         const theme = store.themes[saved]
         if (theme) return resolveTheme(theme, store.mode)
       }
 
+      const fallback = store.themes[fallbackName()]
+      if (fallback) return resolveTheme(fallback, store.mode)
+
+      // Keep the renderer usable if a configured external catalog is missing.
+      // The unavailable built-in fallback is not exposed through all/has/set.
       return resolveTheme(store.themes.opencode, store.mode)
     })
 
@@ -281,8 +316,10 @@ export const { use: useTheme, provider: ThemeProvider } = createSimpleContext({
       get selected() {
         return store.active
       },
-      all: allThemes,
-      has: hasTheme,
+      all: availableThemes,
+      has(theme: string) {
+        return allowed(theme) && store.themes[theme] !== undefined
+      },
       syntax,
       subtleSyntax,
       mode: () => store.mode,
@@ -291,7 +328,7 @@ export const { use: useTheme, provider: ThemeProvider } = createSimpleContext({
       unlock: free,
       setMode: pin,
       set(theme: string) {
-        if (!hasTheme(theme)) return false
+        if (!allowed(theme) || store.themes[theme] === undefined) return false
         setStore("active", theme)
         kv.set("theme", theme)
         return true

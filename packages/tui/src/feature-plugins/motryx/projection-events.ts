@@ -83,6 +83,7 @@ export function createMotryxProjectionController(options: MotryxProjectionContro
   let retryHint: number | undefined
   let attempt = 0
   let staleTimer: ReturnType<typeof setTimeout> | undefined
+  let proofCanBecomeLive = false
 
   const externalAbort = () => dispose()
   options.signal?.addEventListener("abort", externalAbort, { once: true })
@@ -92,7 +93,8 @@ export function createMotryxProjectionController(options: MotryxProjectionContro
     if (!stopped) options.onState(next)
   }
 
-  function clearProof(phase: MotryxProjectionPhase, detail: string) {
+  function clearProof(phase: MotryxProjectionPhase, detail: string, recoverOnHeartbeat = false) {
+    if (!recoverOnHeartbeat) proofCanBecomeLive = false
     publishState({
       phase,
       detail,
@@ -110,7 +112,7 @@ export function createMotryxProjectionController(options: MotryxProjectionContro
     clearStaleTimer()
     staleTimer = setTimeout(() => {
       if (stopped || terminal) return
-      clearProof("stale", "Motryx control heartbeat is stale")
+      clearProof("stale", "Motryx control heartbeat is stale", true)
     }, staleAfterMs)
     staleTimer.unref?.()
   }
@@ -118,11 +120,11 @@ export function createMotryxProjectionController(options: MotryxProjectionContro
   function touchEvent() {
     const eventAt = now()
     publishState({
-      phase: snapshot ? "live" : state.phase,
+      phase: snapshot && proofCanBecomeLive ? "live" : state.phase,
       lastEventAt: eventAt,
       lastSnapshotAt: state.lastSnapshotAt,
     })
-    armStaleTimer()
+    if (proofCanBecomeLive) armStaleTimer()
   }
 
   function handleError(error: unknown): RefreshResult {
@@ -131,6 +133,7 @@ export function createMotryxProjectionController(options: MotryxProjectionContro
       if (error.status === 401 || error.status === 403) {
         terminal = true
         clearProof("auth-error", `Control API authorization failed (HTTP ${error.status})`)
+        controller.abort()
         return "terminal"
       }
       if (error.status === 404 || error.status === 409) {
@@ -160,6 +163,7 @@ export function createMotryxProjectionController(options: MotryxProjectionContro
       })
       if (stopped) return "terminal"
       snapshot = next
+      proofCanBecomeLive = true
       const at = now()
       options.onSnapshot(next)
       publishState({
@@ -274,7 +278,7 @@ export function createMotryxProjectionController(options: MotryxProjectionContro
         const body = await connect()
         armStaleTimer()
         for await (const frame of readMotryxSse(body, { signal: controller.signal, maxFrameBytes })) {
-          if (stopped) break
+          if (stopped || terminal) break
           sawFrame = true
           attempt = 0
           if (frame.id !== undefined) lastEventID = frame.id
@@ -289,7 +293,13 @@ export function createMotryxProjectionController(options: MotryxProjectionContro
               clearProof("unbound", "Control event belongs to a different routed generation")
               break
             }
-            if (event.projectionRevision !== snapshot?.projectionRevision) void refresh()
+            if (event.projectionRevision !== snapshot?.projectionRevision) {
+              const refreshed = await refresh()
+              if (refreshed !== "ok") {
+                invalidated = true
+                break
+              }
+            }
             continue
           }
           if (frame.event === "route.invalidated") {

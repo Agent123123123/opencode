@@ -3,7 +3,7 @@ import { mkdir, writeFile } from "node:fs/promises"
 import path from "node:path"
 import type { TerminalColors } from "@opentui/core"
 import { DEFAULT_THEMES, addTheme, allThemes, hasTheme, resolveTheme, terminalMode } from "../src/theme"
-import { discoverThemes } from "../src/context/theme"
+import { discoverThemes, themeDirectories } from "../src/context/theme"
 import { tmpdir } from "./fixture/fixture"
 
 test("addTheme writes into module theme store", () => {
@@ -78,4 +78,20 @@ test("custom theme precedence follows directory order", async () => {
   await writeFile(path.join(project, "themes", "custom.json"), JSON.stringify({ source: "project" }))
 
   await expect(discoverThemes([global, project])).resolves.toEqual({ custom: { source: "project" } })
+})
+
+test("custom theme directories include explicit config locations", () => {
+  expect(
+    themeDirectories(["/global", "/project/.opencode"], {
+      configDir: "/managed/config",
+      tuiConfig: "/managed/tui/tui.json",
+    }),
+  ).toEqual(["/global", "/project/.opencode", "/managed/config", "/managed/tui"])
+
+  expect(
+    themeDirectories(["/global", "/managed/config"], {
+      configDir: "/managed/config",
+      tuiConfig: "/managed/config/tui.json",
+    }),
+  ).toEqual(["/global", "/managed/config"])
 })

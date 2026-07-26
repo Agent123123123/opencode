@@ -1,9 +1,10 @@
 export type MotryxProductLayout = {
-  mode: "side" | "stacked" | "conversation-first" | "safe"
+  mode: "wide" | "compact-side" | "stacked" | "conversation-first" | "safe"
   direction: "row" | "column"
-  workflowWidth?: number
-  workflowHeight?: number
-  showTranscript: boolean
+  sidecarWidth?: number
+  sidecarHeight: number | "100%"
+  showSidecar: boolean
+  collapsedSidecar: boolean
 }
 
 export function motryxProductLayout(input: { width: number; height: number }): MotryxProductLayout {
@@ -11,30 +12,45 @@ export function motryxProductLayout(input: { width: number; height: number }): M
     return {
       mode: "safe",
       direction: "column",
-      workflowHeight: Math.max(3, input.height - 4),
-      showTranscript: false,
+      sidecarHeight: 2,
+      showSidecar: true,
+      collapsedSidecar: true,
     }
   }
-  if (input.height < 18) {
+  if (input.height <= 16) {
     return {
       mode: "conversation-first",
       direction: "column",
-      workflowHeight: 5,
-      showTranscript: true,
+      sidecarHeight: 2,
+      showSidecar: true,
+      collapsedSidecar: true,
+    }
+  }
+  if (input.width >= 120) {
+    return {
+      mode: "wide",
+      direction: "row",
+      sidecarWidth: 46,
+      sidecarHeight: "100%",
+      showSidecar: true,
+      collapsedSidecar: false,
     }
   }
   if (input.width >= 100) {
     return {
-      mode: "side",
+      mode: "compact-side",
       direction: "row",
-      workflowWidth: input.width >= 120 ? 46 : 38,
-      showTranscript: true,
+      sidecarWidth: 42,
+      sidecarHeight: "100%",
+      showSidecar: true,
+      collapsedSidecar: false,
     }
   }
   return {
     mode: "stacked",
     direction: "column",
-    workflowHeight: Math.min(11, Math.max(7, Math.floor(input.height * 0.4))),
-    showTranscript: true,
+    sidecarHeight: input.height <= 21 ? 6 : Math.min(11, Math.max(7, Math.floor(input.height * 0.36))),
+    showSidecar: true,
+    collapsedSidecar: false,
   }
 }

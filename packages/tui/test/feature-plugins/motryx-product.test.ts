@@ -1,8 +1,12 @@
 import { describe, expect, test } from "bun:test"
-import type { SessionMessage } from "@opencode-ai/sdk/v2"
 import { createBuiltinPlugins } from "../../src/feature-plugins/builtins"
+import type { MotryxControlSnapshot } from "../../src/feature-plugins/motryx/control"
 import { motryxProductLayout } from "../../src/feature-plugins/motryx/layout"
-import { projectTranscript } from "../../src/feature-plugins/motryx/route"
+import {
+  motryxDebugViewFromEnv,
+  motryxLaneStatusLabel,
+  resolveProjectedDebugTarget,
+} from "../../src/feature-plugins/motryx/route"
 
 describe("Motryx product TUI", () => {
   test("ships as an opt-in builtin on the ordinary plugin route", () => {
@@ -13,47 +17,113 @@ describe("Motryx product TUI", () => {
     expect(typeof plugin?.tui).toBe("function")
   })
 
-  test("has deterministic safe, short, stacked, and side layouts", () => {
-    expect(motryxProductLayout({ width: 39, height: 24 })).toMatchObject({ mode: "safe", showTranscript: false })
+  test("keeps conversation dominant across safe, short, stacked, and side layouts", () => {
+    expect(motryxProductLayout({ width: 39, height: 24 })).toMatchObject({
+      mode: "safe",
+      sidecarHeight: 2,
+      collapsedSidecar: true,
+    })
     expect(motryxProductLayout({ width: 80, height: 16 })).toMatchObject({
       mode: "conversation-first",
       direction: "column",
-      workflowHeight: 5,
+      sidecarHeight: 2,
+      collapsedSidecar: true,
     })
     expect(motryxProductLayout({ width: 80, height: 24 })).toMatchObject({ mode: "stacked", direction: "column" })
     expect(motryxProductLayout({ width: 100, height: 30 })).toMatchObject({
-      mode: "side",
+      mode: "compact-side",
       direction: "row",
-      workflowWidth: 38,
+      sidecarWidth: 42,
+      sidecarHeight: "100%",
     })
-    expect(motryxProductLayout({ width: 120, height: 40 })).toMatchObject({ workflowWidth: 46 })
+    expect(motryxProductLayout({ width: 120, height: 40 })).toMatchObject({
+      mode: "wide",
+      sidecarWidth: 46,
+      sidecarHeight: "100%",
+    })
   })
 
-  test("derives transcript only from OpenCode V2 conversation text and hides internal hints", () => {
-    const messages = [
-      { id: "msg_user", type: "user", text: "Build the migration", time: { created: 1 } },
-      {
-        id: "msg_wake",
-        type: "user",
-        text: '<ic_agent_wakeup>\n{"wake_id":"internal"}\n</ic_agent_wakeup>',
-        time: { created: 2 },
-      },
-      { id: "msg_system", type: "system", text: "hidden system context", time: { created: 3 } },
-      {
-        id: "msg_assistant",
-        type: "assistant",
-        agent: "orchestrator",
-        model: { providerID: "openai", id: "gpt-test" },
-        content: [
-          { id: "text", type: "text", text: "runtime_liveness=READY\nWorking on SSE" },
-          { id: "reasoning", type: "reasoning", text: "hidden reasoning" },
-        ],
-        time: { created: 4, completed: 5 },
-      },
-    ] satisfies SessionMessage[]
-    expect(projectTranscript(messages)).toEqual([
-      { id: "msg_user", role: "user", label: "you", text: "Build the migration" },
-      { id: "msg_assistant", role: "assistant", label: "orchestrator", text: "Working on SSE" },
-    ])
+  test("resolves debug sessions only from exact lane and agent projection agreement", () => {
+    const snapshot = debugSnapshot()
+    expect(resolveProjectedDebugTarget(snapshot, "lane_1", "coordinator")).toMatchObject({
+      role: "coordinator",
+      laneID: "lane_1",
+      sessionID: "ses_coord",
+      bindingGeneration: 7,
+    })
+    expect(resolveProjectedDebugTarget(snapshot, "lane_1", "checker")).toBeUndefined()
+    snapshot.agents[0].laneIDs = ["lane_other"]
+    expect(resolveProjectedDebugTarget(snapshot, "lane_1", "coordinator")).toBeUndefined()
+  })
+
+  test("debug mode is explicit and is not inferred from a truthy string", () => {
+    expect(motryxDebugViewFromEnv({ MOTRYX_DEBUG_VIEW: "1" })).toBe(true)
+    expect(motryxDebugViewFromEnv({ MOTRYX_DEBUG_VIEW: "true" })).toBe(false)
+    expect(motryxDebugViewFromEnv({})).toBe(false)
+  })
+
+  test("uses exact durable lane labels and marks future states as unknown", () => {
+    expect(motryxLaneStatusLabel("AWAITING_CHECK")).toBe("AWAIT CHECK")
+    expect(motryxLaneStatusLabel("reopened")).toBe("REOPENED")
+    expect(motryxLaneStatusLabel("future_state")).toBe("UNKNOWN · FUTURE STATE")
   })
 })
+
+function debugSnapshot(): MotryxControlSnapshot {
+  const now = "2026-07-19T00:00:00.000Z"
+  return {
+    schemaVersion: 2,
+    projectID: "/tmp/project",
+    orchestratorSessionID: "ses_orch",
+    projectionRevision: "server:revision",
+    route: {
+      state: "ROUTABLE",
+      serverGeneration: "server",
+      sidecarGeneration: "server",
+      bindingGeneration: 7,
+      reconciledThrough: { sessionID: "ses_orch", seq: null, eventID: null },
+      observedAt: now,
+    },
+    binding: {
+      projectID: "/tmp/project",
+      orchestratorSessionID: "ses_orch",
+      runtimeID: "runtime",
+      bindingState: "ACTIVE",
+      bindingGeneration: 7,
+      ownerRunID: "run",
+      createdAt: now,
+      updatedAt: now,
+      activatedAt: now,
+      lastRoutedAt: null,
+    },
+    workflow: { id: "workflow", status: "ACTIVE", goal: "Goal", agentAllocationPolicy: {} },
+    lanes: [
+      {
+        id: "lane_1",
+        name: "Lane one",
+        status: "WORKING",
+        updatedAt: now,
+        reopenCount: 0,
+        repairCycle: 0,
+        dependsOnLaneIDs: [],
+        coordinatorSessionID: "ses_coord",
+        checkerSessionID: "ses_check",
+      },
+    ],
+    agents: [
+      {
+        instanceID: "inst_coord",
+        role: "coordinator",
+        sessionID: "ses_coord",
+        status: "ALIVE",
+        laneIDs: ["lane_1"],
+      },
+    ],
+    artifacts: [],
+    resourceBlocks: [],
+    functionSlots: [],
+    inboxItems: [],
+    deliveryFences: [],
+    diagnostics: [],
+  }
+}
