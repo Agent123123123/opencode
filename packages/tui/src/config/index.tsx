@@ -61,6 +61,9 @@ export const Prompt = Schema.Struct({
 export const Info = Schema.Struct({
   $schema: Schema.optional(Schema.String),
   theme: Schema.optional(Schema.String),
+  theme_allowlist: Schema.optional(Schema.Array(Schema.String)).annotate({
+    description: "Limit the themes exposed by the TUI to this ordered list; the first entry is the fallback theme",
+  }),
   keybinds: Schema.optional(TuiKeybind.KeybindOverrides),
   plugin: Schema.optional(Schema.Array(PluginSpec)),
   plugin_enabled: Schema.optional(Schema.Record(Schema.String, Schema.Boolean)),

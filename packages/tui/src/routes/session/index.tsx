@@ -154,6 +154,32 @@ const sessionGlobalBindingCommands = [
 
 const sessionGlobalUnfocusedBindingCommands = ["session.first", "session.last"] as const
 
+const sessionSurfaceReadOnlyBlockedCommands = new Set([
+  "session.share",
+  "session.rename",
+  "session.fork",
+  "session.compact",
+  "session.unshare",
+  "session.undo",
+  "session.redo",
+  "session.background",
+  "session.child.first",
+  "session.parent",
+  "session.child.next",
+  "session.child.previous",
+])
+
+export function sessionSurfaceCommandEnabled(interaction: SessionSurfaceProps["interaction"], command: string) {
+  return interaction !== "read-only" || !sessionSurfaceReadOnlyBlockedCommands.has(command)
+}
+
+export function sessionSurfaceSubagentFooterEnabled(
+  interaction: SessionSurfaceProps["interaction"],
+  parentID: string | undefined,
+) {
+  return interaction !== "read-only" && Boolean(parentID)
+}
+
 const context = createContext<{
   width: number
   sessionID: string
@@ -176,6 +202,24 @@ function use() {
 }
 
 export function Session() {
+  const route = useRouteData("session")
+  return <SessionSurface sessionID={route.sessionID} initialPrompt={route.prompt} standalone />
+}
+
+export type SessionSurfaceProps = {
+  sessionID: string
+  initialPrompt?: PromptInfo
+  width?: number
+  showNativeSidebar?: boolean
+  showIdleFooter?: boolean
+  showExitEpilogue?: boolean
+  interaction?: "interactive" | "read-only"
+  promptRight?: JSX.Element
+  standalone?: boolean
+  onSessionUnavailable?: (error: unknown) => void
+}
+
+export function SessionSurface(props: SessionSurfaceProps) {
   const setEpilogue = useEpilogue()
   const clipboard = useClipboard()
   const writeExport = async (file: string, content: string) => {
@@ -183,7 +227,15 @@ export function Session() {
     await writeFile(file, content)
   }
   const pluginRuntime = usePluginRuntime()
-  const route = useRouteData("session")
+  const route = {
+    get sessionID() {
+      return props.sessionID
+    },
+    get prompt() {
+      return props.initialPrompt
+    },
+    type: "session" as const,
+  }
   const { navigate } = useRoute()
   const sync = useSync()
   const event = useEvent()
@@ -200,6 +252,10 @@ export function Session() {
   })
 
   createEffect(() => {
+    if (props.showExitEpilogue === false) {
+      setEpilogue()
+      return
+    }
     const title = Locale.truncate(session()?.title ?? "", 50)
     setEpilogue(sessionEpilogue({ title, sessionID: session()?.id }))
   })
@@ -238,7 +294,10 @@ export function Session() {
     if (session()?.parentID) return []
     return children().flatMap((x) => sync.data.question[x.id] ?? [])
   })
-  const visible = createMemo(() => !session()?.parentID && permissions().length === 0 && questions().length === 0)
+  const interactive = createMemo(() => props.interaction !== "read-only")
+  const visible = createMemo(
+    () => interactive() && !session()?.parentID && permissions().length === 0 && questions().length === 0,
+  )
   const disabled = createMemo(() => permissions().length > 0 || questions().length > 0)
 
   const pending = createMemo(() => {
@@ -268,15 +327,17 @@ export function Session() {
   const [_animationsEnabled, _setAnimationsEnabled] = kv.signal("animations_enabled", true)
   const [showGenericToolOutput, setShowGenericToolOutput] = kv.signal("generic_tool_output_visibility", false)
 
-  const wide = createMemo(() => dimensions().width > 120)
+  const surfaceWidth = createMemo(() => props.width ?? dimensions().width)
+  const wide = createMemo(() => surfaceWidth() > 120)
   const sidebarVisible = createMemo(() => {
+    if (props.showNativeSidebar === false) return false
     if (session()?.parentID) return false
     if (sidebarOpen()) return true
     if (sidebar() === "auto" && wide()) return true
     return false
   })
   const showTimestamps = createMemo(() => timestamps() === "show")
-  const contentWidth = createMemo(() => dimensions().width - (sidebarVisible() ? 42 : 0) - 4)
+  const contentWidth = createMemo(() => surfaceWidth() - (sidebarVisible() ? 42 : 0) - 4)
   const providers = createMemo(() => Model.index(sync.data.provider))
 
   const scrollAcceleration = createMemo(() => getScrollAcceleration(tuiConfig))
@@ -290,12 +351,10 @@ export function Session() {
       const previousWorkspace = untrack(() => project.workspace.current())
       const result = await sdk.client.session.get({ sessionID }, { throwOnError: true })
       if (!result.data) {
-        toast.show({
-          message: `Session not found: ${sessionID}`,
-          variant: "error",
-          duration: 5000,
-        })
-        navigate({ type: "home" })
+        if (props.standalone) {
+          toast.show({ message: `Session not found: ${sessionID}`, variant: "error", duration: 5000 })
+          navigate({ type: "home" })
+        } else props.onSessionUnavailable?.(new Error(`Session not found: ${sessionID}`))
         return
       }
 
@@ -315,17 +374,16 @@ export function Session() {
       if (route.sessionID === sessionID && scroll) scroll.scrollBy(100_000)
     })().catch((error) => {
       if (route.sessionID !== sessionID) return
-      toast.show({
-        message: errorMessage(error),
-        variant: "error",
-        duration: 5000,
-      })
-      navigate({ type: "home" })
+      if (props.standalone) {
+        toast.show({ message: errorMessage(error), variant: "error", duration: 5000 })
+        navigate({ type: "home" })
+      } else props.onSessionUnavailable?.(error)
     })
   })
 
   let lastSwitch: string | undefined = undefined
   event.on("message.part.updated", (evt) => {
+    if (!interactive()) return
     const part = evt.properties.part
     if (part.type !== "tool") return
     if (part.sessionID !== route.sessionID) return
@@ -356,6 +414,7 @@ export function Session() {
   const renderer = useRenderer()
 
   event.on("session.status", (evt) => {
+    if (!interactive()) return
     if (evt.properties.sessionID !== route.sessionID) return
     if (evt.properties.status.type !== "retry") return
     if (!evt.properties.status.action) return
@@ -1085,14 +1144,16 @@ export function Session() {
   ])
 
   const sessionCommands = createMemo(() =>
-    sessionCommandList().map((command) => ({
-      namespace: "palette",
-      name: command.value,
-      desc: "description" in command ? command.description : undefined,
-      slashName: "slash" in command ? command.slash?.name : undefined,
-      slashAliases: "slash" in command ? command.slash?.aliases : undefined,
-      ...command,
-    })),
+    sessionCommandList()
+      .filter((command) => sessionSurfaceCommandEnabled(props.interaction, command.value))
+      .map((command) => ({
+        namespace: "palette",
+        name: command.value,
+        desc: "description" in command ? command.description : undefined,
+        slashName: "slash" in command ? command.slash?.name : undefined,
+        slashAliases: "slash" in command ? command.slash?.aliases : undefined,
+        ...command,
+      })),
   )
 
   useBindings(() => ({
@@ -1115,7 +1176,7 @@ export function Session() {
 
   useBindings(() => ({
     mode: OPENCODE_BASE_MODE,
-    enabled: foregroundTasks().length > 0,
+    enabled: interactive() && foregroundTasks().length > 0,
     priority: 1,
     bindings: tuiConfig.keybinds.get("session.background"),
   }))
@@ -1207,6 +1268,7 @@ export function Session() {
                           const dialog = useDialog()
 
                           const handleUnrevert = async () => {
+                            if (!interactive()) return
                             const confirmed = await DialogConfirm.show(
                               dialog,
                               "Confirm Redo",
@@ -1269,6 +1331,7 @@ export function Session() {
                         <UserMessage
                           index={index()}
                           onMouseUp={() => {
+                            if (!interactive()) return
                             if (renderer.getSelection()?.getSelectedText()) return
                             dialog.replace(() => (
                               <DialogMessage
@@ -1295,19 +1358,19 @@ export function Session() {
                 </For>
               </scrollbox>
               <box flexShrink={0}>
-                <Show when={permissions().length > 0}>
+                <Show when={interactive() && permissions().length > 0}>
                   <PermissionPrompt
                     request={permissions()[0]}
                     directory={sync.session.get(permissions()[0].sessionID)?.directory}
                   />
                 </Show>
-                <Show when={permissions().length === 0 && questions().length > 0}>
+                <Show when={interactive() && permissions().length === 0 && questions().length > 0}>
                   <QuestionPrompt
                     request={questions()[0]}
                     directory={sync.session.get(questions()[0].sessionID)?.directory}
                   />
                 </Show>
-                <Show when={session()?.parentID}>
+                <Show when={sessionSurfaceSubagentFooterEnabled(props.interaction, session()?.parentID)}>
                   <SubagentFooter />
                 </Show>
                 <Show when={visible()}>
@@ -1328,9 +1391,19 @@ export function Session() {
                         toBottom()
                       }}
                       sessionID={route.sessionID}
-                      right={<pluginRuntime.Slot name="session_prompt_right" session_id={route.sessionID} />}
+                      showIdleFooter={props.showIdleFooter}
+                      right={
+                        props.promptRight ?? (
+                          <pluginRuntime.Slot name="session_prompt_right" session_id={route.sessionID} />
+                        )
+                      }
                     />
                   </pluginRuntime.Slot>
+                </Show>
+                <Show when={!interactive()}>
+                  <box paddingLeft={1} paddingRight={1}>
+                    <text fg={theme.textMuted}>Read-only debug session</text>
+                  </box>
                 </Show>
               </box>
             </Show>

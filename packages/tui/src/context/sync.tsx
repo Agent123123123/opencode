@@ -32,6 +32,7 @@ import { batch, onMount } from "solid-js"
 import path from "path"
 import { useKV } from "./kv"
 import { usePermission } from "./permission"
+import { projectSessionMessagesToLegacy } from "./session-message-projection"
 
 const emptyConsoleState: ConsoleState = {
   consoleManagedProviders: [],
@@ -598,12 +599,28 @@ export const {
           const tracker = { messages: new Set<string>(), parts: new Set<string>() }
           hydratingSessions.set(sessionID, tracker)
           const task = (async () => {
-            const [session, messages, todo, diff] = await Promise.all([
+            const [session, legacyMessages, todo, diff] = await Promise.all([
               sdk.client.session.get({ sessionID }, { throwOnError: true }),
               sdk.client.session.messages({ sessionID, limit: 100 }),
               sdk.client.session.todo({ sessionID }),
               sdk.client.session.diff({ sessionID }),
             ])
+            const projected =
+              Array.isArray(legacyMessages.data) && legacyMessages.data.length === 0
+                ? await sdk.client.v2.session
+                    .messages({ sessionID, limit: 100, order: "desc" }, { throwOnError: true })
+                    .then((response) =>
+                      projectSessionMessagesToLegacy(sessionID, response.data.data, {
+                        agent: session.data?.agent,
+                        model: session.data?.model,
+                        directory: session.data?.directory ?? project.data.instance.path.directory,
+                      }),
+                    )
+                    .catch(() => undefined)
+                : undefined
+            const messages = projected
+              ? projected.messages.map((info) => ({ info, parts: projected.parts[info.id] ?? [] }))
+              : (legacyMessages.data ?? [])
             setStore(
               produce((draft) => {
                 const match = search(draft.session, sessionID, (s) => s.id)
@@ -611,7 +628,7 @@ export const {
                 if (!match.found) draft.session.splice(match.index, 0, session.data!)
                 draft.todo[sessionID] = todo.data ?? []
                 const currentMessages = draft.message[sessionID] ?? []
-                const infos = (messages.data ?? []).flatMap((message) => {
+                const infos = messages.flatMap((message) => {
                   if (!tracker.messages.has(message.info.id)) return [message.info]
                   const current = currentMessages.find((item) => item.id === message.info.id)
                   return current ? [current] : []
@@ -625,7 +642,7 @@ export const {
                 const removed = infos.slice(0, -100)
                 const visible = infos.slice(-100)
                 const visibleIDs = new Set(visible.map((message) => message.id))
-                for (const message of messages.data ?? []) {
+                for (const message of messages) {
                   if (!visibleIDs.has(message.info.id)) {
                     delete draft.part[message.info.id]
                     continue
