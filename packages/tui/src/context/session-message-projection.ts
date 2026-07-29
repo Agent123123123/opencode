@@ -1,10 +1,18 @@
 import type {
+  AgentPart,
   AssistantMessage,
+  FilePart,
   Message,
   Part,
+  PermissionRequest,
+  PermissionV2Request,
+  QuestionRequest,
+  QuestionV2Request,
+  Session,
   SessionMessage,
   SessionMessageAssistant,
   SessionMessageAssistantTool,
+  SessionV2Info,
   ToolPart,
   UserMessage,
 } from "@opencode-ai/sdk/v2"
@@ -22,6 +30,48 @@ export type SessionMessageProjectionFallback = {
 export type ProjectedLegacyMessages = {
   messages: Message[]
   parts: Record<string, Part[]>
+}
+
+export function projectSessionInfoToLegacy(input: SessionV2Info): Session {
+  return {
+    id: input.id,
+    slug: input.id,
+    projectID: input.projectID,
+    workspaceID: input.location.workspaceID,
+    directory: input.location.directory,
+    path: input.subpath,
+    parentID: input.parentID,
+    cost: input.cost,
+    tokens: input.tokens,
+    title: input.title,
+    agent: input.agent,
+    model: input.model,
+    version: "v2",
+    time: input.time,
+    revert: input.revert,
+  }
+}
+
+export function projectPermissionRequestToLegacy(input: PermissionV2Request): PermissionRequest {
+  return {
+    id: input.id,
+    sessionID: input.sessionID,
+    permission: input.action,
+    patterns: input.resources,
+    metadata: input.metadata ?? {},
+    always: input.save ?? [],
+    tool:
+      input.source?.type === "tool" ? { messageID: input.source.messageID, callID: input.source.callID } : undefined,
+  }
+}
+
+export function projectQuestionRequestToLegacy(input: QuestionV2Request): QuestionRequest {
+  return {
+    id: input.id,
+    sessionID: input.sessionID,
+    questions: input.questions,
+    tool: input.tool,
+  }
 }
 
 /**
@@ -63,6 +113,29 @@ export function projectSessionMessagesToLegacy(
           type: "text",
           text: item.text,
         },
+        ...(item.files ?? []).map(
+          (file, index): FilePart => ({
+            id: `${item.id}:file:${index}`,
+            sessionID,
+            messageID: item.id,
+            type: "file",
+            mime: file.mime,
+            filename: file.name,
+            url: file.uri,
+          }),
+        ),
+        ...(item.agents ?? []).map(
+          (agent, index): AgentPart => ({
+            id: `${item.id}:agent:${index}`,
+            sessionID,
+            messageID: item.id,
+            type: "agent",
+            name: agent.name,
+            source: agent.source
+              ? { value: agent.source.text, start: agent.source.start, end: agent.source.end }
+              : undefined,
+          }),
+        ),
       ]
       parentID = item.id
       continue

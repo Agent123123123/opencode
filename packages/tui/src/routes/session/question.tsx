@@ -8,6 +8,7 @@ import { useSDK } from "../../context/sdk"
 import { SplitBorder } from "../../ui/border"
 import { useTuiConfig } from "../../config"
 import { useBindings, useOpencodeModeStack } from "../../keymap"
+import { useTuiStartup } from "../../context/runtime"
 
 const QUESTION_MODE = "question"
 
@@ -17,6 +18,7 @@ export function QuestionPrompt(props: { request: QuestionRequest; directory?: st
   const renderer = useRenderer()
   const tuiConfig = useTuiConfig()
   const modeStack = useOpencodeModeStack()
+  const startup = useTuiStartup()
 
   const questions = createMemo(() => props.request.questions)
   const single = createMemo(() => questions().length === 1 && questions()[0]?.multiple !== true)
@@ -47,6 +49,14 @@ export function QuestionPrompt(props: { request: QuestionRequest; directory?: st
 
   function submit() {
     const answers = questions().map((_, i) => store.answers[i] ?? [])
+    if (startup.sessionApi === "v2") {
+      void sdk.client.v2.session.question.reply({
+        sessionID: props.request.sessionID,
+        requestID: props.request.id,
+        questionV2Reply: { answers },
+      })
+      return
+    }
     void sdk.client.question.reply({
       requestID: props.request.id,
       directory: props.directory,
@@ -55,6 +65,13 @@ export function QuestionPrompt(props: { request: QuestionRequest; directory?: st
   }
 
   function reject() {
+    if (startup.sessionApi === "v2") {
+      void sdk.client.v2.session.question.reject({
+        sessionID: props.request.sessionID,
+        requestID: props.request.id,
+      })
+      return
+    }
     void sdk.client.question.reject({
       requestID: props.request.id,
       directory: props.directory,
@@ -71,6 +88,14 @@ export function QuestionPrompt(props: { request: QuestionRequest; directory?: st
       setStore("custom", inputs)
     }
     if (single()) {
+      if (startup.sessionApi === "v2") {
+        void sdk.client.v2.session.question.reply({
+          sessionID: props.request.sessionID,
+          requestID: props.request.id,
+          questionV2Reply: { answers: [[answer]] },
+        })
+        return
+      }
       void sdk.client.question.reply({
         requestID: props.request.id,
         directory: props.directory,

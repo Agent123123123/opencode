@@ -9,6 +9,15 @@ describe("SessionSurface interaction boundary", () => {
     }
   })
 
+  test("supports a narrow multi-agent policy that disables conversation history branching and rewrite", () => {
+    for (const command of ["session.fork", "session.undo", "session.redo"]) {
+      expect(sessionSurfaceCommandEnabled("interactive", command, "disabled")).toBe(false)
+    }
+    for (const command of ["session.timeline", "messages.copy", "session.export", "session.compact"]) {
+      expect(sessionSurfaceCommandEnabled("interactive", command, "disabled")).toBe(true)
+    }
+  })
+
   test("blocks worker-session mutations while preserving inspection commands", () => {
     for (const command of [
       "session.share",

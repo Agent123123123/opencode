@@ -28,11 +28,18 @@ import { useTuiStartup } from "./runtime"
 import { createSimpleContext } from "./helper"
 import { useExit } from "./exit"
 import { useArgs } from "./args"
-import { batch, onMount } from "solid-js"
+import { batch, createEffect, createSignal, onMount, untrack } from "solid-js"
 import path from "path"
 import { useKV } from "./kv"
 import { usePermission } from "./permission"
-import { projectSessionMessagesToLegacy } from "./session-message-projection"
+import { useOptionalData } from "./data"
+import {
+  projectPermissionRequestToLegacy,
+  projectQuestionRequestToLegacy,
+  projectSessionInfoToLegacy,
+  projectSessionMessagesToLegacy,
+} from "./session-message-projection"
+import { v2TurnHasTerminalAssistant } from "./session-v2"
 
 const emptyConsoleState: ConsoleState = {
   consoleManagedProviders: [],
@@ -141,9 +148,17 @@ export const {
     const event = useEvent()
     const project = useProject()
     const sdk = useSDK()
+    const data = useOptionalData()
+
+    function v2Data() {
+      if (!data) throw new Error("V2 session mode requires the Data provider")
+      return data
+    }
 
     const fullSyncedSessions = new Set<string>()
     const syncingSessions = new Map<string, Promise<void>>()
+    const v2Sessions = new Set<string>()
+    const [v2SessionRevision, setV2SessionRevision] = createSignal(0)
     const hydratingSessions = new Map<string, { messages: Set<string>; parts: Set<string> }>()
     const touchMessage = (sessionID: string, messageID: string) => {
       hydratingSessions.get(sessionID)?.messages.add(messageID)
@@ -163,10 +178,69 @@ export const {
     }
 
     function listSessions() {
+      if (startup.sessionApi === "v2") {
+        return sdk.client.v2.session
+          .list({ limit: 100, order: "desc", directory: project.data.instance.path.directory }, { throwOnError: true })
+          .then((x) => x.data.data.map(projectSessionInfoToLegacy).toSorted((a, b) => a.id.localeCompare(b.id)))
+      }
       return sdk.client.session
         .list({ start: Date.now() - 30 * 24 * 60 * 60 * 1000, ...sessionListQuery() })
         .then((x) => (x.data ?? []).toSorted((a, b) => a.id.localeCompare(b.id)))
     }
+
+    function projectV2Session(sessionID: string) {
+      const sourceData = v2Data()
+      const info = sourceData.session.get(sessionID)
+      const source = sourceData.session.message.list(sessionID)
+      if (!info || !source) return
+      const session = projectSessionInfoToLegacy(info)
+      const projected = projectSessionMessagesToLegacy(sessionID, source, {
+        agent: info.agent,
+        model: info.model,
+        directory: info.location.directory,
+      })
+      const visible = projected.messages.slice(-100)
+      const visibleIDs = new Set(visible.map((message) => message.id))
+      setStore(
+        produce((draft) => {
+          const match = search(draft.session, sessionID, (item) => item.id)
+          if (match.found) draft.session[match.index] = session
+          if (!match.found) draft.session.splice(match.index, 0, session)
+          draft.todo[sessionID] = []
+          draft.session_diff[sessionID] = []
+          draft.permission[sessionID] = (sourceData.session.permission.list(sessionID) ?? []).map(
+            projectPermissionRequestToLegacy,
+          )
+          draft.question[sessionID] = (sourceData.session.question.list(sessionID) ?? []).map(
+            projectQuestionRequestToLegacy,
+          )
+          for (const message of draft.message[sessionID] ?? []) {
+            if (!visibleIDs.has(message.id)) delete draft.part[message.id]
+          }
+          for (const message of visible) draft.part[message.id] = projected.parts[message.id] ?? []
+          draft.message[sessionID] = visible
+        }),
+      )
+    }
+
+    createEffect(() => {
+      if (startup.sessionApi !== "v2") return
+      const sourceData = v2Data()
+      v2SessionRevision()
+      const snapshots = [...v2Sessions].map((sessionID) => ({
+        sessionID,
+        info: sourceData.session.get(sessionID),
+        messages: sourceData.session.message.list(sessionID),
+        permissions: sourceData.session.permission.list(sessionID),
+        questions: sourceData.session.question.list(sessionID),
+      }))
+      untrack(() => {
+        for (const snapshot of snapshots) {
+          if (!snapshot.info || !snapshot.messages) continue
+          projectV2Session(snapshot.sessionID)
+        }
+      })
+    })
 
     event.subscribe((event, { directory, workspace }) => {
       switch (event.type) {
@@ -310,6 +384,15 @@ export const {
 
         case "session.status": {
           setStore("session_status", event.properties.sessionID, event.properties.status)
+          break
+        }
+        case "session.turn.started": {
+          if (startup.sessionApi === "v2") setStore("session_status", event.properties.sessionID, { type: "busy" })
+          break
+        }
+        case "session.turn.not_started":
+        case "session.turn.settled": {
+          if (startup.sessionApi === "v2") setStore("session_status", event.properties.sessionID, { type: "idle" })
           break
         }
 
@@ -462,6 +545,20 @@ export const {
         .catch(() => emptyConsoleState)
       const agentsPromise = sdk.client.app.agents({ workspace }, { throwOnError: true })
       const configPromise = sdk.client.config.get({ workspace }, { throwOnError: true })
+      const sessionStatusPromise =
+        startup.sessionApi === "v2"
+          ? sdk.client.v2.session
+              .active({ throwOnError: true })
+              .then((x) =>
+                Object.fromEntries(
+                  Object.entries(x.data.data).flatMap(([sessionID, status]) =>
+                    status && typeof status === "object" && "type" in status && status.type === "running"
+                      ? [[sessionID, { type: "busy" as const }]]
+                      : [],
+                  ),
+                ),
+              )
+          : sdk.client.session.status({ workspace }).then((x) => x.data ?? {})
       await Promise.all([
         providersPromise,
         providerListPromise,
@@ -522,9 +619,7 @@ export const {
               .list({ workspace })
               .then((x) => setStore("mcp_resource", reconcile(x.data ?? {}))),
             sdk.client.formatter.status({ workspace }).then((x) => setStore("formatter", reconcile(x.data ?? []))),
-            sdk.client.session.status({ workspace }).then((x) => {
-              setStore("session_status", reconcile(x.data ?? {}))
-            }),
+            sessionStatusPromise.then((status) => setStore("session_status", reconcile(status))),
             sdk.client.provider.auth({ workspace }).then((x) => setStore("provider_auth", reconcile(x.data ?? {}))),
             sdk.client.vcs.get({ workspace }).then((x) => setStore("vcs", reconcile(x.data))),
             project.workspace.sync(),
@@ -586,10 +681,53 @@ export const {
           if (last.role === "user") return "working"
           return last.time.completed ? "idle" : "working"
         },
+        setStatus(sessionID: string, status: SessionStatus) {
+          setStore("session_status", sessionID, status)
+        },
+        async followTurn(sessionID: string, inputID: string) {
+          if (startup.sessionApi !== "v2") return false
+          const sourceData = v2Data()
+          let observedRunning = false
+          for (let attempt = 0; attempt < 1_800; attempt++) {
+            const active = await sdk.client.v2.session
+              .active({ throwOnError: true })
+              .then((response) => {
+                const status = response.data.data[sessionID]
+                return Boolean(status && typeof status === "object" && "type" in status && status.type === "running")
+              })
+              .catch(() => false)
+            observedRunning ||= active
+            await sourceData.session.message.refresh(sessionID)
+            projectV2Session(sessionID)
+            const messages = sourceData.session.message.list(sessionID) ?? []
+            if (v2TurnHasTerminalAssistant(messages, inputID)) return true
+            if (observedRunning && !active) return true
+            await new Promise((resolve) => setTimeout(resolve, 500))
+          }
+          return false
+        },
         async sync(sessionID: string) {
           if (fullSyncedSessions.has(sessionID)) return
           const syncing = syncingSessions.get(sessionID)
           if (syncing) return syncing
+          if (startup.sessionApi === "v2") {
+            const sourceData = v2Data()
+            v2Sessions.add(sessionID)
+            setV2SessionRevision((value) => value + 1)
+            const task = Promise.all([
+              sourceData.session.refresh(sessionID),
+              sourceData.session.message.refresh(sessionID),
+              sourceData.session.permission.refresh(sessionID),
+              sourceData.session.question.refresh(sessionID),
+            ])
+              .then(() => {
+                projectV2Session(sessionID)
+                fullSyncedSessions.add(sessionID)
+              })
+              .finally(() => syncingSessions.delete(sessionID))
+            syncingSessions.set(sessionID, task)
+            return task
+          }
           const tracker = { messages: new Set<string>(), parts: new Set<string>() }
           hydratingSessions.set(sessionID, tracker)
           const task = (async () => {

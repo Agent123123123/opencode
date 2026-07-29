@@ -22,7 +22,7 @@ import { useProject } from "../../context/project"
 import { useSync } from "../../context/sync"
 import { useEvent } from "../../context/event"
 import { SplitBorder } from "../../ui/border"
-import { useTuiPaths, useTuiTerminalEnvironment } from "../../context/runtime"
+import { useTuiPaths, useTuiStartup, useTuiTerminalEnvironment } from "../../context/runtime"
 import { Spinner } from "../../component/spinner"
 import { createSyntaxStyleMemo, generateSubtleSyntax, selectedForeground, useTheme } from "../../context/theme"
 import { BoxRenderable, ScrollBoxRenderable, addDefaultParsers, TextAttributes, RGBA } from "@opentui/core"
@@ -169,7 +169,18 @@ const sessionSurfaceReadOnlyBlockedCommands = new Set([
   "session.child.previous",
 ])
 
-export function sessionSurfaceCommandEnabled(interaction: SessionSurfaceProps["interaction"], command: string) {
+const sessionSurfaceHistoryMutationCommands = new Set([
+  "session.fork",
+  "session.undo",
+  "session.redo",
+])
+
+export function sessionSurfaceCommandEnabled(
+  interaction: SessionSurfaceProps["interaction"],
+  command: string,
+  historyMutation: SessionSurfaceProps["historyMutation"] = "standard",
+) {
+  if (historyMutation === "disabled" && sessionSurfaceHistoryMutationCommands.has(command)) return false
   return interaction !== "read-only" || !sessionSurfaceReadOnlyBlockedCommands.has(command)
 }
 
@@ -214,6 +225,7 @@ export type SessionSurfaceProps = {
   showIdleFooter?: boolean
   showExitEpilogue?: boolean
   interaction?: "interactive" | "read-only"
+  historyMutation?: "standard" | "disabled"
   promptRight?: JSX.Element
   standalone?: boolean
   onSessionUnavailable?: (error: unknown) => void
@@ -239,6 +251,7 @@ export function SessionSurface(props: SessionSurfaceProps) {
   const { navigate } = useRoute()
   const sync = useSync()
   const event = useEvent()
+  const startup = useTuiStartup()
   const project = useProject()
   const paths = useTuiPaths()
   const tuiConfig = useTuiConfig()
@@ -341,8 +354,12 @@ export function SessionSurface(props: SessionSurfaceProps) {
     const sessionID = route.sessionID
     void (async () => {
       const previousWorkspace = untrack(() => project.workspace.current())
-      const result = await sdk.client.session.get({ sessionID }, { throwOnError: true })
-      if (!result.data) {
+      if (startup.sessionApi === "v2") await sync.session.sync(sessionID)
+      const info =
+        startup.sessionApi === "v2"
+          ? sync.session.get(sessionID)
+          : await sdk.client.session.get({ sessionID }, { throwOnError: true }).then((result) => result.data)
+      if (!info) {
         if (props.standalone) {
           toast.show({ message: `Session not found: ${sessionID}`, variant: "error", duration: 5000 })
           navigate({ type: "home" })
@@ -350,8 +367,8 @@ export function SessionSurface(props: SessionSurfaceProps) {
         return
       }
 
-      if (result.data.workspaceID !== previousWorkspace) {
-        project.workspace.set(result.data.workspaceID)
+      if (info.workspaceID !== previousWorkspace) {
+        project.workspace.set(info.workspaceID)
 
         // Sync all the data for this workspace. Note that this
         // workspace may not exist anymore which is why this is not
@@ -361,7 +378,7 @@ export function SessionSurface(props: SessionSurfaceProps) {
           await sync.bootstrap({ fatal: false })
         } catch {}
       }
-      editor.reconnect(result.data.directory)
+      editor.reconnect(info.directory)
       await sync.session.sync(sessionID)
       if (route.sessionID === sessionID && scroll) scroll.scrollBy(100_000)
     })().catch((error) => {
@@ -520,11 +537,12 @@ export function SessionSurface(props: SessionSurfaceProps) {
       value: "session.share",
       suggested: route.type === "session",
       category: "Session",
-      enabled: sync.data.config.share !== "disabled",
+      enabled: startup.sessionApi !== "v2" && sync.data.config.share !== "disabled",
       slash: {
         name: "share",
       },
       run: async () => {
+        if (startup.sessionApi === "v2") return
         const copy = (url: string) =>
           clipboard
             .write?.(url)
@@ -559,10 +577,12 @@ export function SessionSurface(props: SessionSurfaceProps) {
       title: "Rename session",
       value: "session.rename",
       category: "Session",
+      enabled: startup.sessionApi !== "v2",
       slash: {
         name: "rename",
       },
       run: () => {
+        if (startup.sessionApi === "v2") return
         dialog.replace(() => <DialogSessionRename session={route.sessionID} />)
       },
     },
@@ -592,10 +612,12 @@ export function SessionSurface(props: SessionSurfaceProps) {
       title: "Fork session",
       value: "session.fork",
       category: "Session",
+      enabled: startup.sessionApi !== "v2",
       slash: {
         name: "fork",
       },
       run: () => {
+        if (startup.sessionApi === "v2") return
         dialog.replace(() => (
           <DialogForkFromTimeline
             onMove={(messageID) => {
@@ -619,6 +641,11 @@ export function SessionSurface(props: SessionSurfaceProps) {
         aliases: ["summarize"],
       },
       run: () => {
+        if (startup.sessionApi === "v2") {
+          void sdk.client.v2.session.compact({ sessionID: route.sessionID })
+          dialog.clear()
+          return
+        }
         const selectedModel = local.model.current()
         if (!selectedModel) {
           toast.show({
@@ -640,11 +667,12 @@ export function SessionSurface(props: SessionSurfaceProps) {
       title: "Unshare session",
       value: "session.unshare",
       category: "Session",
-      enabled: !!session()?.share?.url,
+      enabled: startup.sessionApi !== "v2" && !!session()?.share?.url,
       slash: {
         name: "unshare",
       },
       run: async () => {
+        if (startup.sessionApi === "v2") return
         await sdk.client.session
           .unshare({
             sessionID: route.sessionID,
@@ -663,10 +691,12 @@ export function SessionSurface(props: SessionSurfaceProps) {
       title: "Undo previous message",
       value: "session.undo",
       category: "Session",
+      enabled: startup.sessionApi !== "v2",
       slash: {
         name: "undo",
       },
       run: async () => {
+        if (startup.sessionApi === "v2") return
         const status = sync.data.session_status?.[route.sessionID]
         if (status?.type !== "idle") await sdk.client.session.abort({ sessionID: route.sessionID }).catch(() => {})
         const revert = session()?.revert?.messageID
@@ -700,11 +730,12 @@ export function SessionSurface(props: SessionSurfaceProps) {
       title: "Redo",
       value: "session.redo",
       category: "Session",
-      enabled: !!session()?.revert?.messageID,
+      enabled: startup.sessionApi !== "v2" && !!session()?.revert?.messageID,
       slash: {
         name: "redo",
       },
       run: () => {
+        if (startup.sessionApi === "v2") return
         dialog.clear()
         const messageID = session()?.revert?.messageID
         if (!messageID) return
@@ -1141,7 +1172,7 @@ export function SessionSurface(props: SessionSurfaceProps) {
 
   const sessionCommands = createMemo(() =>
     sessionCommandList()
-      .filter((command) => sessionSurfaceCommandEnabled(props.interaction, command.value))
+      .filter((command) => sessionSurfaceCommandEnabled(props.interaction, command.value, props.historyMutation))
       .map((command) => ({
         namespace: "palette",
         name: command.value,

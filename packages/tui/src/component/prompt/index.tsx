@@ -17,7 +17,7 @@ import { useLocal } from "../../context/local"
 import { Flag } from "@opencode-ai/core/flag/flag"
 import { tint, useTheme } from "../../context/theme"
 import { EmptyBorder, SplitBorder } from "../../ui/border"
-import { useTuiPaths, useTuiTerminalEnvironment } from "../../context/runtime"
+import { useTuiPaths, useTuiStartup, useTuiTerminalEnvironment } from "../../context/runtime"
 import { useClipboard } from "../../context/clipboard"
 import { Spinner } from "../spinner"
 import { useSDK } from "../../context/sdk"
@@ -57,6 +57,7 @@ import { usePromptWorkspace } from "./workspace"
 import { usePromptMove } from "./move"
 import { readLocalAttachment } from "./local-attachment"
 import { useLocation } from "../../context/location"
+import { v2PromptInput } from "../../context/session-v2"
 
 registerOpencodeSpinner()
 
@@ -150,6 +151,7 @@ export function Prompt(props: PromptProps) {
   const local = useLocal()
   const args = useArgs()
   const paths = useTuiPaths()
+  const startup = useTuiStartup()
   const location = useLocation()
   const terminalEnvironment = useTuiTerminalEnvironment()
   const clipboard = useClipboard()
@@ -422,9 +424,8 @@ export function Prompt(props: PromptProps) {
           }, 5000)
 
           if (store.interrupt >= 2) {
-            void sdk.client.session.abort({
-              sessionID: props.sessionID,
-            })
+            if (startup.sessionApi === "v2") void sdk.client.v2.session.interrupt({ sessionID: props.sessionID })
+            if (startup.sessionApi !== "v2") void sdk.client.session.abort({ sessionID: props.sessionID })
             setStore("interrupt", 0)
           }
           dialog.clear()
@@ -829,6 +830,7 @@ export function Prompt(props: PromptProps) {
       enabled: (() => {
         cursorVersion()
         return (
+          startup.sessionApi !== "v2" &&
           inputTarget() !== undefined &&
           !props.disabled &&
           store.mode === "normal" &&
@@ -968,15 +970,16 @@ export function Prompt(props: PromptProps) {
     if (workspace.creating() || move.creating()) return false
     if (auto()?.visible) return false
     if (!store.prompt.input) return false
+    const v2 = startup.sessionApi === "v2"
     const agent = local.agent.current()
-    if (!agent) return false
+    if (!v2 && !agent) return false
     const trimmed = store.prompt.input.trim()
     if (trimmed === "exit" || trimmed === "quit" || trimmed === ":q") {
       void exit()
       return true
     }
     const selectedModel = local.model.current()
-    if (!selectedModel) {
+    if (!v2 && !selectedModel) {
       void promptModelWarning()
       return false
     }
@@ -1000,6 +1003,11 @@ export function Prompt(props: PromptProps) {
     let sessionID = props.sessionID
     let finishMoveProgress = false
     if (sessionID == null) {
+      if (v2) {
+        toast.show({ variant: "error", message: "This V2 TUI requires a launcher-bound session." })
+        return false
+      }
+      if (!agent || !selectedModel) return false
       const selectedWorkspace = workspace.selection()
       const workspaceID = selectedWorkspace?.type === "existing" ? selectedWorkspace.workspaceID : undefined
 
@@ -1066,7 +1074,12 @@ export function Prompt(props: PromptProps) {
           ]
         : []
 
+    if (v2 && store.mode === "shell") {
+      toast.show({ variant: "warning", message: "Shell mode is unavailable on the V2 session interface." })
+      return false
+    }
     if (store.mode === "shell") {
+      if (!agent || !selectedModel) return false
       move.startSubmit()
       void sdk.client.session.shell({
         sessionID,
@@ -1082,7 +1095,6 @@ export function Prompt(props: PromptProps) {
       inputText.startsWith("/") &&
       sync.data.command.some((x) => x.name === inputText.split("\n")[0].split(" ")[0].slice(1))
     ) {
-      move.startSubmit()
       // Parse command from first line, preserve multi-line content in arguments
       const firstLineEnd = inputText.indexOf("\n")
       const firstLine = firstLineEnd === -1 ? inputText : inputText.slice(0, firstLineEnd)
@@ -1090,6 +1102,12 @@ export function Prompt(props: PromptProps) {
       const restOfInput = firstLineEnd === -1 ? "" : inputText.slice(firstLineEnd + 1)
       const args = firstLineArgs.join(" ") + (restOfInput ? "\n" + restOfInput : "")
 
+      if (v2) {
+        toast.show({ variant: "warning", message: "Server commands are unavailable on the V2 session interface." })
+        return false
+      }
+      if (!agent || !selectedModel) return false
+      move.startSubmit()
       void sdk.client.session.command({
         sessionID,
         command: command.slice(1),
@@ -1100,33 +1118,60 @@ export function Prompt(props: PromptProps) {
         parts: nonTextParts.filter((x) => x.type === "file"),
       })
     } else {
-      move.startSubmit()
-      sdk.client.session
-        .prompt(
-          {
-            sessionID,
-            ...selectedModel,
-            agent: agent.name,
-            model: selectedModel,
-            variant,
-            parts: [
-              ...editorParts,
-              {
-                type: "text",
-                text: inputText,
-              },
-              ...nonTextParts,
-            ],
-          },
-          { throwOnError: true },
-        )
-        .catch((error) => {
-          toast.show({
-            title: "Failed to send prompt",
-            message: errorMessage(error),
-            variant: "error",
-          })
+      const failed = (error: unknown) => {
+        if (v2) sync.session.setStatus(sessionID, { type: "idle" })
+        toast.show({
+          title: "Failed to send prompt",
+          message: errorMessage(error),
+          variant: "error",
         })
+      }
+      if (v2) {
+        move.startSubmit()
+        sync.session.setStatus(sessionID, { type: "busy" })
+        void sdk.client.v2.session
+          .prompt(
+            {
+              sessionID,
+              prompt: v2PromptInput(`${editorParts.map((part) => part.text).join("")}${inputText}`, nonTextParts),
+              delivery: "queue",
+            },
+            { throwOnError: true },
+          )
+          .then((response) => {
+            const inputID = response.data.data.id
+            void sync.session
+              .followTurn(sessionID, inputID)
+              .then((settled) => {
+                if (settled) sync.session.setStatus(sessionID, { type: "idle" })
+              })
+              .catch(() => {})
+          })
+          .catch(failed)
+      } else {
+        if (!agent || !selectedModel) return false
+        move.startSubmit()
+        void sdk.client.session
+          .prompt(
+            {
+              sessionID,
+              ...selectedModel,
+              agent: agent.name,
+              model: selectedModel,
+              variant,
+              parts: [
+                ...editorParts,
+                {
+                  type: "text",
+                  text: inputText,
+                },
+                ...nonTextParts,
+              ],
+            },
+            { throwOnError: true },
+          )
+          .catch(failed)
+      }
       if (editorParts.length > 0) editor.markSelectionSent()
     }
     history.append({

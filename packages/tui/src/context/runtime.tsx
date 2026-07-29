@@ -16,6 +16,7 @@ export type TuiTerminalEnvironment = Readonly<{
 export type TuiStartup = Readonly<{
   initialRoute?: unknown
   skipInitialLoading: boolean
+  sessionApi?: "v2"
 }>
 
 const PathsContext = createContext<TuiPaths>()

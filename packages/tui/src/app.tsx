@@ -276,6 +276,7 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
                         value={{
                           initialRoute: process.env.OPENCODE_ROUTE ? JSON.parse(process.env.OPENCODE_ROUTE) : undefined,
                           skipInitialLoading: Boolean(process.env.OPENCODE_FAST_BOOT),
+                          sessionApi: process.env.OPENCODE_TUI_SESSION_API === "v2" ? "v2" : undefined,
                         }}
                       >
                         <ClipboardProvider>
@@ -304,8 +305,8 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
                                         >
                                           <PermissionProvider>
                                             <ProjectProvider>
-                                              <SyncProvider>
-                                                <DataProvider>
+                                              <DataProvider>
+                                                <SyncProvider>
                                                   <ThemeProvider mode={mode}>
                                                     <LocalProvider>
                                                       <PromptStashProvider>
@@ -328,8 +329,8 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
                                                       </PromptStashProvider>
                                                     </LocalProvider>
                                                   </ThemeProvider>
-                                                </DataProvider>
-                                              </SyncProvider>
+                                                </SyncProvider>
+                                              </DataProvider>
                                             </ProjectProvider>
                                           </PermissionProvider>
                                         </SDKProvider>
@@ -508,6 +509,10 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
     if (match) {
       continued = true
       if (args.fork) {
+        if (startup.sessionApi === "v2") {
+          toast.show({ message: "Session forking is unavailable on the V2 session interface.", variant: "warning" })
+          return
+        }
         void sdk.client.session.fork({ sessionID: match }).then((result) => {
           if (result.data?.id) {
             route.navigate({ type: "session", sessionID: result.data.id })
@@ -528,6 +533,10 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
   createEffect(() => {
     if (forked || sync.status !== "complete" || !args.sessionID || !args.fork) return
     forked = true
+    if (startup.sessionApi === "v2") {
+      toast.show({ message: "Session forking is unavailable on the V2 session interface.", variant: "warning" })
+      return
+    }
     void sdk.client.session.fork({ sessionID: args.sessionID }).then((result) => {
       if (result.data?.id) {
         route.navigate({ type: "session", sessionID: result.data.id })

@@ -43,7 +43,7 @@ describe("Motryx product TUI", () => {
     })
   })
 
-  test("resolves debug sessions only from exact lane and agent projection agreement", () => {
+  test("resolves debug sessions only from the lane's exact current runtime and agent agreement", () => {
     const snapshot = debugSnapshot()
     expect(resolveProjectedDebugTarget(snapshot, "lane_1", "coordinator")).toMatchObject({
       role: "coordinator",
@@ -52,7 +52,16 @@ describe("Motryx product TUI", () => {
       bindingGeneration: 7,
     })
     expect(resolveProjectedDebugTarget(snapshot, "lane_1", "checker")).toBeUndefined()
-    snapshot.agents[0].laneIDs = ["lane_other"]
+    snapshot.agents.unshift({
+      instanceID: "inst_old_coord",
+      role: "coordinator",
+      sessionID: "ses_old_coord",
+      orchestratorSessionID: "ses_orch",
+      status: "ALIVE",
+      laneIDs: ["lane_1"],
+    })
+    expect(resolveProjectedDebugTarget(snapshot, "lane_1", "coordinator")?.sessionID).toBe("ses_coord")
+    snapshot.agents.find((agent) => agent.instanceID === "inst_coord")!.status = "DISMISSED"
     expect(resolveProjectedDebugTarget(snapshot, "lane_1", "coordinator")).toBeUndefined()
   })
 
@@ -96,7 +105,7 @@ function debugSnapshot(): MotryxControlSnapshot {
       activatedAt: now,
       lastRoutedAt: null,
     },
-    workflow: { id: "workflow", status: "ACTIVE", goal: "Goal", agentAllocationPolicy: {} },
+    workflow: { id: "workflow", status: "ACTIVE", goal: "Goal" },
     lanes: [
       {
         id: "lane_1",
@@ -106,8 +115,14 @@ function debugSnapshot(): MotryxControlSnapshot {
         reopenCount: 0,
         repairCycle: 0,
         dependsOnLaneIDs: [],
-        coordinatorSessionID: "ses_coord",
-        checkerSessionID: "ses_check",
+        coordinatorSlotID: "slot_coord",
+        coordinatorRuntimeReadiness: "ready",
+        checkerRuntimeReadiness: "unmaterialized",
+        coordinatorRuntime: {
+          slotID: "slot_coord",
+          instanceID: "inst_coord",
+          sessionID: "ses_coord",
+        },
       },
     ],
     agents: [
@@ -115,6 +130,7 @@ function debugSnapshot(): MotryxControlSnapshot {
         instanceID: "inst_coord",
         role: "coordinator",
         sessionID: "ses_coord",
+        orchestratorSessionID: "ses_orch",
         status: "ALIVE",
         laneIDs: ["lane_1"],
       },
