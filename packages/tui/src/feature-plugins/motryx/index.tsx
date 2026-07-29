@@ -34,6 +34,7 @@ const tui: TuiPlugin = async (api) => {
     priority: MOTRYX_PRODUCT_COMMAND_PRIORITY,
     commands: [
       ...motryxSessionNavigationCommands(api, config, () => actions),
+      ...motryxSelectionBoundaryCommands(api),
       {
         name: "motryx.open",
         title: "Open Motryx workflow",
@@ -45,27 +46,6 @@ const tui: TuiPlugin = async (api) => {
           if (actions) {
             actions.showFlow()
             api.ui.dialog.clear()
-            return
-          }
-          api.route.navigate(MOTRYX_ROUTE)
-          api.ui.dialog.clear()
-        },
-      },
-      {
-        name: "motryx.session",
-        title: "Open Motryx orchestrator conversation",
-        description: "Open the exact orchestrator in the standard OpenCode session surface.",
-        slashName: "motryx-session",
-        category: "Motryx",
-        namespace: "palette",
-        run() {
-          if (actions) {
-            actions.focusOrchestrator()
-            api.ui.dialog.clear()
-            return
-          }
-          if (!config.ok) {
-            api.ui.toast({ variant: "error", message: config.error })
             return
           }
           api.route.navigate(MOTRYX_ROUTE)
@@ -165,13 +145,18 @@ export function motryxSessionNavigationCommands(
   return [
     {
       name: "session.list",
-      title: "Motryx conversation",
-      description: "Show the exact launcher-bound Orchestrator conversation.",
+      title: "Motryx Orchestrators",
+      description: "List and switch resumable Motryx Orchestrator conversations.",
       slashName: "sessions",
       slashAliases: ["resume", "continue"],
       category: "Motryx",
       namespace: "palette",
       run() {
+        const current = actions()
+        if (current) {
+          void current.showSessions()
+          return
+        }
         showBoundConversation(api, config, actions)
       },
     },
@@ -203,6 +188,112 @@ export function motryxSessionNavigationCommands(
   ]
 }
 
+export function motryxSelectionBoundaryCommands(api: TuiPluginApi): TuiKeymapCommand[] {
+  const modelBoundary = () =>
+    api.ui.toast({
+      variant: "info",
+      message:
+        "Motryx model tiers are launcher-owned. Use /strong_model or /weak_model for the exact configuration command.",
+    })
+  const agentBoundary = () =>
+    api.ui.toast({
+      variant: "info",
+      message: "Motryx agents are assigned by the IC sidecar and cannot be switched from the conversation TUI.",
+    })
+  const providerBoundary = () =>
+    api.ui.toast({
+      variant: "info",
+      message: "Motryx provider credentials are provisioned before launch and cannot be changed from the TUI.",
+    })
+  const historyBoundary = () =>
+    api.ui.toast({
+      variant: "info",
+      message: "Motryx does not expose fork, compact, undo, or redo in its multi-agent conversation.",
+    })
+
+  return [
+    {
+      name: "model.list",
+      title: "Motryx model tiers",
+      category: "Motryx",
+      namespace: "palette",
+      hidden: true,
+      run: modelBoundary,
+    },
+    {
+      name: "motryx.model.strong",
+      title: "Show strong model configuration",
+      description: "Show the launcher-owned model tier used by Orchestrator and Analyst.",
+      slashName: "strong_model",
+      category: "Motryx",
+      namespace: "palette",
+      run() {
+        explainLauncherOwnedModel(api, "strong", api.state.config.model)
+      },
+    },
+    {
+      name: "motryx.model.weak",
+      title: "Show weak model configuration",
+      description: "Show the launcher-owned model tier used by Coordinator, Checker, and helpers.",
+      slashName: "weak_model",
+      category: "Motryx",
+      namespace: "palette",
+      run() {
+        explainLauncherOwnedModel(api, "weak", api.state.config.small_model)
+      },
+    },
+    ...["model.cycle_recent", "model.cycle_recent_reverse", "model.cycle_favorite", "model.cycle_favorite_reverse"].map(
+      (name) => ({
+        name,
+        title: "Motryx model tiers",
+        category: "Motryx",
+        namespace: "palette" as const,
+        hidden: true,
+        run: modelBoundary,
+      }),
+    ),
+    ...["agent.list", "agent.cycle", "agent.cycle.reverse"].map((name) => ({
+      name,
+      title: "Motryx agent assignment",
+      category: "Motryx",
+      namespace: "palette" as const,
+      hidden: true,
+      run: agentBoundary,
+    })),
+    ...["variant.list", "variant.cycle"].map((name) => ({
+      name,
+      title: "Motryx model tiers",
+      category: "Motryx",
+      namespace: "palette" as const,
+      hidden: true,
+      run: modelBoundary,
+    })),
+    {
+      name: "provider.connect",
+      title: "Motryx provider provisioning",
+      category: "Motryx",
+      namespace: "palette",
+      hidden: true,
+      run: providerBoundary,
+    },
+    ...["session.fork", "session.compact", "session.undo", "session.redo"].map((name) => ({
+      name,
+      title: "Motryx conversation history boundary",
+      category: "Motryx",
+      namespace: "palette" as const,
+      hidden: true,
+      run: historyBoundary,
+    })),
+  ]
+}
+
+function explainLauncherOwnedModel(api: TuiPluginApi, tier: "strong" | "weak", model: string | undefined) {
+  api.ui.toast({
+    variant: "info",
+    message: `${tier} model: ${model ?? "not configured"}. To change it, run motryx models set ${tier} <provider/model> outside the TUI, then relaunch.`,
+  })
+}
+
 function showBoundConversation(
   api: Parameters<TuiPlugin>[0],
   config: MotryxRouteConfigResult,
@@ -215,7 +306,7 @@ function showBoundConversation(
   const session = api.state.session.get(config.value.orchestratorSessionID)
   api.ui.dialog.replace(() => (
     <api.ui.DialogSelect
-      title="Conversations"
+      title="Motryx Orchestrators"
       options={[
         {
           title: session?.title || "Orchestrator",

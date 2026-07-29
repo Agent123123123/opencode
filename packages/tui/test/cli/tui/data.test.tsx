@@ -25,13 +25,11 @@ function emitEvent(events: ReturnType<typeof createEventSource>, payload: Event)
   events.emit(global(payload))
 }
 
-test("refreshes resources into reactive getters", async () => {
+test("refreshes exact sessions into reactive getters", async () => {
   const events = createEventSource()
-  const location = {
-    directory,
-    project: { id: "proj_test", directory },
-  }
+  const requested = new Set<string>()
   const calls = createFetch((url) => {
+    requested.add(url.pathname)
     if (url.pathname === "/api/session/ses_test")
       return json({
         data: {
@@ -43,11 +41,6 @@ test("refreshes resources into reactive getters", async () => {
           title: "Test session",
           location: { directory },
         },
-      })
-    if (url.pathname === "/api/agent")
-      return json({
-        location,
-        data: [{ id: "build", request: { headers: {}, body: {} }, mode: "primary", hidden: false, permissions: [] }],
       })
     return undefined
   }, events)
@@ -77,119 +70,14 @@ test("refreshes resources into reactive getters", async () => {
 
   try {
     await mounted
-    expect(data.location.default()).toEqual({ directory })
     expect(data.session.get("ses_test")).toBeUndefined()
-    expect(data.location.agent.list(location)).toBeUndefined()
 
     await data.session.refresh("ses_test")
-    await data.location.agent.refresh()
 
     expect(data.session.get("ses_test")?.title).toBe("Test session")
-    expect(data.location.default()).toEqual({ directory, workspaceID: undefined })
-    expect(data.location.agent.list(location)?.map((agent) => agent.id)).toEqual(["build"])
-  } finally {
-    app.renderer.destroy()
-  }
-})
-
-test("refreshes integrations after integration updates", async () => {
-  const events = createEventSource()
-  const requests = { integration: 0, model: 0, provider: 0 }
-  const calls = createFetch((url) => {
-    if (url.pathname === "/api/model") {
-      requests.model++
-      return json({ location: { directory, project: { id: "proj_test", directory } }, data: [] })
-    }
-    if (url.pathname === "/api/provider") {
-      requests.provider++
-      return json({ location: { directory, project: { id: "proj_test", directory } }, data: [] })
-    }
-    if (url.pathname !== "/api/integration") return
-    requests.integration++
-    return json({
-      location: { directory, project: { id: "proj_test", directory } },
-      data:
-        requests.integration === 1
-          ? []
-          : [
-              {
-                id: "openai",
-                name: "OpenAI",
-                methods: [{ type: "key" }],
-              },
-            ],
-    })
-  }, events)
-  let data!: ReturnType<typeof useData>
-  let ready!: () => void
-  const mounted = new Promise<void>((resolve) => {
-    ready = resolve
-  })
-
-  function Probe() {
-    data = useData()
-    onMount(ready)
-    return <box />
-  }
-
-  const app = await testRender(() => (
-    <TestTuiContexts>
-      <SDKProvider url="http://test" directory={directory} events={events.source} fetch={calls.fetch}>
-        <ProjectProvider>
-          <DataProvider>
-            <Probe />
-          </DataProvider>
-        </ProjectProvider>
-      </SDKProvider>
-    </TestTuiContexts>
-  ))
-
-  try {
-    await mounted
-    await wait(() => data.location.integration.list() !== undefined)
-    expect(data.location.integration.list()).toEqual([])
-    const before = { ...requests }
-
-    emitEvent(events, { id: "evt_integration", type: "integration.updated", properties: {} })
-    await wait(() => data.location.integration.list()?.length === 1)
-    await wait(() => requests.model > before.model && requests.provider > before.provider)
-    expect(data.location.integration.list()?.[0]).toMatchObject({ id: "openai", name: "OpenAI" })
-  } finally {
-    app.renderer.destroy()
-  }
-})
-
-test("refreshes effective catalog data after catalog updates", async () => {
-  const events = createEventSource()
-  const requests = { model: 0, provider: 0 }
-  const calls = createFetch((url) => {
-    if (url.pathname === "/api/model") {
-      requests.model++
-      return json({ location: { directory, project: { id: "proj_test", directory } }, data: [] })
-    }
-    if (url.pathname === "/api/provider") {
-      requests.provider++
-      return json({ location: { directory, project: { id: "proj_test", directory } }, data: [] })
-    }
-  }, events)
-
-  const app = await testRender(() => (
-    <TestTuiContexts>
-      <SDKProvider url="http://test" directory={directory} events={events.source} fetch={calls.fetch}>
-        <ProjectProvider>
-          <DataProvider>
-            <box />
-          </DataProvider>
-        </ProjectProvider>
-      </SDKProvider>
-    </TestTuiContexts>
-  ))
-
-  try {
-    await wait(() => requests.model > 0 && requests.provider > 0)
-    const before = { ...requests }
-    emitEvent(events, { id: "evt_catalog", type: "catalog.updated", properties: {} })
-    await wait(() => requests.model > before.model && requests.provider > before.provider)
+    await Bun.sleep(20)
+    for (const path of ["/api/agent", "/api/command", "/api/integration", "/api/model", "/api/provider", "/api/skill"])
+      expect(requested.has(path)).toBe(false)
   } finally {
     app.renderer.destroy()
   }
@@ -271,21 +159,6 @@ test("settles pending tools when a live failure arrives", async () => {
   try {
     await mounted
     emitEvent(events, {
-      id: "evt_agent_1",
-      type: "session.next.agent.switched",
-      properties: { sessionID: "session-1", messageID: "msg_agent_1", timestamp: 0, agent: "build" },
-    })
-    emitEvent(events, {
-      id: "evt_model_1",
-      type: "session.next.model.switched",
-      properties: {
-        sessionID: "session-1",
-        messageID: "msg_model_1",
-        timestamp: 0,
-        model: { id: "model-1", providerID: "provider-1" },
-      },
-    })
-    emitEvent(events, {
       id: "evt_step_started_1",
       type: "session.next.step.started",
       properties: {
@@ -360,11 +233,99 @@ test("settles pending tools when a live failure arrives", async () => {
       metadata: { fake: { call: true } },
       resultMetadata: { fake: { result: true } },
     })
-    expect((sync.session.message.list("session-1") ?? []).map((message) => message.type)).toEqual([
-      "assistant",
-      "model-switched",
-      "agent-switched",
-    ])
+    expect((sync.session.message.list("session-1") ?? []).map((message) => message.type)).toEqual(["assistant"])
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("settles live reasoning when its durable end event arrives", async () => {
+  const events = createEventSource()
+  const calls = createFetch(undefined, events)
+  let data!: ReturnType<typeof useData>
+  let ready!: () => void
+  const mounted = new Promise<void>((resolve) => {
+    ready = resolve
+  })
+
+  function Probe() {
+    data = useData()
+    onMount(ready)
+    return <box />
+  }
+
+  const app = await testRender(() => (
+    <TestTuiContexts>
+      <SDKProvider url="http://test" directory={directory} events={events.source} fetch={calls.fetch}>
+        <ProjectProvider>
+          <DataProvider>
+            <Probe />
+          </DataProvider>
+        </ProjectProvider>
+      </SDKProvider>
+    </TestTuiContexts>
+  ))
+
+  try {
+    await mounted
+    emitEvent(events, {
+      id: "evt_step_started_reasoning",
+      type: "session.next.step.started",
+      properties: {
+        sessionID: "session-reasoning",
+        assistantMessageID: "msg_reasoning",
+        timestamp: 10,
+        agent: "build",
+        model: { id: "model-1", providerID: "provider-1" },
+      },
+    })
+    emitEvent(events, {
+      id: "evt_reasoning_started",
+      type: "session.next.reasoning.started",
+      properties: {
+        sessionID: "session-reasoning",
+        assistantMessageID: "msg_reasoning",
+        reasoningID: "reasoning-1",
+        timestamp: 11,
+      },
+    })
+    emitEvent(events, {
+      id: "evt_reasoning_delta",
+      type: "session.next.reasoning.delta",
+      properties: {
+        sessionID: "session-reasoning",
+        assistantMessageID: "msg_reasoning",
+        reasoningID: "reasoning-1",
+        timestamp: 12,
+        delta: "partial",
+      },
+    })
+    emitEvent(events, {
+      id: "evt_reasoning_ended",
+      type: "session.next.reasoning.ended",
+      properties: {
+        sessionID: "session-reasoning",
+        assistantMessageID: "msg_reasoning",
+        reasoningID: "reasoning-1",
+        timestamp: 13,
+        text: "complete",
+      },
+    })
+
+    await wait(() => {
+      const assistant = data.session.message.list("session-reasoning")?.[0]
+      return assistant?.type === "assistant" && assistant.content[0]?.type === "reasoning" &&
+        assistant.content[0].time?.completed === 13
+    })
+    const assistant = data.session.message.list("session-reasoning")?.[0]
+    expect(assistant?.type).toBe("assistant")
+    if (assistant?.type !== "assistant") return
+    expect(assistant.content[0]).toMatchObject({
+      type: "reasoning",
+      id: "reasoning-1",
+      text: "complete",
+      time: { created: 11, completed: 13 },
+    })
   } finally {
     app.renderer.destroy()
   }

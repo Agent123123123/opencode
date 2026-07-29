@@ -401,6 +401,7 @@ export function SessionSurface(props: SessionSurfaceProps) {
   let lastSwitch: string | undefined = undefined
   event.on("message.part.updated", (evt) => {
     if (!interactive()) return
+    if (startup.sessionApi === "v2") return
     const part = evt.properties.part
     if (part.type !== "tool") return
     if (part.sessionID !== route.sessionID) return
@@ -644,16 +645,13 @@ export function SessionSurface(props: SessionSurfaceProps) {
       title: "Compact session",
       value: "session.compact",
       category: "Session",
+      enabled: startup.sessionApi !== "v2",
       slash: {
         name: "compact",
         aliases: ["summarize"],
       },
       run: () => {
-        if (startup.sessionApi === "v2") {
-          void sdk.client.v2.session.compact({ sessionID: route.sessionID })
-          dialog.clear()
-          return
-        }
+        if (startup.sessionApi === "v2") return
         const selectedModel = local.model.current()
         if (!selectedModel) {
           toast.show({
@@ -1699,13 +1697,14 @@ function ReasoningPart(props: { last: boolean; part: ReasoningPart; message: Ass
     // OpenRouter encrypts some reasoning blocks; drop the placeholder.
     return props.part.text.replace("[REDACTED]", "").trim()
   })
-  // Reasoning is finalized when the server sets `time.end` (see processor.ts).
-  // Flips independently of the parent message completing.
-  const isDone = createMemo(() => props.part.time.end !== undefined)
+  // A terminal assistant message also closes any reasoning fragment whose
+  // live end event was missed before the next exact message refresh.
+  const end = createMemo(() => props.part.time.end ?? props.message.time.completed)
+  const isDone = createMemo(() => end() !== undefined)
   const inMinimal = createMemo(() => ctx.thinkingMode() === "hide")
   const duration = createMemo(() => {
-    const end = props.part.time.end
-    return end === undefined ? 0 : Math.max(0, end - props.part.time.start)
+    const value = end()
+    return value === undefined ? 0 : Math.max(0, value - props.part.time.start)
   })
   const summary = createMemo(() => reasoningSummary(content()))
   const syntax = createSyntaxStyleMemo(() => generateSubtleSyntax(theme))

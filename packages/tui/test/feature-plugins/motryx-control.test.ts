@@ -4,8 +4,11 @@ import {
   MotryxControlHttpError,
   MotryxControlSchemaError,
   fetchMotryxControlSnapshot,
+  fetchMotryxSessions,
   motryxControlConfigFromEnv,
   parseMotryxControlSnapshot,
+  parseMotryxSessionList,
+  switchMotryxSession,
   type MotryxControlConfig,
 } from "../../src/feature-plugins/motryx/control"
 
@@ -202,5 +205,91 @@ describe("Motryx typed control snapshot", () => {
       fetchMotryxControlSnapshot(config, { fetcher: async () => new Response("{}", { status: 200 }) }),
     ).rejects.toBeInstanceOf(MotryxControlSchemaError)
     expect(new MotryxControlHttpError(409, "conflict").name).toBe("MotryxControlHttpError")
+  })
+})
+
+describe("Motryx typed Orchestrator sessions", () => {
+  const sessions = () => ({
+    schemaVersion: 2,
+    projectID,
+    status: "ROUTABLE",
+    current: {
+      sessionID: "ses_orchestrator",
+      serverGeneration: "server-generation",
+      bindingGeneration: 7,
+      ownerRunID: "run_public",
+    },
+    transition: null,
+    sessions: [
+      {
+        sessionID: "ses_orchestrator",
+        title: "Current",
+        lastRoutedAt: "2026-07-19T00:00:00.000Z",
+        state: "CURRENT",
+      },
+      {
+        sessionID: "ses_previous",
+        title: "Previous",
+        lastRoutedAt: "2026-07-18T00:00:00.000Z",
+        state: "RESUMABLE",
+      },
+    ],
+  })
+
+  test("parses a current route and fails closed on inconsistent session state", () => {
+    expect(parseMotryxSessionList(sessions(), config)).toMatchObject({
+      status: "ROUTABLE",
+      current: { sessionID: "ses_orchestrator", bindingGeneration: 7 },
+      sessions: [{ state: "CURRENT" }, { state: "RESUMABLE" }],
+    })
+    expect(() => parseMotryxSessionList({ ...sessions(), projectID: "/tmp/other" }, config)).toThrow(
+      "sessions.projectID does not match",
+    )
+    expect(() => parseMotryxSessionList({ ...sessions(), current: null }, config)).toThrow(
+      "sessions.current is required",
+    )
+    expect(() => parseMotryxSessionList({ ...sessions(), sessions: [] }, config)).toThrow(
+      "current item does not match",
+    )
+  })
+
+  test("uses the authenticated control API for list and exact CAS switch", async () => {
+    const requests: Request[] = []
+    const fetcher = async (input: RequestInfo | URL, init?: RequestInit) => {
+      requests.push(new Request(input, init))
+      if (requests.length === 1) return Response.json(sessions())
+      return Response.json({
+        ...sessions(),
+        current: {
+          sessionID: "ses_previous",
+          serverGeneration: "server-generation",
+          bindingGeneration: 8,
+          ownerRunID: "run_previous",
+        },
+        sessions: [
+          { ...sessions().sessions[1], state: "CURRENT" },
+          { ...sessions().sessions[0], state: "RESUMABLE" },
+        ],
+      })
+    }
+    const listed = await fetchMotryxSessions(config, { fetcher })
+    await switchMotryxSession(config, {
+      targetSessionID: "ses_previous",
+      expected: listed.current!,
+    }, { fetcher })
+
+    expect(new URL(requests[0]!.url).pathname).toBe("/ic/sessions")
+    expect(requests[0]!.headers.get("authorization")).toBe(`Bearer ${config.token}`)
+    expect(new URL(requests[1]!.url).pathname).toBe("/ic/sessions/switch")
+    expect(requests[1]!.method).toBe("POST")
+    expect(await requests[1]!.json()).toEqual({
+      targetSessionID: "ses_previous",
+      expected: {
+        serverGeneration: "server-generation",
+        currentSessionID: "ses_orchestrator",
+        bindingGeneration: 7,
+        ownerRunID: "run_public",
+      },
+    })
   })
 })

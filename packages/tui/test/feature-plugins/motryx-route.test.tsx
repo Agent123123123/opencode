@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 import { expect, test } from "bun:test"
-import type { TuiPluginApi } from "@opencode-ai/plugin/tui"
+import type { TuiDialogSelectProps, TuiPluginApi } from "@opencode-ai/plugin/tui"
 import { ScrollBoxRenderable, type Renderable } from "@opentui/core"
 import { testRender } from "@opentui/solid"
 import path from "node:path"
@@ -57,11 +57,12 @@ test("Motryx plugin route composes the standard session surface with the Flow/In
     lanes: Array.from({ length: 20 }, (_, index) => ({
       id: `lane_tui_${index + 1}`,
       name: index === 0 ? "TUI migration" : index === 19 ? "Final lane 20" : `Migration lane ${index + 1}`,
-      status: "WORKING",
+      status: index === 0 ? "DONE" : "WORKING",
       updatedAt: now,
       reopenCount: 0,
       repairCycle: 0,
       dependsOnLaneIDs: index === 1 ? ["lane_tui_1"] : [],
+      lastCheckResult: index === 0 ? "CHECKER_DETAIL_INSPECT_ONLY" : undefined,
       coordinatorRuntimeReadiness: "unmaterialized",
       checkerRuntimeReadiness: "unmaterialized",
     })),
@@ -129,6 +130,8 @@ test("Motryx plugin route composes the standard session surface with the Flow/In
     expect(frame).not.toContain("ROUTABLE")
     expect(frame).toContain("Ship the v1.18.3 migration")
     expect(frame).toContain("TUI migration")
+    expect(frame).toContain("DONE")
+    expect(frame).not.toContain("CHECKER_DETAIL_INSPECT_ONLY")
     expect(frame).toContain("Migrate the TUI")
     expect(frame).toContain("interactive")
     expect(frame).not.toContain("DEBUG")
@@ -142,6 +145,7 @@ test("Motryx plugin route composes the standard session surface with the Flow/In
 
     await clickFrameText(app, frame, "TUI migration")
     frame = await renderUntil(app, (value) => value.includes("[INSPECT]"))
+    expect(frame).toContain("CHECKER_DETAIL_INSPECT_ONLY")
     expect(frame).toContain("STANDARD OPENCODE SESSION")
     expect(frame).toContain("ses_route")
     await clickFrameText(app, frame, "FLOW")
@@ -266,6 +270,183 @@ function findScrollBoxes(root: Renderable): ScrollBoxRenderable[] {
     ...root.getChildren().flatMap((child) => findScrollBoxes(child)),
   ]
 }
+
+test("/sessions switches the exact Motryx Orchestrator and rebinds conversation plus projection", async () => {
+  const projectID = path.resolve("/tmp/motryx-route-switch-project")
+  const sourceID = "ses_switch_source"
+  const targetID = "ses_switch_target"
+  const config: MotryxControlConfig = {
+    apiURL: "http://127.0.0.1:25999",
+    token: "control-token",
+    projectID,
+    orchestratorSessionID: sourceID,
+  }
+  const lifecycle = new AbortController()
+  let dialogRender: (() => unknown) | undefined
+  let dialog: TuiDialogSelectProps<string> | undefined
+  const notices: string[] = []
+  const requests: Request[] = []
+  const base = createTuiPluginApi({
+    client: {
+      v2: {
+        session: {
+          async get(input: { sessionID: string }) {
+            return {
+              data: {
+                data: {
+                  id: input.sessionID,
+                  agent: "orchestrator",
+                  location: { directory: projectID },
+                },
+              },
+            }
+          },
+        },
+      },
+    } as TuiPluginApi["client"],
+  })
+  const api = {
+    ...base,
+    lifecycle: { signal: lifecycle.signal, onDispose: () => () => {} },
+    ui: {
+      ...base.ui,
+      DialogSelect(props: TuiDialogSelectProps<string>) {
+        dialog = props
+        return undefined as never
+      },
+      dialog: {
+        ...base.ui.dialog,
+        replace(render: () => unknown) {
+          dialogRender = render
+        },
+      },
+      toast(input: { message: string }) {
+        notices.push(input.message)
+      },
+    },
+  } as unknown as TuiPluginApi
+  const now = "2026-07-19T00:00:00.000Z"
+  const routeSnapshot = (sessionID: string, bindingGeneration: number): MotryxControlSnapshot => ({
+    schemaVersion: 2,
+    projectID,
+    orchestratorSessionID: sessionID,
+    projectionRevision: `server-generation:ic:${sessionID}`,
+    route: {
+      state: "ROUTABLE",
+      serverGeneration: "server-generation",
+      sidecarGeneration: "server-generation",
+      bindingGeneration,
+      reconciledThrough: { sessionID, seq: null, eventID: null },
+      observedAt: now,
+    },
+    binding: {
+      projectID,
+      orchestratorSessionID: sessionID,
+      runtimeID: `runtime_${sessionID}`,
+      bindingState: "ACTIVE",
+      bindingGeneration,
+      ownerRunID: bindingGeneration === 7 ? "run_source" : "run_target",
+      createdAt: now,
+      updatedAt: now,
+      activatedAt: now,
+      lastRoutedAt: now,
+    },
+    workflow: { id: `wf_${sessionID}`, status: "ACTIVE", goal: `Goal ${sessionID}` },
+    lanes: [],
+    agents: [],
+    artifacts: [],
+    resourceBlocks: [],
+    functionSlots: [],
+    inboxItems: [],
+    deliveryFences: [],
+    diagnostics: [],
+  })
+  const sessionList = (currentID: string, bindingGeneration: number) => ({
+    schemaVersion: 2,
+    projectID,
+    status: "ROUTABLE",
+    current: {
+      sessionID: currentID,
+      serverGeneration: "server-generation",
+      bindingGeneration,
+      ownerRunID: currentID === sourceID ? "run_source" : "run_target",
+    },
+    transition: null,
+    sessions: currentID === sourceID
+      ? [
+          { sessionID: sourceID, title: "Source Orchestrator", lastRoutedAt: now, state: "CURRENT" },
+          { sessionID: targetID, title: "Target Orchestrator", lastRoutedAt: now, state: "RESUMABLE" },
+        ]
+      : [
+          { sessionID: targetID, title: "Target Orchestrator", lastRoutedAt: now, state: "CURRENT" },
+          { sessionID: sourceID, title: "Source Orchestrator", lastRoutedAt: now, state: "RESUMABLE" },
+        ],
+  })
+  let actions: MotryxRouteActions | undefined
+  let surface: SessionSurfaceProps | undefined
+  const app = await testRender(
+    () => (
+      <MotryxRoute
+        api={api}
+        config={config}
+        fetcher={async (input, init) => {
+          const request = new Request(input, init)
+          requests.push(request)
+          const url = new URL(request.url)
+          if (url.pathname === "/ic/sessions" && request.method === "GET") {
+            return Response.json(sessionList(sourceID, 7))
+          }
+          if (url.pathname === "/ic/sessions/switch") {
+            return Response.json(sessionList(targetID, 8))
+          }
+          if (url.pathname === "/ic/workflow") {
+            const sessionID = url.searchParams.get("orchestrator_session_id")!
+            return Response.json(routeSnapshot(sessionID, sessionID === sourceID ? 7 : 8))
+          }
+          return new Response(new ReadableStream<Uint8Array>(), {
+            headers: { "content-type": "text/event-stream" },
+          })
+        }}
+        sessionSurface={(props) => {
+          surface = props
+          return <text>SWITCHED SURFACE {props.sessionID}</text>
+        }}
+        onActionsAvailable={(next) => (actions = next)}
+      />
+    ),
+    { width: 100, height: 24 },
+  )
+
+  try {
+    await renderUntil(app, (frame) => frame.includes(`SWITCHED SURFACE ${sourceID}`))
+    await actions!.showSessions()
+    expect(dialogRender).toBeDefined()
+    dialogRender?.()
+    expect(dialog?.options.map((item) => [item.value, item.disabled])).toEqual([
+      [sourceID, false],
+      [targetID, false],
+    ])
+    dialog?.onSelect?.(dialog.options[1]!)
+    const frame = await renderUntil(app, (value) => value.includes(`SWITCHED SURFACE ${targetID}`))
+    expect(frame).toContain(`Goal ${targetID}`)
+    expect(surface?.sessionID).toBe(targetID)
+    expect(notices).toContain("Switched to Target Orchestrator")
+    const request = requests.find((item) => new URL(item.url).pathname === "/ic/sessions/switch")
+    expect(request).toBeDefined()
+    expect(await request!.json()).toEqual({
+      targetSessionID: targetID,
+      expected: {
+        serverGeneration: "server-generation",
+        currentSessionID: sourceID,
+        bindingGeneration: 7,
+        ownerRunID: "run_source",
+      },
+    })
+  } finally {
+    lifecycle.abort()
+    app.renderer.destroy()
+  }
+})
 
 test("Motryx route shows a branded loading page until the first exact projection resolves", async () => {
   const projectID = path.resolve("/tmp/motryx-route-loading-project")

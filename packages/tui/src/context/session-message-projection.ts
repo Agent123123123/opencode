@@ -32,6 +32,8 @@ export type ProjectedLegacyMessages = {
   parts: Record<string, Part[]>
 }
 
+const INTERNAL_MOTRYX_INPUT = [/^\s*<ic_agent_wakeup>/i, /^\s*<active-inbox-item>/i]
+
 export function projectSessionInfoToLegacy(input: SessionV2Info): Session {
   return {
     id: input.id,
@@ -92,6 +94,7 @@ export function projectSessionMessagesToLegacy(
 
   for (const item of ordered) {
     if (item.type === "user") {
+      const synthetic = INTERNAL_MOTRYX_INPUT.some((pattern) => pattern.test(item.text))
       const info: UserMessage = {
         id: item.id,
         sessionID,
@@ -112,6 +115,7 @@ export function projectSessionMessagesToLegacy(
           messageID: item.id,
           type: "text",
           text: item.text,
+          synthetic,
         },
         ...(item.files ?? []).map(
           (file, index): FilePart => ({
