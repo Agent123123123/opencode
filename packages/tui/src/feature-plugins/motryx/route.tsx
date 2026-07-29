@@ -7,11 +7,14 @@ import { registerOpencodeSpinner } from "../../component/register-spinner"
 import { SPINNER_FRAMES } from "../../component/spinner"
 import { SessionSurface, type SessionSurfaceProps } from "../../routes/session"
 import {
+  fetchMotryxSessions,
   motryxControlConfigFromEnv,
+  switchMotryxSession,
   type MotryxControlConfig,
   type MotryxControlSnapshot,
   type MotryxFetcher,
   type MotryxLaneProjection,
+  type MotryxSessionList,
 } from "./control"
 import {
   createMotryxProjectionController,
@@ -41,6 +44,7 @@ export type MotryxConversationTarget = {
 
 export type MotryxRouteActions = {
   refresh: () => Promise<void>
+  showSessions: () => Promise<void>
   showFlow: () => void
   showInspect: () => void
   focusOrchestrator: () => void
@@ -63,6 +67,7 @@ export function MotryxRoute(props: {
   const dimensions = useTerminalDimensions()
   const config = props.config
   const Surface = props.sessionSurface ?? SessionSurface
+  const [activeConfig, setActiveConfig] = createSignal<MotryxControlConfig | undefined>(config)
   const [snapshot, setSnapshot] = createSignal<MotryxControlSnapshot>()
   const [connection, setConnection] = createSignal<MotryxProjectionState>(
     config ? { phase: "connecting" } : { phase: "unbound", detail: props.configError },
@@ -73,6 +78,7 @@ export function MotryxRoute(props: {
     config ? { role: "orchestrator", sessionID: config.orchestratorSessionID } : undefined,
   )
   const [targetError, setTargetError] = createSignal<string>()
+  const [switching, setSwitching] = createSignal(false)
   const layout = createMemo(() => motryxProductLayout(dimensions()))
   const selectedLane = createMemo(() => {
     const value = snapshot()
@@ -94,12 +100,162 @@ export function MotryxRoute(props: {
   })
   let targetRead = 0
   let generation: string | undefined
+  let projectionController: ReturnType<typeof createMotryxProjectionController> | undefined
+  let routeDiscovery: Promise<void> | undefined
 
   function focusOrchestrator() {
-    if (!config) return
+    const current = activeConfig()
+    if (!current) return
     targetRead += 1
-    setTarget({ role: "orchestrator", sessionID: config.orchestratorSessionID })
+    setTarget({ role: "orchestrator", sessionID: current.orchestratorSessionID })
     setTargetError(undefined)
+  }
+
+  function bindProjection(sessionID: string) {
+    if (!config) return
+    projectionController?.dispose()
+    const nextConfig = { ...config, orchestratorSessionID: sessionID }
+    setActiveConfig(nextConfig)
+    setSnapshot(undefined)
+    setConnection({ phase: "connecting" })
+    generation = undefined
+    focusOrchestrator()
+    const controller = createMotryxProjectionController({
+      config: nextConfig,
+      fetcher: props.fetcher,
+      signal: props.api.lifecycle.signal,
+      onSnapshot: setSnapshot,
+      onState: setConnection,
+      onInvalidated: () => {
+        if (!switching()) void discoverCurrentRoute()
+      },
+    })
+    projectionController = controller
+    void controller.start()
+  }
+
+  async function discoverCurrentRoute(options: { refreshCurrent?: boolean } = {}) {
+    if (!config) return
+    if (routeDiscovery) return routeDiscovery
+    routeDiscovery = (async () => {
+      for (let attempt = 0; attempt < 120 && !props.api.lifecycle.signal.aborted; attempt += 1) {
+        try {
+          const listed = await fetchMotryxSessions(config, {
+            fetcher: props.fetcher,
+            signal: props.api.lifecycle.signal,
+          })
+          const sessionID = listed.current?.sessionID
+          if (listed.status === "ROUTABLE" && sessionID) {
+            if (sessionID !== activeConfig()?.orchestratorSessionID) {
+              bindProjection(sessionID)
+              props.api.ui.toast({ variant: "info", message: "Motryx Orchestrator route changed." })
+            } else if (options.refreshCurrent !== false) {
+              await projectionController?.refresh()
+            }
+            return
+          }
+          if (listed.status !== "SWITCHING") return
+        } catch {
+          // A route transition may briefly make the control snapshot unavailable.
+        }
+        await new Promise((resolve) => setTimeout(resolve, 250))
+      }
+    })().finally(() => {
+      routeDiscovery = undefined
+    })
+    return routeDiscovery
+  }
+
+  async function showSessions() {
+    if (!config || switching()) return
+    try {
+      const listed = await fetchMotryxSessions(config, {
+        fetcher: props.fetcher,
+        signal: props.api.lifecycle.signal,
+      })
+      showSessionDialog(listed)
+    } catch (error) {
+      showTargetError(error instanceof Error ? error.message : String(error))
+    }
+  }
+
+  function showSessionDialog(listed: MotryxSessionList) {
+    const DialogSelect = props.api.ui.DialogSelect
+    props.api.ui.dialog.replace(() => (
+      <DialogSelect
+        title="Motryx Orchestrators"
+        options={listed.sessions.map((item) => ({
+          title: item.title,
+          value: item.sessionID,
+          description: item.state === "CURRENT"
+            ? "Current Orchestrator"
+            : item.state === "RESUMABLE"
+              ? `Resume ${shortSessionID(item.sessionID)}`
+              : `Unavailable: ${item.unavailableReason ?? "not resumable"}`,
+          category: "Motryx",
+          disabled: item.state === "UNAVAILABLE",
+        }))}
+        current={listed.current?.sessionID}
+        onSelect={(option) => {
+          props.api.ui.dialog.clear()
+          void selectOrchestrator(listed, option.value)
+        }}
+      />
+    ))
+  }
+
+  async function selectOrchestrator(listed: MotryxSessionList, sessionID: string) {
+    if (!config) return
+    if (listed.current?.sessionID === sessionID) {
+      focusOrchestrator()
+      return
+    }
+    const selected = listed.sessions.find((item) => item.sessionID === sessionID)
+    if (!selected || selected.state !== "RESUMABLE" || !listed.current) {
+      showTargetError("Selected Motryx Orchestrator is not resumable.")
+      return
+    }
+    const proof = snapshot()
+    if (
+      connection().phase !== "live" ||
+      !proof ||
+      proof.orchestratorSessionID !== listed.current.sessionID ||
+      proof.route.serverGeneration !== listed.current.serverGeneration ||
+      proof.binding.bindingGeneration !== listed.current.bindingGeneration ||
+      proof.binding.ownerRunID !== listed.current.ownerRunID
+    ) {
+      showTargetError("Motryx route changed while the session picker was open. Reopen /sessions.")
+      void discoverCurrentRoute()
+      return
+    }
+    setSwitching(true)
+    setConnection({ phase: "starting", detail: `Switching to ${selected.title}` })
+    try {
+      const result = await switchMotryxSession(config, {
+        targetSessionID: sessionID,
+        expected: listed.current,
+      }, {
+        fetcher: props.fetcher,
+        signal: props.api.lifecycle.signal,
+      })
+      const current = result.current
+      if (!current) throw new Error("Motryx switch returned no current route")
+      const response = await props.api.client.v2.session.get({ sessionID: current.sessionID }, { throwOnError: true })
+      if (
+        response.data.data.id !== current.sessionID ||
+        response.data.data.agent !== "orchestrator" ||
+        path.resolve(response.data.data.location.directory) !== path.resolve(config.projectID)
+      ) {
+        throw new Error("OpenCode did not return the exact switched Orchestrator session")
+      }
+      bindProjection(current.sessionID)
+      props.api.ui.toast({ variant: "success", message: `Switched to ${selected.title}` })
+    } catch (error) {
+      showTargetError(error instanceof Error ? error.message : String(error))
+      await discoverCurrentRoute()
+    } finally {
+      setSwitching(false)
+    }
   }
 
   async function focusWorker(role: "coordinator" | "checker", laneID?: string) {
@@ -202,15 +358,9 @@ export function MotryxRoute(props: {
 
   onMount(() => {
     if (!config) return
-    const controller = createMotryxProjectionController({
-      config,
-      fetcher: props.fetcher,
-      signal: props.api.lifecycle.signal,
-      onSnapshot: setSnapshot,
-      onState: setConnection,
-    })
     const actions: MotryxRouteActions = {
-      refresh: controller.refresh,
+      refresh: async () => projectionController?.refresh().then(() => undefined),
+      showSessions,
       showFlow: () => setPanel("flow"),
       showInspect: () => setPanel("inspect"),
       focusOrchestrator,
@@ -219,17 +369,18 @@ export function MotryxRoute(props: {
       moveLane,
     }
     props.onActionsAvailable(actions)
-    void controller.start()
+    bindProjection(config.orchestratorSessionID)
+    void discoverCurrentRoute({ refreshCurrent: false })
     onCleanup(() => {
       targetRead += 1
       props.onActionsAvailable(undefined)
-      controller.dispose()
+      projectionController?.dispose()
     })
   })
 
   const status = createMemo(() => statusPresentation(connection().phase))
   const initialLoading = createMemo(
-    () => !snapshot() && (connection().phase === "connecting" || connection().phase === "starting"),
+    () => switching() || (!snapshot() && (connection().phase === "connecting" || connection().phase === "starting")),
   )
 
   return (
@@ -706,14 +857,7 @@ function LaneRow(props: {
         <box flexGrow={1} />
         <text fg={laneColor(props.api, status())}>{motryxLaneStatusLabel(status())}</text>
       </box>
-      <Show when={props.lane.pendingCheckSummary || props.lane.lastCheckResult}>
-        <text fg={props.api.theme.current.textMuted} wrapMode="word">
-          {props.lane.pendingCheckSummary || props.lane.lastCheckResult}
-        </text>
-      </Show>
-      <Show
-        when={!props.lane.pendingCheckSummary && !props.lane.lastCheckResult && props.lane.dependsOnLaneIDs.length > 0}
-      >
+      <Show when={props.lane.dependsOnLaneIDs.length > 0}>
         <text fg={props.api.theme.current.textMuted}>depends on {props.lane.dependsOnLaneIDs.length}</text>
       </Show>
     </box>
@@ -971,6 +1115,10 @@ export function motryxLaneStatusLabel(status: string) {
 
 function capitalize(value: string) {
   return value.charAt(0).toUpperCase() + value.slice(1)
+}
+
+function shortSessionID(value: string) {
+  return value.length <= 18 ? value : `${value.slice(0, 10)}…${value.slice(-6)}`
 }
 
 export function motryxDebugViewFromEnv(env: Record<string, string | undefined> = process.env) {

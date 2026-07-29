@@ -11,6 +11,40 @@ export type MotryxControlConfig = {
 
 export type MotryxFetcher = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
 
+export type MotryxSessionRoute = {
+  sessionID: string
+  serverGeneration: string
+  bindingGeneration: number
+  ownerRunID: string
+}
+
+export type MotryxSessionListItem = {
+  sessionID: string
+  title: string
+  lastRoutedAt: string | null
+  state: "CURRENT" | "RESUMABLE" | "UNAVAILABLE"
+  unavailableReason?: string
+}
+
+export type MotryxSessionTransition = {
+  state: "SWITCHING" | "FAILED"
+  switchID: string
+  fromSessionID: string
+  targetSessionID: string
+  phase: string
+  startedAt: string | null
+  message?: string
+}
+
+export type MotryxSessionList = {
+  schemaVersion: typeof MOTRYX_CONTROL_SCHEMA_VERSION
+  projectID: string
+  status: "ROUTABLE" | "SWITCHING" | "UNAVAILABLE"
+  current: MotryxSessionRoute | null
+  transition: MotryxSessionTransition | null
+  sessions: MotryxSessionListItem[]
+}
+
 export type MotryxRouteProof = {
   state: "ROUTABLE"
   serverGeneration: string
@@ -188,6 +222,149 @@ export function motryxControlURL(config: MotryxControlConfig, endpoint: "workflo
   const url = new URL(endpoint === "workflow" ? "/ic/workflow" : "/ic/events", config.apiURL)
   url.searchParams.set("orchestrator_session_id", config.orchestratorSessionID)
   return url
+}
+
+export function motryxSessionsURL(config: MotryxControlConfig, endpoint: "list" | "switch" = "list") {
+  return new URL(endpoint === "list" ? "/ic/sessions" : "/ic/sessions/switch", config.apiURL)
+}
+
+export async function fetchMotryxSessions(
+  config: MotryxControlConfig,
+  options: { signal?: AbortSignal; fetcher?: MotryxFetcher } = {},
+): Promise<MotryxSessionList> {
+  const response = await (options.fetcher ?? fetch)(motryxSessionsURL(config), {
+    signal: options.signal,
+    headers: {
+      accept: "application/json",
+      authorization: `Bearer ${config.token}`,
+    },
+  })
+  return parseSessionListResponse(response, config)
+}
+
+export async function switchMotryxSession(
+  config: MotryxControlConfig,
+  input: { targetSessionID: string; expected: MotryxSessionRoute },
+  options: { signal?: AbortSignal; fetcher?: MotryxFetcher } = {},
+): Promise<MotryxSessionList> {
+  const response = await (options.fetcher ?? fetch)(motryxSessionsURL(config, "switch"), {
+    method: "POST",
+    signal: options.signal,
+    headers: {
+      accept: "application/json",
+      "content-type": "application/json",
+      authorization: `Bearer ${config.token}`,
+    },
+    body: JSON.stringify({
+      targetSessionID: input.targetSessionID,
+      expected: {
+        serverGeneration: input.expected.serverGeneration,
+        currentSessionID: input.expected.sessionID,
+        bindingGeneration: input.expected.bindingGeneration,
+        ownerRunID: input.expected.ownerRunID,
+      },
+    }),
+  })
+  const result = await parseSessionListResponse(response, config)
+  if (result.status !== "ROUTABLE" || result.current?.sessionID !== input.targetSessionID) {
+    throw new MotryxControlSchemaError("Motryx session switch did not return the exact routed target")
+  }
+  return result
+}
+
+async function parseSessionListResponse(response: Response, config: MotryxControlConfig) {
+  const contentType = response.headers.get("content-type")?.toLowerCase() ?? ""
+  let value: unknown
+  if (contentType.includes("application/json")) {
+    try {
+      value = await response.json()
+    } catch {
+      throw new MotryxControlSchemaError("Motryx sessions response contains invalid JSON")
+    }
+  }
+  if (!response.ok) {
+    const item = isRecord(value) ? value : {}
+    const detail = typeof item.message === "string" && item.message ? `: ${item.message}` : ""
+    throw new MotryxControlHttpError(response.status, `Motryx sessions returned HTTP ${response.status}${detail}`)
+  }
+  if (!contentType.includes("application/json")) {
+    throw new MotryxControlSchemaError("Motryx sessions did not return JSON")
+  }
+  return parseMotryxSessionList(value, config)
+}
+
+export function parseMotryxSessionList(value: unknown, expected: MotryxControlConfig): MotryxSessionList {
+  const root = requiredRecord(value, "sessions")
+  if (root.schemaVersion !== MOTRYX_CONTROL_SCHEMA_VERSION) fail("sessions.schemaVersion must be 2")
+  const projectID = exactProject(root.projectID, expected.projectID, "sessions.projectID")
+  if (root.status !== "ROUTABLE" && root.status !== "SWITCHING" && root.status !== "UNAVAILABLE") {
+    fail("sessions.status is invalid")
+  }
+  const current = root.current === null ? null : parseSessionRoute(root.current)
+  if (root.status === "ROUTABLE" && current === null) fail("sessions.current is required while ROUTABLE")
+  if (root.status !== "ROUTABLE" && current !== null) fail("sessions.current must be null while not ROUTABLE")
+  const transition = root.transition === null ? null : parseSessionTransition(root.transition)
+  const sessions = requiredArray(root.sessions, "sessions.sessions", parseSessionListItem)
+  const currentItems = sessions.filter((item) => item.state === "CURRENT")
+  if (current) {
+    if (currentItems.length !== 1 || currentItems[0]?.sessionID !== current.sessionID) {
+      fail("sessions current item does not match the exact current route")
+    }
+  } else if (currentItems.length !== 0) {
+    fail("sessions must not claim a CURRENT item while unbound")
+  }
+  return {
+    schemaVersion: MOTRYX_CONTROL_SCHEMA_VERSION,
+    projectID,
+    status: root.status,
+    current,
+    transition,
+    sessions,
+  } as MotryxSessionList
+}
+
+function parseSessionRoute(value: unknown): MotryxSessionRoute {
+  const item = requiredRecord(value, "sessions.current")
+  return {
+    sessionID: requiredString(item.sessionID, "sessions.current.sessionID"),
+    serverGeneration: requiredString(item.serverGeneration, "sessions.current.serverGeneration"),
+    bindingGeneration: positiveInteger(item.bindingGeneration, "sessions.current.bindingGeneration"),
+    ownerRunID: requiredString(item.ownerRunID, "sessions.current.ownerRunID"),
+  }
+}
+
+function parseSessionTransition(value: unknown): MotryxSessionTransition {
+  const item = requiredRecord(value, "sessions.transition")
+  if (item.state !== "SWITCHING" && item.state !== "FAILED") fail("sessions.transition.state is invalid")
+  const startedAt = item.startedAt
+  if (startedAt !== null) timestamp(startedAt, "sessions.transition.startedAt")
+  return {
+    state: item.state,
+    switchID: requiredString(item.switchID, "sessions.transition.switchID"),
+    fromSessionID: requiredString(item.fromSessionID, "sessions.transition.fromSessionID"),
+    targetSessionID: requiredString(item.targetSessionID, "sessions.transition.targetSessionID"),
+    phase: requiredString(item.phase, "sessions.transition.phase"),
+    startedAt: typeof startedAt === "string" ? startedAt : null,
+    ...(typeof item.message === "string" && item.message ? { message: item.message } : {}),
+  }
+}
+
+function parseSessionListItem(value: unknown, label: string): MotryxSessionListItem {
+  const item = requiredRecord(value, label)
+  if (item.state !== "CURRENT" && item.state !== "RESUMABLE" && item.state !== "UNAVAILABLE") {
+    fail(`${label}.state is invalid`)
+  }
+  const lastRoutedAt = item.lastRoutedAt
+  if (lastRoutedAt !== null) timestamp(lastRoutedAt, `${label}.lastRoutedAt`)
+  return {
+    sessionID: requiredString(item.sessionID, `${label}.sessionID`),
+    title: requiredString(item.title, `${label}.title`),
+    lastRoutedAt: typeof lastRoutedAt === "string" ? lastRoutedAt : null,
+    state: item.state,
+    ...(typeof item.unavailableReason === "string" && item.unavailableReason
+      ? { unavailableReason: item.unavailableReason }
+      : {}),
+  }
 }
 
 export async function fetchMotryxControlSnapshot(
@@ -431,6 +608,10 @@ function parseDeliveryFence(value: unknown, label: string): MotryxDeliveryFenceP
 function requiredRecord(value: unknown, label: string): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) fail(`${label} must be an object`)
   return value as Record<string, unknown>
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value)
 }
 
 function requiredArray<T>(value: unknown, label: string, parse: (value: unknown, label: string) => T): T[] {

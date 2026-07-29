@@ -178,11 +178,7 @@ export const {
     }
 
     function listSessions() {
-      if (startup.sessionApi === "v2") {
-        return sdk.client.v2.session
-          .list({ limit: 100, order: "desc", directory: project.data.instance.path.directory }, { throwOnError: true })
-          .then((x) => x.data.data.map(projectSessionInfoToLegacy).toSorted((a, b) => a.id.localeCompare(b.id)))
-      }
+      if (startup.sessionApi === "v2") return Promise.resolve([])
       return sdk.client.session
         .list({ start: Date.now() - 30 * 24 * 60 * 60 * 1000, ...sessionListQuery() })
         .then((x) => (x.data ?? []).toSorted((a, b) => a.id.localeCompare(b.id)))
@@ -201,26 +197,50 @@ export const {
       })
       const visible = projected.messages.slice(-100)
       const visibleIDs = new Set(visible.map((message) => message.id))
-      setStore(
-        produce((draft) => {
-          const match = search(draft.session, sessionID, (item) => item.id)
-          if (match.found) draft.session[match.index] = session
-          if (!match.found) draft.session.splice(match.index, 0, session)
-          draft.todo[sessionID] = []
-          draft.session_diff[sessionID] = []
-          draft.permission[sessionID] = (sourceData.session.permission.list(sessionID) ?? []).map(
-            projectPermissionRequestToLegacy,
+      batch(() => {
+        const match = search(store.session, sessionID, (item) => item.id)
+        if (match.found) setStore("session", match.index, reconcile(session))
+        if (!match.found)
+          setStore(
+            "session",
+            produce((draft) => {
+              draft.splice(match.index, 0, session)
+            }),
           )
-          draft.question[sessionID] = (sourceData.session.question.list(sessionID) ?? []).map(
-            projectQuestionRequestToLegacy,
+        setStore("todo", sessionID, reconcile([]))
+        setStore("session_diff", sessionID, reconcile([]))
+        setStore(
+          "permission",
+          sessionID,
+          reconcile((sourceData.session.permission.list(sessionID) ?? []).map(projectPermissionRequestToLegacy), {
+            key: "id",
+            merge: true,
+          }),
+        )
+        setStore(
+          "question",
+          sessionID,
+          reconcile((sourceData.session.question.list(sessionID) ?? []).map(projectQuestionRequestToLegacy), {
+            key: "id",
+            merge: true,
+          }),
+        )
+        setStore(
+          "part",
+          produce((draft) => {
+            for (const message of store.message[sessionID] ?? []) {
+              if (!visibleIDs.has(message.id)) delete draft[message.id]
+            }
+          }),
+        )
+        for (const message of visible)
+          setStore(
+            "part",
+            message.id,
+            reconcile(projected.parts[message.id] ?? [], { key: "id", merge: true }),
           )
-          for (const message of draft.message[sessionID] ?? []) {
-            if (!visibleIDs.has(message.id)) delete draft.part[message.id]
-          }
-          for (const message of visible) draft.part[message.id] = projected.parts[message.id] ?? []
-          draft.message[sessionID] = visible
-        }),
-      )
+        setStore("message", sessionID, reconcile(visible, { key: "id", merge: true }))
+      })
     }
 
     createEffect(() => {
@@ -229,6 +249,8 @@ export const {
       v2SessionRevision()
       const snapshots = [...v2Sessions].map((sessionID) => ({
         sessionID,
+        // Nested message deltas do not invalidate an accessor that only reads the array reference.
+        messageRevision: sourceData.session.message.revision(sessionID),
         info: sourceData.session.get(sessionID),
         messages: sourceData.session.message.list(sessionID),
         permissions: sourceData.session.permission.list(sessionID),
@@ -244,6 +266,12 @@ export const {
 
     event.subscribe((event, { directory, workspace }) => {
       switch (event.type) {
+        case "server.connected": {
+          if (startup.sessionApi !== "v2") break
+          const sourceData = v2Data()
+          for (const sessionID of v2Sessions) void sourceData.session.message.refresh(sessionID).catch(() => {})
+          break
+        }
         case "server.instance.disposed":
           void bootstrap()
           break
@@ -668,6 +696,7 @@ export const {
           return sessionListQuery()
         },
         async refresh() {
+          if (startup.sessionApi === "v2") return
           const list = await listSessions()
           setStore("session", reconcile(list))
         },
@@ -697,11 +726,15 @@ export const {
               })
               .catch(() => false)
             observedRunning ||= active
-            await sourceData.session.message.refresh(sessionID)
-            projectV2Session(sessionID)
-            const messages = sourceData.session.message.list(sessionID) ?? []
+            let messages = sourceData.session.message.list(sessionID) ?? []
             if (v2TurnHasTerminalAssistant(messages, inputID)) return true
-            if (observedRunning && !active) return true
+            if ((observedRunning && !active) || attempt % 10 === 9) {
+              await sourceData.session.message.refresh(sessionID)
+              projectV2Session(sessionID)
+              messages = sourceData.session.message.list(sessionID) ?? []
+              if (v2TurnHasTerminalAssistant(messages, inputID)) return true
+              if (observedRunning && !active) return true
+            }
             await new Promise((resolve) => setTimeout(resolve, 500))
           }
           return false

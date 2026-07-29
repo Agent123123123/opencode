@@ -1,45 +1,20 @@
 /** @jsxImportSource @opentui/solid */
 import { expect, test } from "bun:test"
-import type { TuiDialogSelectProps, TuiPluginApi } from "@opencode-ai/plugin/tui"
-import { motryxSessionNavigationCommands } from "../../src/feature-plugins/motryx"
+import type { TuiPluginApi } from "@opencode-ai/plugin/tui"
+import { motryxSelectionBoundaryCommands, motryxSessionNavigationCommands } from "../../src/feature-plugins/motryx"
 import type { MotryxRouteActions } from "../../src/feature-plugins/motryx/route"
 import { createTuiPluginApi } from "../fixture/tui-plugin"
 
-test("Motryx session navigation exposes only the exact launcher-bound Orchestrator", () => {
-  let dialogRender: (() => unknown) | undefined
-  let select: TuiDialogSelectProps<string> | undefined
-  let cleared = 0
-  let focused = 0
+test("Motryx session navigation delegates /sessions to the routed product switcher", () => {
+  let opened = 0
   const base = createTuiPluginApi()
-  const api = {
-    ...base,
-    state: {
-      ...base.state,
-      session: {
-        ...base.state.session,
-        get: () => ({ title: "Bound Orchestrator" }),
-      },
+  const actions = {
+    async showSessions() {
+      opened += 1
     },
-    ui: {
-      ...base.ui,
-      DialogSelect(props: TuiDialogSelectProps<string>) {
-        select = props
-        return undefined as never
-      },
-      dialog: {
-        ...base.ui.dialog,
-        replace(render: () => unknown) {
-          dialogRender = render
-        },
-        clear() {
-          cleared += 1
-        },
-      },
-    },
-  } as unknown as TuiPluginApi
-  const actions = { focusOrchestrator: () => (focused += 1) } as unknown as MotryxRouteActions
+  } as unknown as MotryxRouteActions
   const commands = motryxSessionNavigationCommands(
-    api,
+    base,
     {
       ok: true,
       value: {
@@ -56,22 +31,7 @@ test("Motryx session navigation exposes only the exact launcher-bound Orchestrat
   expect(list?.slashName).toBe("sessions")
   expect(list?.slashAliases).toEqual(["resume", "continue"])
   list?.run({} as never)
-  expect(dialogRender).toBeDefined()
-  dialogRender?.()
-
-  expect(select?.options).toEqual([
-    {
-      title: "Bound Orchestrator",
-      value: "ses_orchestrator",
-      description: "Current launcher-bound Orchestrator",
-      category: "Motryx",
-    },
-  ])
-  expect(JSON.stringify(select?.options)).not.toContain("coordinator")
-  expect(JSON.stringify(select?.options)).not.toContain("checker")
-  select?.onSelect?.(select.options[0]!)
-  expect(focused).toBe(1)
-  expect(cleared).toBe(1)
+  expect(opened).toBe(1)
 })
 
 test("Motryx blocks generic new-session and quick-slot navigation", () => {
@@ -100,4 +60,55 @@ test("Motryx blocks generic new-session and quick-slot navigation", () => {
   actions = { focusOrchestrator: () => (focused += 1) } as unknown as MotryxRouteActions
   commands.find((command) => command.name === "session.quick_switch.9")?.run({} as never)
   expect(focused).toBe(1)
+})
+
+test("Motryx replaces local model and agent selection with launcher-owned tier entrypoints", () => {
+  const notices: string[] = []
+  const base = createTuiPluginApi()
+  const api = {
+    ...base,
+    state: {
+      ...base.state,
+      config: {
+        ...base.state.config,
+        model: "openai/gpt-5.5",
+        small_model: "zai-coding-plan/glm-5.2",
+      },
+    },
+    ui: {
+      ...base.ui,
+      toast(input: { message: string }) {
+        notices.push(input.message)
+      },
+    },
+  } as unknown as TuiPluginApi
+  const commands = motryxSelectionBoundaryCommands(api)
+
+  const generic = commands.find((command) => command.name === "model.list")
+  expect(generic?.hidden).toBe(true)
+  expect(generic?.slashName).toBeUndefined()
+  generic?.run({} as never)
+
+  const strong = commands.find((command) => command.name === "motryx.model.strong")
+  const weak = commands.find((command) => command.name === "motryx.model.weak")
+  expect(strong?.slashName).toBe("strong_model")
+  expect(weak?.slashName).toBe("weak_model")
+  strong?.run({} as never)
+  weak?.run({} as never)
+
+  commands.find((command) => command.name === "agent.list")?.run({} as never)
+  commands.find((command) => command.name === "provider.connect")?.run({} as never)
+  for (const name of ["session.fork", "session.compact", "session.undo", "session.redo"])
+    commands.find((command) => command.name === name)?.run({} as never)
+  expect(notices).toEqual([
+    "Motryx model tiers are launcher-owned. Use /strong_model or /weak_model for the exact configuration command.",
+    "strong model: openai/gpt-5.5. To change it, run motryx models set strong <provider/model> outside the TUI, then relaunch.",
+    "weak model: zai-coding-plan/glm-5.2. To change it, run motryx models set weak <provider/model> outside the TUI, then relaunch.",
+    "Motryx agents are assigned by the IC sidecar and cannot be switched from the conversation TUI.",
+    "Motryx provider credentials are provisioned before launch and cannot be changed from the TUI.",
+    "Motryx does not expose fork, compact, undo, or redo in its multi-agent conversation.",
+    "Motryx does not expose fork, compact, undo, or redo in its multi-agent conversation.",
+    "Motryx does not expose fork, compact, undo, or redo in its multi-agent conversation.",
+    "Motryx does not expose fork, compact, undo, or redo in its multi-agent conversation.",
+  ])
 })
