@@ -6,6 +6,7 @@ import { useRoute } from "../../context/route"
 import { useClipboard } from "../../context/clipboard"
 import type { PromptInfo } from "../../component/prompt/history"
 import { stripPromptPartIDs as strip } from "../../prompt/part"
+import { useTuiStartup } from "../../context/runtime"
 
 export function DialogMessage(props: {
   messageID: string
@@ -17,6 +18,7 @@ export function DialogMessage(props: {
   const message = createMemo(() => sync.data.message[props.sessionID]?.find((x) => x.id === props.messageID))
   const route = useRoute()
   const clipboard = useClipboard()
+  const startup = useTuiStartup()
 
   return (
     <DialogSelect
@@ -26,7 +28,9 @@ export function DialogMessage(props: {
           title: "Revert",
           value: "session.revert",
           description: "undo messages and file changes",
+          disabled: startup.sessionApi === "v2",
           onSelect: (dialog) => {
+            if (startup.sessionApi === "v2") return
             const msg = message()
             if (!msg) return
 
@@ -77,7 +81,9 @@ export function DialogMessage(props: {
           title: "Fork",
           value: "session.fork",
           description: "create a new session",
+          disabled: startup.sessionApi === "v2",
           onSelect: async (dialog) => {
+            if (startup.sessionApi === "v2") return
             const result = await sdk.client.session.fork({
               sessionID: props.sessionID,
               messageID: props.messageID,

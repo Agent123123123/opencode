@@ -53,7 +53,7 @@ test("Motryx plugin route composes the standard session surface with the Flow/In
       activatedAt: now,
       lastRoutedAt: null,
     },
-    workflow: { id: "wf", status: "ACTIVE", goal: "Ship the v1.18.3 migration", agentAllocationPolicy: {} },
+    workflow: { id: "wf", status: "ACTIVE", goal: "Ship the v1.18.3 migration" },
     lanes: Array.from({ length: 20 }, (_, index) => ({
       id: `lane_tui_${index + 1}`,
       name: index === 0 ? "TUI migration" : index === 19 ? "Final lane 20" : `Migration lane ${index + 1}`,
@@ -62,6 +62,8 @@ test("Motryx plugin route composes the standard session surface with the Flow/In
       reopenCount: 0,
       repairCycle: 0,
       dependsOnLaneIDs: index === 1 ? ["lane_tui_1"] : [],
+      coordinatorRuntimeReadiness: "unmaterialized",
+      checkerRuntimeReadiness: "unmaterialized",
     })),
     agents: [],
     artifacts: [],
@@ -136,6 +138,7 @@ test("Motryx plugin route composes the standard session surface with the Flow/In
     expect(surfaceProps?.showIdleFooter).toBe(false)
     expect(surfaceProps?.showNativeSidebar).toBe(false)
     expect(surfaceProps?.showExitEpilogue).toBe(false)
+    expect(surfaceProps?.historyMutation).toBe("disabled")
 
     await clickFrameText(app, frame, "TUI migration")
     frame = await renderUntil(app, (value) => value.includes("[INSPECT]"))
@@ -306,7 +309,8 @@ test("Motryx route shows a branded loading page until the first exact projection
     await app.renderOnce()
     let frame = app.captureCharFrame()
     expect(frame).toContain("MotryX")
-    expect(frame).toContain("██╲        ╱██")
+    expect(frame).toContain("███▄        ▄███")
+    expect(frame).toContain("████ █▄  ▄█ ████")
     expect(frame).toContain("Connecting conversation and workflow…")
     expect(frame).toContain("CONNECTING")
     expect(frame).not.toContain("LOADED CONVERSATION")
@@ -533,7 +537,7 @@ function debugRouteSnapshot(projectID: string, orchestratorSessionID: string, ge
       activatedAt: now,
       lastRoutedAt: null,
     },
-    workflow: { id: "workflow", status: "ACTIVE", goal: "Debug lane", agentAllocationPolicy: {} },
+    workflow: { id: "workflow", status: "ACTIVE", goal: "Debug lane" },
     lanes: [
       {
         id: "lane_debug",
@@ -543,8 +547,14 @@ function debugRouteSnapshot(projectID: string, orchestratorSessionID: string, ge
         reopenCount: 0,
         repairCycle: 0,
         dependsOnLaneIDs: [],
-        coordinatorSessionID: "ses_coordinator",
-        checkerSessionID: "ses_checker",
+        coordinatorSlotID: "slot_debug_coordinator",
+        coordinatorRuntimeReadiness: "ready",
+        checkerRuntimeReadiness: "unmaterialized",
+        coordinatorRuntime: {
+          slotID: "slot_debug_coordinator",
+          instanceID: "inst_coordinator",
+          sessionID: "ses_coordinator",
+        },
       },
     ],
     agents: [
@@ -552,6 +562,7 @@ function debugRouteSnapshot(projectID: string, orchestratorSessionID: string, ge
         instanceID: "inst_coordinator",
         role: "coordinator",
         sessionID: "ses_coordinator",
+        orchestratorSessionID,
         status: "ALIVE",
         laneIDs: ["lane_debug"],
       },

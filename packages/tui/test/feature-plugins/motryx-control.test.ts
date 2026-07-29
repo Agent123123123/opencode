@@ -52,7 +52,6 @@ function snapshot(overrides: Record<string, unknown> = {}) {
       id: "wf_1",
       status: "ACTIVE",
       goal: "migrate the product boundary",
-      agentAllocationPolicy: {},
     },
     lanes: [],
     agents: [],
@@ -101,6 +100,65 @@ describe("Motryx typed control snapshot", () => {
       binding: { bindingState: "ACTIVE", bindingGeneration: 7 },
       workflow: { id: "wf_1" },
     })
+  })
+
+  test("accepts the slot-runtime workflow projection wire shape", () => {
+    const value = parseMotryxControlSnapshot(
+      snapshot({
+        lanes: [
+          {
+            id: "lane_1",
+            name: "Implement",
+            status: "WORKING",
+            updatedAt: "2026-07-19T00:00:00.000Z",
+            reopenCount: 0,
+            repairCycle: 0,
+            dependsOnLaneIDs: [],
+            coordinatorSlotID: "slot_coordinator",
+            coordinatorRuntimeReadiness: "ready",
+            checkerRuntimeReadiness: "unmaterialized",
+            coordinatorRuntime: {
+              slotID: "slot_coordinator",
+              instanceID: "inst_coordinator",
+              sessionID: "ses_coordinator",
+            },
+          },
+        ],
+        functionSlots: [
+          {
+            slotID: "slot_coordinator",
+            slotKey: "lane-lane_1-coordinator",
+            role: "coordinator",
+            runtimeReadiness: "ready",
+          },
+        ],
+        inboxItems: [
+          {
+            inboxItemID: "inbox_1",
+            targetKind: "slot",
+            targetID: "slot_coordinator",
+            envelopeClass: "command",
+            sourceType: "lane_command",
+            status: "ACTIVE",
+            laneID: "lane_1",
+          },
+        ],
+      }),
+      config,
+    )
+
+    expect(value.lanes[0]).toMatchObject({
+      coordinatorSlotID: "slot_coordinator",
+      coordinatorRuntimeReadiness: "ready",
+      checkerRuntimeReadiness: "unmaterialized",
+      coordinatorRuntime: {
+        slotID: "slot_coordinator",
+        instanceID: "inst_coordinator",
+        sessionID: "ses_coordinator",
+      },
+    })
+    expect(value.functionSlots[0]).toMatchObject({ runtimeReadiness: "ready" })
+    expect(value.inboxItems[0]).toMatchObject({ targetKind: "slot", targetID: "slot_coordinator" })
   })
 
   test("fails closed on schema, identity, generation, and reconcile mismatches", () => {

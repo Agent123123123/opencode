@@ -43,7 +43,7 @@ function validSnapshot(revision = "server-generation:ic:one") {
       activatedAt: now,
       lastRoutedAt: null,
     },
-    workflow: { id: "wf", status: "ACTIVE", goal: "goal", agentAllocationPolicy: {} },
+    workflow: { id: "wf", status: "ACTIVE", goal: "goal" },
     lanes: [],
     agents: [],
     artifacts: [],

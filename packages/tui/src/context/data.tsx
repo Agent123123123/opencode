@@ -55,7 +55,11 @@ function locationQuery(ref?: LocationRef) {
   return ref ? { directory: ref.directory, workspace: ref.workspaceID } : undefined
 }
 
-export const { use: useData, provider: DataProvider } = createSimpleContext({
+export const {
+  use: useData,
+  useOptional: useOptionalData,
+  provider: DataProvider,
+} = createSimpleContext({
   name: "Data",
   init: () => {
     const [store, setStore] = createStore<Data>({
@@ -123,6 +127,53 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
 
     function handleEvent(event: V2Event) {
       switch (event.type) {
+        case "permission.v2.asked":
+          setStore(
+            "session",
+            "permission",
+            event.data.sessionID,
+            produce((draft = []) => {
+              const index = draft.findIndex((item) => item.id === event.data.id)
+              if (index >= 0) draft[index] = event.data
+              if (index < 0) draft.push(event.data)
+            }),
+          )
+          break
+        case "permission.v2.replied":
+          setStore(
+            "session",
+            "permission",
+            event.data.sessionID,
+            produce((draft = []) => {
+              const index = draft.findIndex((item) => item.id === event.data.requestID)
+              if (index >= 0) draft.splice(index, 1)
+            }),
+          )
+          break
+        case "question.v2.asked":
+          setStore(
+            "session",
+            "question",
+            event.data.sessionID,
+            produce((draft = []) => {
+              const index = draft.findIndex((item) => item.id === event.data.id)
+              if (index >= 0) draft[index] = event.data
+              if (index < 0) draft.push(event.data)
+            }),
+          )
+          break
+        case "question.v2.replied":
+        case "question.v2.rejected":
+          setStore(
+            "session",
+            "question",
+            event.data.sessionID,
+            produce((draft = []) => {
+              const index = draft.findIndex((item) => item.id === event.data.requestID)
+              if (index >= 0) draft.splice(index, 1)
+            }),
+          )
+          break
         case "catalog.updated":
           void Promise.all([
             result.location.model.refresh(event.location),

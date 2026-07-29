@@ -19,6 +19,13 @@ import {
   type MotryxProjectionState,
 } from "./projection-events"
 import { motryxProductLayout } from "./layout"
+import {
+  motryxTerminalMarkGlyph,
+  motryxTerminalMarkRows,
+  type MotryxTerminalMarkCell,
+  type MotryxTerminalMarkColor,
+  type MotryxTerminalMarkSize,
+} from "./terminal-mark"
 
 registerOpencodeSpinner()
 
@@ -286,6 +293,7 @@ export function MotryxRoute(props: {
                   showIdleFooter={false}
                   showExitEpilogue={false}
                   interaction={value().role === "orchestrator" ? "interactive" : "read-only"}
+                  historyMutation="disabled"
                   onSessionUnavailable={(error) => {
                     showTargetError(error instanceof Error ? error.message : String(error))
                     if (value().role !== "orchestrator" && target()?.sessionID === value().sessionID)
@@ -370,8 +378,6 @@ function MotryxHeader(props: {
   )
 }
 
-const MOTRYX_LOADING_MARK = ["██╲        ╱██", "██ ╲      ╱ ██", "██  ╲    ╱  ██", "██   ╲  ╱   ██", "██    ╲╱    ██"]
-
 function MotryxLoadingPage(props: {
   api: TuiPluginApi
   width: number
@@ -379,24 +385,14 @@ function MotryxLoadingPage(props: {
   phase: MotryxProjectionPhase
 }) {
   const compact = createMemo(() => props.width < 54 || props.height < 17)
+  const showMark = createMemo(() => props.width >= 28 && props.height >= 11)
   const message = createMemo(() =>
     props.phase === "starting" ? "Reconciling workflow…" : "Connecting conversation and workflow…",
   )
   return (
     <box flexGrow={1} minHeight={0} justifyContent="center" alignItems="center" flexDirection="column" gap={1}>
-      <Show when={!compact()}>
-        <box flexDirection="column">
-          <For each={MOTRYX_LOADING_MARK}>
-            {(line) => <text fg={props.api.theme.current.text}>{line}</text>}
-          </For>
-          <box flexDirection="row">
-            <text fg={props.api.theme.current.text}>██</text>
-            <box width={4} />
-            <text fg={props.api.theme.current.primary}>◀▶</text>
-            <box width={4} />
-            <text fg={props.api.theme.current.text}>██</text>
-          </box>
-        </box>
+      <Show when={showMark()}>
+        <MotryxLoadingMark api={props.api} size={compact() ? "compact" : "standard"} />
       </Show>
       <box flexDirection="row">
         <text fg={props.api.theme.current.text}>Motry</text>
@@ -408,6 +404,37 @@ function MotryxLoadingPage(props: {
       </box>
     </box>
   )
+}
+
+function MotryxLoadingMark(props: { api: TuiPluginApi; size: MotryxTerminalMarkSize }) {
+  const rows = createMemo(() => motryxTerminalMarkRows(props.size))
+  return (
+    <box flexDirection="column">
+      <For each={rows()}>
+        {(row) => (
+          <text>
+            <For each={row}>{(cell) => <MotryxLoadingMarkCell api={props.api} cell={cell} />}</For>
+          </text>
+        )}
+      </For>
+    </box>
+  )
+}
+
+function MotryxLoadingMarkCell(props: { api: TuiPluginApi; cell: MotryxTerminalMarkCell }) {
+  const glyph = motryxTerminalMarkGlyph(props.cell)
+  const top = motryxLoadingMarkColor(props.api, props.cell.top)
+  const bottom = motryxLoadingMarkColor(props.api, props.cell.bottom)
+  if (!top && !bottom) return <span> </span>
+  if (!top || !bottom || props.cell.top === props.cell.bottom) {
+    return <span style={{ fg: top ?? bottom }}>{glyph}</span>
+  }
+  return <span style={{ fg: top, bg: bottom }}>{glyph}</span>
+}
+
+function motryxLoadingMarkColor(api: TuiPluginApi, color: MotryxTerminalMarkColor) {
+  if (color === "C") return api.theme.current.text
+  if (color === "G") return api.theme.current.primary
 }
 
 function ConversationTargetBar(props: {
@@ -708,11 +735,14 @@ function InspectPanel(props: {
     props.snapshot.artifacts.filter((artifact) => artifact.producedByLaneID === props.lane?.id),
   )
   const instanceIDs = createMemo(() => new Set(agents().map((agent) => agent.instanceID)))
-  const inbox = createMemo(() => props.snapshot.inboxItems.filter((item) => instanceIDs().has(item.instanceID)))
+  const inbox = createMemo(() => props.snapshot.inboxItems.filter((item) => item.laneID === props.lane?.id))
   const fences = createMemo(() => props.snapshot.deliveryFences.filter((fence) => instanceIDs().has(fence.instanceID)))
-  const slots = createMemo(() =>
-    props.snapshot.functionSlots.filter((slot) => slot.instanceID && instanceIDs().has(slot.instanceID)),
-  )
+  const slots = createMemo(() => {
+    const lane = props.lane
+    if (!lane) return []
+    const slotIDs = new Set([lane.coordinatorSlotID, lane.checkerSlotID].filter((item) => item !== undefined))
+    return props.snapshot.functionSlots.filter((slot) => slotIDs.has(slot.slotID))
+  })
   const dependencies = createMemo(() => {
     const ids = props.lane?.dependsOnLaneIDs ?? []
     if (ids.length === 0) return "none"
@@ -793,7 +823,7 @@ function InspectPanel(props: {
               label="function slots"
               value={
                 slots()
-                  .map((slot) => `${slot.slotKey}:${slot.status}`)
+                  .map((slot) => `${slot.slotKey}:${slot.runtimeReadiness}`)
                   .join(", ") || "none"
               }
             />
@@ -821,9 +851,15 @@ function InspectPanel(props: {
               <InspectValue
                 api={props.api}
                 label="coordinator session"
-                value={lane().coordinatorSessionID ?? "not assigned"}
+                value={
+                  resolveProjectedDebugTarget(props.snapshot, lane().id, "coordinator")?.sessionID ?? "not assigned"
+                }
               />
-              <InspectValue api={props.api} label="checker session" value={lane().checkerSessionID ?? "not assigned"} />
+              <InspectValue
+                api={props.api}
+                label="checker session"
+                value={resolveProjectedDebugTarget(props.snapshot, lane().id, "checker")?.sessionID ?? "not assigned"}
+              />
             </Show>
           </box>
         )}
@@ -862,16 +898,26 @@ export function resolveProjectedDebugTarget(
   role: "coordinator" | "checker",
 ): MotryxConversationTarget | undefined {
   const lane = snapshot.lanes.find((item) => item.id === laneID)
-  const sessionID = role === "coordinator" ? lane?.coordinatorSessionID : lane?.checkerSessionID
-  if (!lane || !sessionID) return undefined
-  const agent = snapshot.agents.find(
-    (item) => item.sessionID === sessionID && item.role === role && item.laneIDs.includes(laneID),
+  if (!lane) return undefined
+  const slotID = role === "coordinator" ? lane.coordinatorSlotID : lane.checkerSlotID
+  const readiness = role === "coordinator"
+    ? lane.coordinatorRuntimeReadiness
+    : lane.checkerRuntimeReadiness
+  const runtime = role === "coordinator" ? lane.coordinatorRuntime : lane.checkerRuntime
+  if (!slotID || readiness !== "ready" || !runtime || runtime.slotID !== slotID) return undefined
+  const agents = snapshot.agents.filter(
+    (item) =>
+      item.instanceID === runtime.instanceID &&
+      item.role === role &&
+      item.status === "ALIVE" &&
+      item.sessionID === runtime.sessionID &&
+      item.orchestratorSessionID === snapshot.orchestratorSessionID,
   )
-  if (!agent) return undefined
+  if (agents.length !== 1) return undefined
   return {
     role,
     laneID,
-    sessionID,
+    sessionID: runtime.sessionID,
     bindingGeneration: snapshot.binding.bindingGeneration,
     projectionRevision: snapshot.projectionRevision,
   }

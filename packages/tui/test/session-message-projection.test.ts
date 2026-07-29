@@ -1,6 +1,11 @@
 import { expect, test } from "bun:test"
-import type { SessionMessage } from "@opencode-ai/sdk/v2"
-import { projectSessionMessagesToLegacy } from "../src/context/session-message-projection"
+import type { PermissionV2Request, QuestionV2Request, SessionMessage, SessionV2Info } from "@opencode-ai/sdk/v2"
+import {
+  projectPermissionRequestToLegacy,
+  projectQuestionRequestToLegacy,
+  projectSessionInfoToLegacy,
+  projectSessionMessagesToLegacy,
+} from "../src/context/session-message-projection"
 
 test("projects durable V2 conversation messages into the original Session surface model", () => {
   const input: SessionMessage[] = [
@@ -34,6 +39,8 @@ test("projects durable V2 conversation messages into the original Session surfac
       id: "msg_user",
       type: "user",
       text: "Inspect the workflow",
+      files: [{ uri: "file:///tmp/project/spec.md", mime: "text/markdown", name: "spec.md" }],
+      agents: [{ name: "analyst", source: { text: "@analyst", start: 0, end: 8 } }],
       time: { created: 10 },
     },
   ]
@@ -53,7 +60,11 @@ test("projects durable V2 conversation messages into the original Session surfac
     modelID: "glm-5.1",
     finish: "stop",
   })
-  expect(result.parts.msg_user).toMatchObject([{ type: "text", text: "Inspect the workflow" }])
+  expect(result.parts.msg_user).toMatchObject([
+    { type: "text", text: "Inspect the workflow" },
+    { type: "file", url: "file:///tmp/project/spec.md", mime: "text/markdown", filename: "spec.md" },
+    { type: "agent", name: "analyst", source: { value: "@analyst", start: 0, end: 8 } },
+  ])
   expect(result.parts.msg_assistant).toMatchObject([
     { type: "reasoning", text: "check the lane" },
     {
@@ -63,6 +74,66 @@ test("projects durable V2 conversation messages into the original Session surfac
     },
     { type: "text", text: "Lane is healthy." },
   ])
+})
+
+test("projects V2 session and interactive requests without deriving new state", () => {
+  const session: SessionV2Info = {
+    id: "ses_orchestrator",
+    projectID: "project-1",
+    agent: "orchestrator",
+    model: { providerID: "zai-coding-plan", id: "glm-5.1", variant: "default" },
+    cost: 1,
+    tokens: { input: 2, output: 3, reasoning: 4, cache: { read: 5, write: 6 } },
+    time: { created: 10, updated: 20 },
+    title: "Motryx",
+    location: { directory: "/tmp/project", workspaceID: "workspace-1" },
+    subpath: "lane-a",
+  }
+  const permission: PermissionV2Request = {
+    id: "permission-1",
+    sessionID: session.id,
+    action: "edit",
+    resources: ["src/**"],
+    save: ["src/**"],
+    metadata: { filepath: "src/index.ts" },
+    source: { type: "tool", messageID: "message-1", callID: "call-1" },
+  }
+  const question: QuestionV2Request = {
+    id: "question-1",
+    sessionID: session.id,
+    questions: [
+      {
+        question: "Proceed?",
+        header: "Proceed",
+        options: [{ label: "Yes", description: "Continue" }],
+      },
+    ],
+    tool: { messageID: "message-1", callID: "call-2" },
+  }
+
+  expect(projectSessionInfoToLegacy(session)).toMatchObject({
+    id: session.id,
+    version: "v2",
+    directory: "/tmp/project",
+    workspaceID: "workspace-1",
+    path: "lane-a",
+    agent: "orchestrator",
+  })
+  expect(projectPermissionRequestToLegacy(permission)).toEqual({
+    id: "permission-1",
+    sessionID: session.id,
+    permission: "edit",
+    patterns: ["src/**"],
+    metadata: { filepath: "src/index.ts" },
+    always: ["src/**"],
+    tool: { messageID: "message-1", callID: "call-1" },
+  })
+  expect(projectQuestionRequestToLegacy(question)).toEqual({
+    id: "question-1",
+    sessionID: session.id,
+    questions: question.questions,
+    tool: { messageID: "message-1", callID: "call-2" },
+  })
 })
 
 test("does not expose V2 system projections as user conversation turns", () => {

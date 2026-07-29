@@ -16,6 +16,7 @@ import { getScrollAcceleration } from "../../util/scroll"
 import { useTuiConfig } from "../../config"
 import { OPENCODE_BASE_MODE, useBindings, useCommandShortcut } from "../../keymap"
 import { usePathFormatter } from "../../context/path-format"
+import { useTuiStartup } from "../../context/runtime"
 
 type PermissionStage = "permission" | "always" | "reject"
 
@@ -112,6 +113,7 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
   const sdk = useSDK()
   const project = useProject()
   const sync = useSync()
+  const startup = useTuiStartup()
   const [store, setStore] = createStore({
     stage: "permission" as PermissionStage,
   })
@@ -132,6 +134,24 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
   })
 
   const { theme } = useTheme()
+
+  function reply(value: "once" | "always" | "reject", message?: string) {
+    if (startup.sessionApi === "v2") {
+      return sdk.client.v2.session.permission.reply({
+        sessionID: props.request.sessionID,
+        requestID: props.request.id,
+        reply: value,
+        message,
+      })
+    }
+    return sdk.client.permission.reply({
+      reply: value,
+      requestID: props.request.id,
+      directory: props.directory,
+      message,
+      workspace: project.workspace.current(),
+    })
+  }
 
   return (
     <Switch>
@@ -165,25 +185,14 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
           onSelect={(option) => {
             setStore("stage", "permission")
             if (option === "cancel") return
-            void sdk.client.permission.reply({
-              reply: "always",
-              requestID: props.request.id,
-              directory: props.directory,
-              workspace: project.workspace.current(),
-            })
+            void reply("always")
           }}
         />
       </Match>
       <Match when={store.stage === "reject"}>
         <RejectPrompt
           onConfirm={(message) => {
-            void sdk.client.permission.reply({
-              reply: "reject",
-              requestID: props.request.id,
-              directory: props.directory,
-              message: message || undefined,
-              workspace: project.workspace.current(),
-            })
+            void reply("reject", message || undefined)
           }}
           onCancel={() => {
             setStore("stage", "permission")
@@ -415,20 +424,10 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
                     setStore("stage", "reject")
                     return
                   }
-                  void sdk.client.permission.reply({
-                    reply: "reject",
-                    requestID: props.request.id,
-                    directory: props.directory,
-                    workspace: project.workspace.current(),
-                  })
+                  void reply("reject")
                   return
                 }
-                void sdk.client.permission.reply({
-                  reply: "once",
-                  requestID: props.request.id,
-                  directory: props.directory,
-                  workspace: project.workspace.current(),
-                })
+                void reply("once")
               }}
             />
           )

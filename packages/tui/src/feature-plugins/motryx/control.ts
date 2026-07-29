@@ -41,7 +41,12 @@ export type MotryxWorkflowProjection = {
   id: string
   status: string
   goal: string
-  agentAllocationPolicy: Record<string, unknown>
+}
+
+export type MotryxRuntimeTargetProjection = {
+  slotID: string
+  instanceID: string
+  sessionID: string
 }
 
 export type MotryxLaneProjection = {
@@ -56,8 +61,12 @@ export type MotryxLaneProjection = {
   readyAt?: number
   readyKind?: string
   dependsOnLaneIDs: string[]
-  coordinatorSessionID?: string
-  checkerSessionID?: string
+  coordinatorSlotID?: string
+  checkerSlotID?: string
+  coordinatorRuntimeReadiness: string
+  checkerRuntimeReadiness: string
+  coordinatorRuntime?: MotryxRuntimeTargetProjection
+  checkerRuntime?: MotryxRuntimeTargetProjection
 }
 
 export type MotryxAgentProjection = {
@@ -88,14 +97,13 @@ export type MotryxFunctionSlotProjection = {
   slotID: string
   slotKey: string
   role: string
-  status: string
-  instanceID?: string
-  memberGeneration?: number
+  runtimeReadiness: string
 }
 
 export type MotryxInboxProjection = {
   inboxItemID: string
-  instanceID: string
+  targetKind: string
+  targetID: string
   envelopeClass: string
   sourceType: string
   status: string
@@ -316,7 +324,6 @@ function parseWorkflow(value: unknown): MotryxWorkflowProjection {
     id: requiredString(item.id, "snapshot.workflow.id"),
     status: requiredString(item.status, "snapshot.workflow.status"),
     goal: requiredString(item.goal, "snapshot.workflow.goal", true),
-    agentAllocationPolicy: requiredRecord(item.agentAllocationPolicy, "snapshot.workflow.agentAllocationPolicy"),
   }
 }
 
@@ -334,9 +341,26 @@ function parseLane(value: unknown, label: string): MotryxLaneProjection {
     readyAt: optionalFiniteNumber(item.readyAt, `${label}.readyAt`),
     readyKind: optionalString(item.readyKind, `${label}.readyKind`),
     dependsOnLaneIDs: stringArray(item.dependsOnLaneIDs, `${label}.dependsOnLaneIDs`),
-    coordinatorSessionID: optionalString(item.coordinatorSessionID, `${label}.coordinatorSessionID`),
-    checkerSessionID: optionalString(item.checkerSessionID, `${label}.checkerSessionID`),
+    coordinatorSlotID: optionalString(item.coordinatorSlotID, `${label}.coordinatorSlotID`),
+    checkerSlotID: optionalString(item.checkerSlotID, `${label}.checkerSlotID`),
+    coordinatorRuntimeReadiness: requiredString(
+      item.coordinatorRuntimeReadiness,
+      `${label}.coordinatorRuntimeReadiness`,
+    ),
+    checkerRuntimeReadiness: requiredString(item.checkerRuntimeReadiness, `${label}.checkerRuntimeReadiness`),
+    coordinatorRuntime: parseRuntimeTarget(item.coordinatorRuntime, `${label}.coordinatorRuntime`),
+    checkerRuntime: parseRuntimeTarget(item.checkerRuntime, `${label}.checkerRuntime`),
   })
+}
+
+function parseRuntimeTarget(value: unknown, label: string): MotryxRuntimeTargetProjection | undefined {
+  if (value === undefined) return
+  const item = requiredRecord(value, label)
+  return {
+    slotID: requiredString(item.slotID, `${label}.slotID`),
+    instanceID: requiredString(item.instanceID, `${label}.instanceID`),
+    sessionID: requiredString(item.sessionID, `${label}.sessionID`),
+  }
 }
 
 function parseAgent(value: unknown, label: string): MotryxAgentProjection {
@@ -375,9 +399,7 @@ function parseFunctionSlot(value: unknown, label: string): MotryxFunctionSlotPro
     slotID: requiredString(item.slotID, `${label}.slotID`),
     slotKey: requiredString(item.slotKey, `${label}.slotKey`),
     role: requiredString(item.role, `${label}.role`),
-    status: requiredString(item.status, `${label}.status`),
-    instanceID: optionalString(item.instanceID, `${label}.instanceID`),
-    memberGeneration: optionalNonNegativeInteger(item.memberGeneration, `${label}.memberGeneration`),
+    runtimeReadiness: requiredString(item.runtimeReadiness, `${label}.runtimeReadiness`),
   })
 }
 
@@ -385,7 +407,8 @@ function parseInboxItem(value: unknown, label: string): MotryxInboxProjection {
   const item = requiredRecord(value, label)
   return compact({
     inboxItemID: requiredString(item.inboxItemID, `${label}.inboxItemID`),
-    instanceID: requiredString(item.instanceID, `${label}.instanceID`),
+    targetKind: requiredString(item.targetKind, `${label}.targetKind`),
+    targetID: requiredString(item.targetID, `${label}.targetID`),
     envelopeClass: requiredString(item.envelopeClass, `${label}.envelopeClass`, true),
     sourceType: requiredString(item.sourceType, `${label}.sourceType`, true),
     status: requiredString(item.status, `${label}.status`),
@@ -451,11 +474,6 @@ function optionalFiniteNumber(value: unknown, label: string): number | undefined
 function nonNegativeInteger(value: unknown, label: string): number {
   if (!Number.isInteger(value) || (value as number) < 0) fail(`${label} must be a non-negative integer`)
   return value as number
-}
-
-function optionalNonNegativeInteger(value: unknown, label: string): number | undefined {
-  if (value === undefined) return
-  return nonNegativeInteger(value, label)
 }
 
 function positiveInteger(value: unknown, label: string): number {
