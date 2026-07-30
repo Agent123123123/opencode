@@ -59,6 +59,48 @@ test("runs onDispose callbacks with aborted signal and is idempotent", async () 
   }
 })
 
+test("scopes prompt admission interceptors to the owning plugin", async () => {
+  await using tmp = await tmpdir({
+    init: async (dir) => {
+      const file = path.join(dir, "prompt-plugin.ts")
+      const spec = pathToFileURL(file).href
+      await Bun.write(
+        file,
+        `export default {
+  id: "demo.prompt",
+  tui: async (api) => {
+    api.prompt.interceptAdmission(async (_input, next) => next())
+  },
+}
+`,
+      )
+      return { spec }
+    },
+  })
+  const count = {
+    event_add: 0,
+    event_drop: 0,
+    route_add: 0,
+    route_drop: 0,
+    command_add: 0,
+    command_drop: 0,
+    prompt_add: 0,
+    prompt_drop: 0,
+  }
+  const { config, restore } = mockTuiRuntime(tmp.path, [tmp.extra.spec])
+
+  try {
+    await TuiPluginRuntime.init({ api: createTuiPluginApi({ count }), config })
+    expect(count.prompt_add).toBe(1)
+    expect(count.prompt_drop).toBe(0)
+    await TuiPluginRuntime.dispose()
+    expect(count.prompt_drop).toBe(1)
+  } finally {
+    await TuiPluginRuntime.dispose()
+    restore()
+  }
+})
+
 test("rolls back failed plugin and continues loading next", async () => {
   await using tmp = await tmpdir({
     init: async (dir) => {

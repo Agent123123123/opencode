@@ -646,6 +646,11 @@ function pluginApi(runtime: RuntimeState, plugin: PluginEntry, scope: PluginScop
         return installPluginBySpec(runtime, spec, options?.global)
       },
     },
+    prompt: {
+      interceptAdmission(handler) {
+        return scope.track(api.prompt.interceptAdmission(handler))
+      },
+    },
     lifecycle: scope.lifecycle,
   }
 }

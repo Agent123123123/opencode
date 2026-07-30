@@ -403,6 +403,7 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
       renderer,
       attention,
       Slot: pluginRuntime.Slot,
+      prompt: pluginRuntime.prompt,
     }),
   )
   const [ready, setReady] = createSignal(false)

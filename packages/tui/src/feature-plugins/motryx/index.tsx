@@ -2,6 +2,7 @@
 import type { TuiPlugin, TuiPluginApi } from "@opencode-ai/plugin/tui"
 import type { BuiltinTuiPlugin } from "../builtins"
 import { MotryxRoute, motryxDebugViewFromEnv, motryxRouteConfig, type MotryxRouteActions } from "./route"
+import { createMotryxPromptAdmissionHandler } from "./prompt-recovery"
 
 export const MOTRYX_ROUTE = "motryx"
 export const MOTRYX_PRODUCT_COMMAND_PRIORITY = 100
@@ -10,6 +11,24 @@ const tui: TuiPlugin = async (api) => {
   const config = motryxRouteConfig()
   const debugView = motryxDebugViewFromEnv()
   let actions: MotryxRouteActions | undefined
+
+  if (config.ok) {
+    api.prompt.interceptAdmission(
+      createMotryxPromptAdmissionHandler(config.value, {
+        signal: api.lifecycle.signal,
+        onWaiting() {
+          api.ui.toast({
+            variant: "info",
+            title: "Motryx is recovering",
+            message: "Your prompt is preserved and will be retried when the exact route is available.",
+          })
+        },
+        onRecovered() {
+          api.ui.toast({ variant: "success", message: "Motryx recovered and the prompt was admitted." })
+        },
+      }),
+    )
+  }
 
   api.route.register([
     {
