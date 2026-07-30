@@ -17,6 +17,7 @@ import type { useToast } from "../ui/toast"
 import * as Keymap from "../keymap"
 import { createCommandShim } from "./command-shim"
 import type { PluginRoutes } from "./api"
+import type { PromptAdmissionInterceptors } from "./prompt"
 export type { RouteMap } from "./api"
 export { createPluginRoutes, createTuiApi } from "./api"
 
@@ -36,6 +37,7 @@ type Input = {
   renderer: TuiPluginApi["renderer"]
   attention: TuiPluginApi["attention"]
   Slot: TuiPluginApi["ui"]["Slot"]
+  prompt: PromptAdmissionInterceptors
 }
 
 function routeNavigate(route: ReturnType<typeof useRoute>, name: string, params?: Record<string, unknown>) {
@@ -326,6 +328,11 @@ export function createTuiApiAdapters(input: Input): Omit<TuiPluginApi, "lifecycl
           ok: false,
           message: "plugins.install is only available in plugin context",
         }
+      },
+    },
+    prompt: {
+      interceptAdmission(handler) {
+        return input.prompt.register(handler)
       },
     },
     theme: {

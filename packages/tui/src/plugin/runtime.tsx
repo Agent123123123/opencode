@@ -7,16 +7,19 @@ import type {
 import type { TuiConfig } from "../config"
 import { createContext, createSignal, useContext, type JSX, type ParentProps } from "solid-js"
 import { createPluginRoutes } from "./api"
+import { createPromptAdmissionInterceptors } from "./prompt"
 import { createSlots, type HostSlots } from "./slots"
 
 export function createPluginRuntime() {
   const [commands, setCommands] = createSignal<PluginRuntimeCommands>(emptyCommands)
   const [status, setStatus] = createSignal<ReadonlyArray<TuiPluginStatus>>([])
   const slots = createSlots()
+  const prompt = createPromptAdmissionInterceptors()
 
   return {
     Slot: slots.Slot,
     routes: createPluginRoutes(),
+    prompt,
     commands,
     status,
     update(input: { commands?: PluginRuntimeCommands; status?: ReadonlyArray<TuiPluginStatus> }) {
@@ -27,6 +30,7 @@ export function createPluginRuntime() {
       setCommands(emptyCommands)
       setStatus([])
       slots.clear()
+      prompt.clear()
     },
     setupSlots(api: TuiPluginApi): HostSlots {
       return slots.setup(api)

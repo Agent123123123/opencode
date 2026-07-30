@@ -573,6 +573,13 @@ export type TuiPluginInstallResult =
       missing?: boolean
     }
 
+export type TuiPromptAdmission = {
+  sessionID: string
+  inputID: string
+}
+
+export type TuiPromptAdmissionHandler = (input: TuiPromptAdmission, next: () => Promise<void>) => Promise<void>
+
 export type TuiWorkspace = {
   current: () => string | undefined
   set: (workspaceID?: string) => void
@@ -621,6 +628,13 @@ export type TuiPluginApi = {
     deactivate: (id: string) => Promise<boolean>
     add: (spec: string) => Promise<boolean>
     install: (spec: string, options?: TuiPluginInstallOptions) => Promise<TuiPluginInstallResult>
+  }
+  prompt: {
+    /**
+     * Wrap V2 prompt admission. `next` always submits the same explicit input ID,
+     * so a transport recovery policy may safely reconcile an exact retry.
+     */
+    interceptAdmission: (handler: TuiPromptAdmissionHandler) => () => void
   }
   lifecycle: TuiLifecycle
 }

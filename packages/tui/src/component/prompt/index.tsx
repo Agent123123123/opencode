@@ -58,6 +58,8 @@ import { usePromptMove } from "./move"
 import { readLocalAttachment } from "./local-attachment"
 import { useLocation } from "../../context/location"
 import { v2PromptInput } from "../../context/session-v2"
+import { usePluginRuntime } from "../../plugin/runtime"
+import { SessionMessage } from "@opencode-ai/core/session/message"
 
 registerOpencodeSpinner()
 
@@ -178,6 +180,8 @@ export function Prompt(props: PromptProps) {
   const list = createMemo(() => props.placeholders?.normal ?? [])
   const shell = createMemo(() => props.placeholders?.shell ?? [])
   const fileContextEnabled = createMemo(() => kv.get("file_context_enabled", true))
+  const [submitting, setSubmitting] = createSignal(false)
+  const inputDisabled = createMemo(() => Boolean(props.disabled) || submitting())
   const [dismissedEditorSelectionKey, setDismissedEditorSelectionKey] = createSignal<string>()
   const editorContext = createMemo(() => {
     const selection = fileContextEnabled() ? editor.selection() : undefined
@@ -212,6 +216,7 @@ export function Prompt(props: PromptProps) {
   const [auto, setAuto] = createSignal<AutocompleteRef>()
   const workspace = usePromptWorkspace(props.sessionID)
   const move = usePromptMove({ projectID: project.project, sessionID: () => props.sessionID })
+  const pluginRuntime = usePluginRuntime()
   const footerVisible = createMemo(
     () =>
       props.showIdleFooter !== false ||
@@ -262,8 +267,8 @@ export function Prompt(props: PromptProps) {
 
   createEffect(() => {
     if (!input || input.isDestroyed) return
-    if (props.disabled) input.cursorColor = theme.backgroundElement
-    if (!props.disabled) input.cursorColor = theme.text
+    if (inputDisabled()) input.cursorColor = theme.backgroundElement
+    if (!inputDisabled()) input.cursorColor = theme.text
     if (tuiConfig.cursor) input.cursorStyle = tuiConfig.cursor
   })
 
@@ -812,7 +817,7 @@ export function Prompt(props: PromptProps) {
   useBindings(() => {
     return {
       target: inputTarget,
-      enabled: inputTarget() !== undefined && !props.disabled,
+      enabled: inputTarget() !== undefined && !inputDisabled(),
       bindings: tuiConfig.keybinds.get("prompt.paste"),
     }
   })
@@ -820,7 +825,7 @@ export function Prompt(props: PromptProps) {
   useBindings(() => {
     return {
       target: inputTarget,
-      enabled: inputTarget() !== undefined && !props.disabled && store.prompt.input !== "",
+      enabled: inputTarget() !== undefined && !inputDisabled() && store.prompt.input !== "",
       bindings: tuiConfig.keybinds.get("prompt.clear"),
     }
   })
@@ -833,7 +838,7 @@ export function Prompt(props: PromptProps) {
         return (
           startup.sessionApi !== "v2" &&
           inputTarget() !== undefined &&
-          !props.disabled &&
+          !inputDisabled() &&
           store.mode === "normal" &&
           !auto()?.visible &&
           input?.visualCursor.offset === 0
@@ -877,7 +882,7 @@ export function Prompt(props: PromptProps) {
       target: inputTarget,
       enabled: (() => {
         cursorVersion()
-        return inputTarget() !== undefined && !props.disabled && !auto()?.visible && input !== undefined
+        return inputTarget() !== undefined && !inputDisabled() && !auto()?.visible && input !== undefined
       })(),
       commands: [
         {
@@ -909,7 +914,7 @@ export function Prompt(props: PromptProps) {
       target: inputTarget,
       enabled: (() => {
         cursorVersion()
-        return inputTarget() !== undefined && !props.disabled && !auto()?.visible && input !== undefined
+        return inputTarget() !== undefined && !inputDisabled() && !auto()?.visible && input !== undefined
       })(),
       commands: [
         {
@@ -940,7 +945,6 @@ export function Prompt(props: PromptProps) {
     }
   })
 
-  let submitting = false
   async function submit() {
     // Prevent overlapping invocations (e.g. a double-pressed Enter, or the
     // input's native onSubmit racing another dispatch). Without this guard,
@@ -948,12 +952,12 @@ export function Prompt(props: PromptProps) {
     // clears `store.prompt.input`, then awaits its own `session.create` and
     // ultimately reads the now-empty store — sending a phantom empty prompt
     // to a freshly created session.
-    if (submitting) return false
-    submitting = true
+    if (submitting()) return false
+    setSubmitting(true)
     try {
       return await submitInner()
     } finally {
-      submitting = false
+      setSubmitting(false)
     }
   }
 
@@ -1130,25 +1134,34 @@ export function Prompt(props: PromptProps) {
       if (v2) {
         move.startSubmit()
         sync.session.setStatus(sessionID, { type: "busy" })
-        void sdk.client.v2.session
-          .prompt(
-            {
-              sessionID,
-              prompt: v2PromptInput(`${editorParts.map((part) => part.text).join("")}${inputText}`, nonTextParts),
-              delivery: "queue",
-            },
-            { throwOnError: true },
-          )
-          .then((response) => {
-            const inputID = response.data.data.id
-            void sync.session
-              .followTurn(sessionID, inputID)
-              .then((settled) => {
-                if (settled) sync.session.setStatus(sessionID, { type: "idle" })
-              })
-              .catch(() => {})
+        const inputID = SessionMessage.ID.create()
+        const prompt = v2PromptInput(`${editorParts.map((part) => part.text).join("")}${inputText}`, nonTextParts)
+        try {
+          await pluginRuntime.prompt.admit({ sessionID, inputID }, async () => {
+            const response = await sdk.client.v2.session.prompt(
+              {
+                sessionID,
+                id: inputID,
+                prompt,
+                delivery: "queue",
+              },
+              { throwOnError: true },
+            )
+            if (response.data.data.id !== inputID) {
+              throw new Error(`Prompt admission returned unexpected input ID ${response.data.data.id}`)
+            }
           })
-          .catch(failed)
+        } catch (error) {
+          failed(error)
+          if (finishMoveProgress) move.finishSubmit()
+          return false
+        }
+        void sync.session
+          .followTurn(sessionID, inputID)
+          .then((settled) => {
+            if (settled) sync.session.setStatus(sessionID, { type: "idle" })
+          })
+          .catch(() => {})
       } else {
         if (!agent || !selectedModel) return false
         move.startSubmit()
@@ -1439,7 +1452,7 @@ export function Prompt(props: PromptProps) {
               }}
               onCursorChange={() => setCursorVersion((value) => value + 1)}
               onKeyDown={(e: { preventDefault(): void }) => {
-                if (props.disabled) {
+                if (inputDisabled()) {
                   e.preventDefault()
                   return
                 }
@@ -1450,7 +1463,7 @@ export function Prompt(props: PromptProps) {
                 setTimeout(() => setTimeout(() => submit(), 0), 0)
               }}
               onPaste={async (event: PasteEvent) => {
-                if (props.disabled) {
+                if (inputDisabled()) {
                   event.preventDefault()
                   return
                 }
@@ -1493,7 +1506,7 @@ export function Prompt(props: PromptProps) {
               }}
               onMouseDown={(r: MouseEvent) => r.target?.focus()}
               focusedBackgroundColor={theme.backgroundElement}
-              cursorColor={props.disabled ? theme.backgroundElement : theme.text}
+              cursorColor={inputDisabled() ? theme.backgroundElement : theme.text}
               cursorStyle={tuiConfig.cursor}
               syntaxStyle={syntax()}
             />

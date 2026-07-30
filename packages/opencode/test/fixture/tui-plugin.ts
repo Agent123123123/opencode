@@ -10,6 +10,8 @@ type Count = {
   route_drop: number
   command_add: number
   command_drop: number
+  prompt_add: number
+  prompt_drop: number
 }
 
 type AttentionOpts = Partial<Omit<HostPluginApi["attention"], "soundboard">> & {
@@ -230,6 +232,15 @@ export function createTuiPluginApi(opts: Opts = {}): HostPluginApi {
         ok: false,
         message: "not implemented in fixture",
       }),
+    },
+    prompt: {
+      interceptAdmission: () => {
+        if (count) count.prompt_add += 1
+        return () => {
+          if (!count) return
+          count.prompt_drop += 1
+        }
+      },
     },
     lifecycle: {
       signal: ctrl.signal,
