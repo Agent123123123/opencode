@@ -62,8 +62,9 @@ test("Motryx blocks generic new-session and quick-slot navigation", () => {
   expect(focused).toBe(1)
 })
 
-test("Motryx replaces local model and agent selection with launcher-owned tier entrypoints", () => {
+test("Motryx preserves OpenCode provider connect while keeping model and agent selection launcher-owned", () => {
   const notices: string[] = []
+  let providerDialogs = 0
   const base = createTuiPluginApi()
   const api = {
     ...base,
@@ -77,6 +78,12 @@ test("Motryx replaces local model and agent selection with launcher-owned tier e
     },
     ui: {
       ...base.ui,
+      dialog: {
+        ...base.ui.dialog,
+        replace() {
+          providerDialogs += 1
+        },
+      },
       toast(input: { message: string }) {
         notices.push(input.message)
       },
@@ -97,7 +104,11 @@ test("Motryx replaces local model and agent selection with launcher-owned tier e
   weak?.run({} as never)
 
   commands.find((command) => command.name === "agent.list")?.run({} as never)
-  commands.find((command) => command.name === "provider.connect")?.run({} as never)
+  const connect = commands.find((command) => command.name === "provider.connect")
+  expect(connect?.slashName).toBe("connect")
+  expect(connect?.hidden).not.toBe(true)
+  connect?.run({} as never)
+  expect(providerDialogs).toBe(1)
   for (const name of ["session.fork", "session.compact", "session.undo", "session.redo"])
     commands.find((command) => command.name === name)?.run({} as never)
   expect(notices).toEqual([
@@ -105,7 +116,6 @@ test("Motryx replaces local model and agent selection with launcher-owned tier e
     "strong model: openai/gpt-5.5. To change it, run motryx models set strong <provider/model> outside the TUI, then relaunch.",
     "weak model: zai-coding-plan/glm-5.2. To change it, run motryx models set weak <provider/model> outside the TUI, then relaunch.",
     "Motryx agents are assigned by the IC sidecar and cannot be switched from the conversation TUI.",
-    "Motryx provider credentials are provisioned before launch and cannot be changed from the TUI.",
     "Motryx does not expose fork, compact, undo, or redo in its multi-agent conversation.",
     "Motryx does not expose fork, compact, undo, or redo in its multi-agent conversation.",
     "Motryx does not expose fork, compact, undo, or redo in its multi-agent conversation.",
