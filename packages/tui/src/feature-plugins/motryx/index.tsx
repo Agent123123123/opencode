@@ -1,6 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 import type { TuiPlugin, TuiPluginApi } from "@opencode-ai/plugin/tui"
 import type { BuiltinTuiPlugin } from "../builtins"
+import { DialogProvider } from "../../component/dialog-provider"
 import { MotryxRoute, motryxDebugViewFromEnv, motryxRouteConfig, type MotryxRouteActions } from "./route"
 import { createMotryxPromptAdmissionHandler } from "./prompt-recovery"
 
@@ -219,11 +220,6 @@ export function motryxSelectionBoundaryCommands(api: TuiPluginApi): TuiKeymapCom
       variant: "info",
       message: "Motryx agents are assigned by the IC sidecar and cannot be switched from the conversation TUI.",
     })
-  const providerBoundary = () =>
-    api.ui.toast({
-      variant: "info",
-      message: "Motryx provider credentials are provisioned before launch and cannot be changed from the TUI.",
-    })
   const historyBoundary = () =>
     api.ui.toast({
       variant: "info",
@@ -289,11 +285,24 @@ export function motryxSelectionBoundaryCommands(api: TuiPluginApi): TuiKeymapCom
     })),
     {
       name: "provider.connect",
-      title: "Motryx provider provisioning",
-      category: "Motryx",
+      title: "Connect provider",
+      description: "Connect a provider using OpenCode authentication.",
+      slashName: "connect",
+      category: "Provider",
       namespace: "palette",
-      hidden: true,
-      run: providerBoundary,
+      run() {
+        api.ui.dialog.replace(() => (
+          <DialogProvider
+            onConnected={() => {
+              api.ui.dialog.clear()
+              api.ui.toast({
+                variant: "success",
+                message: "Provider connected. Motryx model tiers remain launcher-owned.",
+              })
+            }}
+          />
+        ))
+      },
     },
     ...["session.fork", "session.compact", "session.undo", "session.redo"].map((name) => ({
       name,

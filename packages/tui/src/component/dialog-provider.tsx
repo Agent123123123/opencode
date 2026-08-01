@@ -83,7 +83,25 @@ export function normalizeCustomProviderID(value: string) {
   return providerID
 }
 
-export function createDialogProviderOptions() {
+export type ProviderConnectedHandler = (providerID: string) => void | Promise<void>
+
+export interface DialogProviderProps {
+  onConnected?: ProviderConnectedHandler
+}
+
+export async function continueAfterProviderConnection(input: {
+  providerID: string
+  onConnected?: ProviderConnectedHandler
+  showModels: (providerID: string) => void
+}) {
+  if (input.onConnected) {
+    await input.onConnected(input.providerID)
+    return
+  }
+  input.showModels(input.providerID)
+}
+
+export function createDialogProviderOptions(props: DialogProviderProps = {}) {
   const sync = useSync()
   const dialog = useDialog()
   const sdk = useSDK()
@@ -126,7 +144,9 @@ export function createDialogProviderOptions() {
             async onSelect() {
               const providerID = await promptCustomProviderID()
               if (!providerID) return
-              return dialog.replace(() => <ApiMethod providerID={providerID} title="API key" custom />)
+              return dialog.replace(() => (
+                <ApiMethod providerID={providerID} title="API key" custom onConnected={props.onConnected} />
+              ))
             },
           }
         }
@@ -197,12 +217,24 @@ export function createDialogProviderOptions() {
               }
               if (result.data?.method === "code") {
                 dialog.replace(() => (
-                  <CodeMethod providerID={providerID} title={method.label} index={index} authorization={result.data!} />
+                  <CodeMethod
+                    providerID={providerID}
+                    title={method.label}
+                    index={index}
+                    authorization={result.data!}
+                    onConnected={props.onConnected}
+                  />
                 ))
               }
               if (result.data?.method === "auto") {
                 dialog.replace(() => (
-                  <AutoMethod providerID={providerID} title={method.label} index={index} authorization={result.data!} />
+                  <AutoMethod
+                    providerID={providerID}
+                    title={method.label}
+                    index={index}
+                    authorization={result.data!}
+                    onConnected={props.onConnected}
+                  />
                 ))
               }
             }
@@ -214,7 +246,12 @@ export function createDialogProviderOptions() {
                 metadata = value
               }
               return dialog.replace(() => (
-                <ApiMethod providerID={providerID} title={method.label} metadata={metadata} />
+                <ApiMethod
+                  providerID={providerID}
+                  title={method.label}
+                  metadata={metadata}
+                  onConnected={props.onConnected}
+                />
               ))
             }
           },
@@ -225,8 +262,8 @@ export function createDialogProviderOptions() {
   return options
 }
 
-export function DialogProvider() {
-  const options = createDialogProviderOptions()
+export function DialogProvider(props: DialogProviderProps = {}) {
+  const options = createDialogProviderOptions(props)
   return <DialogSelect title="Connect a provider" options={options()} />
 }
 
@@ -235,6 +272,7 @@ interface AutoMethodProps {
   providerID: string
   title: string
   authorization: ProviderAuthAuthorization
+  onConnected?: ProviderConnectedHandler
 }
 function AutoMethod(props: AutoMethodProps) {
   const { theme } = useTheme()
@@ -280,7 +318,11 @@ function AutoMethod(props: AutoMethodProps) {
     }
     await sdk.client.instance.dispose()
     await sync.bootstrap()
-    dialog.replace(() => <DialogModel providerID={props.providerID} />)
+    await continueAfterProviderConnection({
+      providerID: props.providerID,
+      onConnected: props.onConnected,
+      showModels: (providerID) => dialog.replace(() => <DialogModel providerID={providerID} />),
+    })
   })
 
   return (
@@ -310,6 +352,7 @@ interface CodeMethodProps {
   title: string
   providerID: string
   authorization: ProviderAuthAuthorization
+  onConnected?: ProviderConnectedHandler
 }
 function CodeMethod(props: CodeMethodProps) {
   const { theme } = useTheme()
@@ -331,7 +374,11 @@ function CodeMethod(props: CodeMethodProps) {
         if (!error) {
           await sdk.client.instance.dispose()
           await sync.bootstrap()
-          dialog.replace(() => <DialogModel providerID={props.providerID} />)
+          await continueAfterProviderConnection({
+            providerID: props.providerID,
+            onConnected: props.onConnected,
+            showModels: (providerID) => dialog.replace(() => <DialogModel providerID={providerID} />),
+          })
           return
         }
         setError(true)
@@ -354,6 +401,7 @@ interface ApiMethodProps {
   title: string
   metadata?: Record<string, string>
   custom?: boolean
+  onConnected?: ProviderConnectedHandler
 }
 function ApiMethod(props: ApiMethodProps) {
   const dialog = useDialog()
@@ -412,7 +460,11 @@ function ApiMethod(props: ApiMethodProps) {
           dialog.clear()
           return
         }
-        dialog.replace(() => <DialogModel providerID={props.providerID} />)
+        await continueAfterProviderConnection({
+          providerID: props.providerID,
+          onConnected: props.onConnected,
+          showModels: (providerID) => dialog.replace(() => <DialogModel providerID={providerID} />),
+        })
       }}
     />
   )
