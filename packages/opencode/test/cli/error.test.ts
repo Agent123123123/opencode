@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { AccountTransportError } from "../../src/account/schema"
-import { FormatError } from "../../src/cli/error"
+import { FormatError, FormatUnknownError } from "../../src/cli/error"
 import { UI } from "../../src/cli/ui"
 
 describe("cli.error", () => {
@@ -91,5 +91,36 @@ describe("cli.error", () => {
 
   test("formats cancelled UI errors as empty output", () => {
     expect(FormatError(new UI.CancelledError())).toBe("")
+  })
+
+  test("preserves the complete cause chain for unknown errors", () => {
+    const system = new Error("listen failed: EADDRINUSE")
+    system.stack = "SystemError: listen failed: EADDRINUSE"
+    Object.assign(system, { code: "EADDRINUSE", errno: 0, syscall: "listen" })
+    const serve = new Error("server layer failed", { cause: system })
+    serve.stack = "ServeError: server layer failed"
+    Object.assign(serve, { _tag: "ServeError" })
+    const bootstrap = new Error("bootstrap failed", { cause: serve })
+    bootstrap.stack = "Error: bootstrap failed"
+
+    expect(FormatUnknownError(bootstrap)).toBe(
+      [
+        "Error: bootstrap failed",
+        "Caused by:",
+        "ServeError: server layer failed",
+        'Details: _tag="ServeError"',
+        "Caused by:",
+        "SystemError: listen failed: EADDRINUSE",
+        'Details: code="EADDRINUSE" errno=0 syscall="listen"',
+      ].join("\n"),
+    )
+  })
+
+  test("terminates circular cause chains", () => {
+    const error = new Error("cycle")
+    error.stack = "Error: cycle"
+    error.cause = error
+
+    expect(FormatUnknownError(error)).toBe("Error: cycle\nCaused by:\n[circular error cause]")
   })
 })

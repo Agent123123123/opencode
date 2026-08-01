@@ -126,5 +126,28 @@ export function FormatError(input: unknown): string | undefined {
 }
 
 export function FormatUnknownError(input: unknown): string {
-  return errorFormat(input)
+  return formatUnknownError(input, new Set(), 0)
+}
+
+function formatUnknownError(input: unknown, seen: Set<unknown>, depth: number): string {
+  if ((input instanceof Error || isRecord(input)) && seen.has(input)) return "[circular error cause]"
+  if (input instanceof Error || isRecord(input)) seen.add(input)
+
+  const formatted = formatUnknownErrorEntry(input)
+  const cause = input instanceof Error ? input.cause : isRecord(input) ? input.cause : undefined
+  if (cause === undefined) return formatted
+  if (depth >= 7) return `${formatted}\nCaused by:\n[error cause chain truncated]`
+  return `${formatted}\nCaused by:\n${formatUnknownError(cause, seen, depth + 1)}`
+}
+
+function formatUnknownErrorEntry(input: unknown) {
+  const formatted = errorFormat(input)
+  if (!isRecord(input)) return formatted
+  const details = ["_tag", "code", "errno", "syscall", "address", "port"].flatMap((key) => {
+    const value = input[key]
+    if (typeof value !== "string" && typeof value !== "number") return []
+    return [`${key}=${JSON.stringify(value)}`]
+  })
+  if (details.length === 0) return formatted
+  return `${formatted}\nDetails: ${details.join(" ")}`
 }
