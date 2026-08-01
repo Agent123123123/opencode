@@ -317,7 +317,7 @@ function AutoMethod(props: AutoMethodProps) {
       return
     }
     await sdk.client.instance.dispose()
-    await sync.bootstrap()
+    await sync.bootstrap({ preserveSessions: true })
     await continueAfterProviderConnection({
       providerID: props.providerID,
       onConnected: props.onConnected,
@@ -373,7 +373,7 @@ function CodeMethod(props: CodeMethodProps) {
         })
         if (!error) {
           await sdk.client.instance.dispose()
-          await sync.bootstrap()
+          await sync.bootstrap({ preserveSessions: true })
           await continueAfterProviderConnection({
             providerID: props.providerID,
             onConnected: props.onConnected,
@@ -451,7 +451,7 @@ function ApiMethod(props: ApiMethodProps) {
           },
         })
         await sdk.client.instance.dispose()
-        await sync.bootstrap()
+        await sync.bootstrap({ preserveSessions: true })
         if (props.custom && !sync.data.provider_next.all.some((provider) => provider.id === props.providerID)) {
           toast.show({
             variant: "info",

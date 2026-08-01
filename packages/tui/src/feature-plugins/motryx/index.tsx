@@ -297,7 +297,7 @@ export function motryxSelectionBoundaryCommands(api: TuiPluginApi): TuiKeymapCom
               api.ui.dialog.clear()
               api.ui.toast({
                 variant: "success",
-                message: "Provider connected. Motryx model tiers remain launcher-owned.",
+                message: "Provider credential saved. Motryx strong and weak models are unchanged.",
               })
             }}
           />

@@ -24,7 +24,7 @@ function global(payload: Event): GlobalEvent {
   return { directory, project: "proj_test", payload }
 }
 
-test("projects external V2 turns incrementally and recovers the exact session after reconnect", async () => {
+test("projects external V2 turns incrementally and preserves the exact session across reconnect and instance refresh", async () => {
   await using tmp = await tmpdir()
   await Bun.write(`${tmp.path}/kv.json`, "{}")
   const events = createEventSource()
@@ -32,7 +32,9 @@ test("projects external V2 turns incrementally and recovers the exact session af
     { id: "msg_user_1", type: "user", text: "start", time: { created: 1 } },
   ]
   let messageReads = 0
+  let providerAuthReads = 0
   const calls = createFetch((url) => {
+    if (url.pathname === "/provider/auth") providerAuthReads++
     if (url.pathname === `/api/session/${sessionID}`)
       return json({
         data: {
@@ -170,6 +172,12 @@ test("projects external V2 turns incrementally and recovers the exact session af
     await wait(() => sync.data.message[sessionID]?.some((message) => message.id === "msg_assistant_recovered"))
     expect(messageReads).toBe(2)
     expect(sync.data.message[sessionID][0]).toBe(first)
+
+    const authReadsBeforeDispose = providerAuthReads
+    events.emit(global({ id: "evt_instance_disposed", type: "server.instance.disposed", properties: { directory } }))
+    await wait(() => providerAuthReads > authReadsBeforeDispose)
+    expect(sync.session.get(sessionID)?.id).toBe(sessionID)
+    expect(sync.data.message[sessionID]?.some((message) => message.id === "msg_assistant_recovered")).toBe(true)
   } finally {
     app.renderer.destroy()
   }

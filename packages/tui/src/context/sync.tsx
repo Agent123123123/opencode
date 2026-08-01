@@ -279,7 +279,7 @@ export const {
           break
         }
         case "server.instance.disposed":
-          void bootstrap()
+          void bootstrap({ preserveSessions: startup.sessionApi === "v2" })
           break
         case "permission.replied": {
           const requests = store.permission[event.properties.sessionID]
@@ -560,8 +560,9 @@ export const {
     const exit = useExit()
     const args = useArgs()
 
-    async function bootstrap(input: { fatal?: boolean } = {}) {
+    async function bootstrap(input: { fatal?: boolean; preserveSessions?: boolean } = {}) {
       const fatal = input.fatal ?? true
+      const preserveSessions = input.preserveSessions === true && startup.sessionApi === "v2"
       const workspace = project.workspace.current()
       const projectPromise = project.sync()
       const sessionListPromise = projectPromise.then(() => listSessions())
@@ -609,7 +610,7 @@ export const {
           const consoleStateResponse = consoleStatePromise
           const agentsResponse = agentsPromise.then((x) => x.data ?? [])
           const configResponse = configPromise.then((x) => x.data!)
-          const sessionListResponse = args.continue ? sessionListPromise : undefined
+          const sessionListResponse = args.continue && !preserveSessions ? sessionListPromise : undefined
 
           return Promise.all([
             providersResponse,
@@ -644,7 +645,9 @@ export const {
           if (store.status !== "complete") setStore("status", "partial")
           // non-blocking
           void Promise.all([
-            ...(args.continue ? [] : [sessionListPromise.then((sessions) => setStore("session", reconcile(sessions)))]),
+            ...(args.continue || preserveSessions
+              ? []
+              : [sessionListPromise.then((sessions) => setStore("session", reconcile(sessions)))]),
             consoleStatePromise.then((consoleState) => setStore("console_state", reconcile(consoleState))),
             sdk.client.command.list({ workspace }).then((x) => setStore("command", reconcile(x.data ?? []))),
             sdk.client.lsp.status({ workspace }).then((x) => setStore("lsp", reconcile(x.data ?? []))),
