@@ -9,7 +9,14 @@ import * as fuzzysort from "fuzzysort"
 import { useConnected } from "./use-connected"
 import { useSync } from "../context/sync"
 
-export function DialogModel(props: { providerID?: string }) {
+export type DialogModelSelection = { providerID: string; modelID: string }
+
+export function DialogModel(props: {
+  providerID?: string
+  title?: string
+  current?: DialogModelSelection
+  onSelect?: (selection: DialogModelSelection) => void | Promise<void>
+}) {
   const local = useLocal()
   const sync = useSync()
   const dialog = useDialog()
@@ -140,7 +147,13 @@ export function DialogModel(props: { providerID?: string }) {
   })
 
   function onSelect(providerID: string, modelID: string) {
-    local.model.set({ providerID, modelID }, { recent: true })
+    const selection = { providerID, modelID }
+    if (props.onSelect) {
+      local.model.remember(selection)
+      void props.onSelect(selection)
+      return
+    }
+    local.model.set(selection, { recent: true })
     const list = local.model.variant.list()
     const cur = local.model.variant.selected()
     if (cur === "default" || (cur && list.includes(cur))) {
@@ -162,7 +175,23 @@ export function DialogModel(props: { providerID?: string }) {
           command: "model.dialog.provider",
           title: connected() ? "Connect provider" : "View all providers",
           onTrigger() {
-            dialog.replace(() => <DialogProvider />)
+            dialog.replace(() => (
+              <DialogProvider
+                onConnected={
+                  props.onSelect
+                    ? (providerID) =>
+                        dialog.replace(() => (
+                          <DialogModel
+                            providerID={providerID}
+                            title={props.title}
+                            current={props.current}
+                            onSelect={props.onSelect}
+                          />
+                        ))
+                    : undefined
+                }
+              />
+            ))
           },
         },
         {
@@ -177,8 +206,8 @@ export function DialogModel(props: { providerID?: string }) {
       onFilter={setQuery}
       flat={true}
       skipFilter={true}
-      title={title()}
-      current={local.model.current()}
+      title={provider() ? title() : (props.title ?? title())}
+      current={props.current ?? local.model.current()}
     />
   )
 }

@@ -2,8 +2,15 @@
 import type { TuiPlugin, TuiPluginApi } from "@opencode-ai/plugin/tui"
 import type { BuiltinTuiPlugin } from "../builtins"
 import { DialogProvider } from "../../component/dialog-provider"
+import { DialogModel, type DialogModelSelection } from "../../component/dialog-model"
 import { MotryxRoute, motryxDebugViewFromEnv, motryxRouteConfig, type MotryxRouteActions } from "./route"
 import { createMotryxPromptAdmissionHandler } from "./prompt-recovery"
+import {
+  motryxModelSetCommandFromEnv,
+  setMotryxModelTier,
+  type MotryxModelSetCommandResult,
+  type MotryxModelTier,
+} from "./model-config"
 
 export const MOTRYX_ROUTE = "motryx"
 export const MOTRYX_PRODUCT_COMMAND_PRIORITY = 100
@@ -208,7 +215,13 @@ export function motryxSessionNavigationCommands(
   ]
 }
 
-export function motryxSelectionBoundaryCommands(api: TuiPluginApi): TuiKeymapCommand[] {
+export function motryxSelectionBoundaryCommands(
+  api: TuiPluginApi,
+  modelSetCommand: MotryxModelSetCommandResult = motryxModelSetCommandFromEnv(),
+): TuiKeymapCommand[] {
+  let modelSetPending = false
+  let savedStrongModel: string | undefined
+  let savedWeakModel: string | undefined
   const modelBoundary = () =>
     api.ui.toast({
       variant: "info",
@@ -237,24 +250,48 @@ export function motryxSelectionBoundaryCommands(api: TuiPluginApi): TuiKeymapCom
     },
     {
       name: "motryx.model.strong",
-      title: "Show strong model configuration",
-      description: "Show the launcher-owned model tier used by Orchestrator and Analyst.",
+      title: "Configure strong model",
+      description: "Select the launcher-owned model tier used by Orchestrator and Analyst.",
       slashName: "strong_model",
       category: "Motryx",
       namespace: "palette",
       run() {
-        explainLauncherOwnedModel(api, "strong", api.state.config.model)
+        showMotryxModelPicker(
+          api,
+          modelSetCommand,
+          "strong",
+          savedStrongModel ?? api.state.config.model,
+          () => modelSetPending,
+          (value) => {
+            modelSetPending = value
+          },
+          (model) => {
+            savedStrongModel = model
+          },
+        )
       },
     },
     {
       name: "motryx.model.weak",
-      title: "Show weak model configuration",
-      description: "Show the launcher-owned model tier used by Coordinator, Checker, and helpers.",
+      title: "Configure weak model",
+      description: "Select the launcher-owned model tier used by Coordinator, Checker, and helpers.",
       slashName: "weak_model",
       category: "Motryx",
       namespace: "palette",
       run() {
-        explainLauncherOwnedModel(api, "weak", api.state.config.small_model)
+        showMotryxModelPicker(
+          api,
+          modelSetCommand,
+          "weak",
+          savedWeakModel ?? api.state.config.small_model,
+          () => modelSetPending,
+          (value) => {
+            modelSetPending = value
+          },
+          (model) => {
+            savedWeakModel = model
+          },
+        )
       },
     },
     ...["model.cycle_recent", "model.cycle_recent_reverse", "model.cycle_favorite", "model.cycle_favorite_reverse"].map(
@@ -315,11 +352,58 @@ export function motryxSelectionBoundaryCommands(api: TuiPluginApi): TuiKeymapCom
   ]
 }
 
-function explainLauncherOwnedModel(api: TuiPluginApi, tier: "strong" | "weak", model: string | undefined) {
-  api.ui.toast({
-    variant: "info",
-    message: `${tier} model: ${model ?? "not configured"}. To change it, run motryx models set ${tier} <provider/model> outside the TUI, then relaunch.`,
-  })
+function showMotryxModelPicker(
+  api: TuiPluginApi,
+  command: MotryxModelSetCommandResult,
+  tier: MotryxModelTier,
+  configured: string | undefined,
+  pending: () => boolean,
+  setPending: (value: boolean) => void,
+  onSaved: (model: string) => void,
+) {
+  if (!command.ok) {
+    api.ui.toast({ variant: "error", message: command.error })
+    return
+  }
+  const current = parseConfiguredModel(configured)
+  api.ui.dialog.replace(() => (
+    <DialogModel
+      title={`Select ${tier} model`}
+      current={current}
+      onSelect={async (selection) => {
+        if (pending()) return
+        setPending(true)
+        const model = `${selection.providerID}/${selection.modelID}`
+        try {
+          await setMotryxModelTier(command.value, tier, model, { signal: api.lifecycle.signal })
+          onSaved(model)
+          api.ui.dialog.clear()
+          api.ui.toast({
+            variant: "success",
+            message:
+              tier === "strong"
+                ? `Strong model saved: ${model}. Start a new Motryx Orchestrator to apply it; this conversation is unchanged.`
+                : `Weak model saved: ${model}. Restart Motryx to apply it to new worker runtimes; running workers are unchanged.`,
+          })
+        } catch (error) {
+          api.ui.toast({
+            variant: "error",
+            message: error instanceof Error ? error.message : String(error),
+          })
+        } finally {
+          setPending(false)
+        }
+      }}
+    />
+  ))
+}
+
+function parseConfiguredModel(value: string | undefined): DialogModelSelection | undefined {
+  if (!value) return
+  const [providerID, ...parts] = value.split("/")
+  const modelID = parts.join("/")
+  if (!providerID || !modelID) return
+  return { providerID, modelID }
 }
 
 function showBoundConversation(
