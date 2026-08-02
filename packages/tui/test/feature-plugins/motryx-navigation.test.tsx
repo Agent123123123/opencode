@@ -62,9 +62,9 @@ test("Motryx blocks generic new-session and quick-slot navigation", () => {
   expect(focused).toBe(1)
 })
 
-test("Motryx preserves OpenCode provider connect while keeping model and agent selection launcher-owned", () => {
+test("Motryx opens native model pickers for launcher-owned tiers and preserves OpenCode provider connect", () => {
   const notices: string[] = []
-  let providerDialogs = 0
+  let dialogs = 0
   const base = createTuiPluginApi()
   const api = {
     ...base,
@@ -81,7 +81,7 @@ test("Motryx preserves OpenCode provider connect while keeping model and agent s
       dialog: {
         ...base.ui.dialog,
         replace() {
-          providerDialogs += 1
+          dialogs += 1
         },
       },
       toast(input: { message: string }) {
@@ -89,7 +89,13 @@ test("Motryx preserves OpenCode provider connect while keeping model and agent s
       },
     },
   } as unknown as TuiPluginApi
-  const commands = motryxSelectionBoundaryCommands(api)
+  const commands = motryxSelectionBoundaryCommands(api, {
+    ok: true,
+    value: {
+      argv: ["/runtime/scripts/motryx.sh", "--project", "/tmp/project", "models", "set", "--defer-refresh"],
+      projectID: "/tmp/project",
+    },
+  })
 
   const generic = commands.find((command) => command.name === "model.list")
   expect(generic?.hidden).toBe(true)
@@ -102,19 +108,18 @@ test("Motryx preserves OpenCode provider connect while keeping model and agent s
   expect(weak?.slashName).toBe("weak_model")
   strong?.run({} as never)
   weak?.run({} as never)
+  expect(dialogs).toBe(2)
 
   commands.find((command) => command.name === "agent.list")?.run({} as never)
   const connect = commands.find((command) => command.name === "provider.connect")
   expect(connect?.slashName).toBe("connect")
   expect(connect?.hidden).not.toBe(true)
   connect?.run({} as never)
-  expect(providerDialogs).toBe(1)
+  expect(dialogs).toBe(3)
   for (const name of ["session.fork", "session.compact", "session.undo", "session.redo"])
     commands.find((command) => command.name === name)?.run({} as never)
   expect(notices).toEqual([
     "Motryx model tiers are launcher-owned. Use /strong_model or /weak_model for the exact configuration command.",
-    "strong model: openai/gpt-5.5. To change it, run motryx models set strong <provider/model> outside the TUI, then relaunch.",
-    "weak model: zai-coding-plan/glm-5.2. To change it, run motryx models set weak <provider/model> outside the TUI, then relaunch.",
     "Motryx agents are assigned by the IC sidecar and cannot be switched from the conversation TUI.",
     "Motryx does not expose fork, compact, undo, or redo in its multi-agent conversation.",
     "Motryx does not expose fork, compact, undo, or redo in its multi-agent conversation.",
