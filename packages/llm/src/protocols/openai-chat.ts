@@ -431,7 +431,8 @@ const step = (state: ParserState, event: OpenAIChatEvent) =>
         ADAPTER,
         tools,
         tool.index,
-        { id: tool.id ?? undefined, name: tool.function?.name ?? undefined, text: tool.function?.arguments ?? "" },
+        // Some OpenAI-compatible providers repeat empty identity strings on continuation deltas.
+        { id: tool.id || undefined, name: tool.function?.name || undefined, text: tool.function?.arguments ?? "" },
         "OpenAI Chat tool call delta is missing id or name",
       )
       if (ToolStream.isError(result)) return yield* result
