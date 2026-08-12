@@ -111,6 +111,22 @@ const tui: TuiPlugin = async (api) => {
         run: () => actions?.showInspect(),
       },
       {
+        name: "motryx.incidents",
+        title: "Show Motryx runtime incidents",
+        slashName: "motryx-incidents",
+        category: "Motryx",
+        namespace: "palette",
+        run: () => actions?.showIncidents(),
+      },
+      {
+        name: "motryx.incident.dismiss_latest",
+        title: "Dismiss latest Motryx runtime error card",
+        slashName: "motryx-dismiss-error",
+        category: "Motryx",
+        namespace: "palette",
+        run: () => actions?.dismissLatestIncident(),
+      },
+      {
         name: "motryx.target.orchestrator",
         title: "Show Orchestrator conversation",
         slashName: "motryx-orchestrator",
@@ -151,13 +167,14 @@ const tui: TuiPlugin = async (api) => {
         run: () => actions?.moveLane(1),
       },
     ],
-    bindings: debugView
-      ? [
+    bindings: [
+          { key: "alt+x", cmd: "motryx.incident.dismiss_latest", desc: "Dismiss latest runtime error card" },
+          ...(debugView ? [
           { key: "alt+1", cmd: "motryx.target.orchestrator", desc: "Show Orchestrator conversation" },
           { key: "alt+2", cmd: "motryx.target.coordinator", desc: "Show Coordinator conversation" },
           { key: "alt+3", cmd: "motryx.target.checker", desc: "Show Checker conversation" },
-        ]
-      : [],
+          ] : []),
+        ],
   })
 }
 
@@ -182,6 +199,22 @@ export function motryxSessionNavigationCommands(
         const current = actions()
         if (current) {
           void current.showSessions()
+          return
+        }
+        showBoundConversation(api, config, actions)
+      },
+    },
+    {
+      name: "session.rename",
+      title: "Rename Motryx Orchestrator",
+      description: "Rename the current launcher-bound Motryx Orchestrator conversation.",
+      slashName: "rename",
+      category: "Motryx",
+      namespace: "palette",
+      run() {
+        const current = actions()
+        if (current) {
+          void current.rename()
           return
         }
         showBoundConversation(api, config, actions)
@@ -382,8 +415,8 @@ function showMotryxModelPicker(
             variant: "success",
             message:
               tier === "strong"
-                ? `Strong model saved: ${model}. Start a new Motryx Orchestrator to apply it; this conversation is unchanged.`
-                : `Weak model saved: ${model}. Restart Motryx to apply it to new worker runtimes; running workers are unchanged.`,
+                ? `Strong model saved: ${model}. The next Motryx launch converges all Orchestrator and Analyst sessions at their turn boundaries.`
+                : `Weak model saved: ${model}. The next Motryx launch converges all worker and helper sessions at their turn boundaries.`,
           })
         } catch (error) {
           api.ui.toast({

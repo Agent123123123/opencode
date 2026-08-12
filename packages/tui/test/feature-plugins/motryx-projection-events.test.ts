@@ -19,7 +19,7 @@ const config: MotryxControlConfig = {
 function validSnapshot(revision = "server-generation:ic:one") {
   const now = "2026-07-19T00:00:00.000Z"
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     projectID,
     orchestratorSessionID: config.orchestratorSessionID,
     projectionRevision: revision,
@@ -48,6 +48,8 @@ function validSnapshot(revision = "server-generation:ic:one") {
     agents: [],
     artifacts: [],
     resourceBlocks: [],
+    incidents: [],
+    attention: { visibleOpenIncidentCount: 0, failedLaneCount: 0 },
     functionSlots: [],
     inboxItems: [],
     deliveryFences: [],
@@ -66,7 +68,7 @@ function streamFrom(chunks: Uint8Array[]) {
 
 function eventData(revision: string, generation = 3) {
   return JSON.stringify({
-    schemaVersion: 2,
+    schemaVersion: 3,
     projectID,
     orchestratorSessionID: config.orchestratorSessionID,
     bindingGeneration: generation,
@@ -265,7 +267,7 @@ describe("Motryx projection controller", () => {
       .controller()
       .enqueue(
         encoder.encode(
-          `event: route.invalidated\ndata: ${JSON.stringify({ schemaVersion: 2, reason: "binding_generation_changed" })}\n\n`,
+          `event: route.invalidated\ndata: ${JSON.stringify({ schemaVersion: 3, reason: "binding_generation_changed" })}\n\n`,
         ),
       )
     await eventually(() => {

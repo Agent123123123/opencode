@@ -7,10 +7,14 @@ import { createTuiPluginApi } from "../fixture/tui-plugin"
 
 test("Motryx session navigation delegates /sessions to the routed product switcher", () => {
   let opened = 0
+  let renamed = 0
   const base = createTuiPluginApi()
   const actions = {
     async showSessions() {
       opened += 1
+    },
+    async rename() {
+      renamed += 1
     },
   } as unknown as MotryxRouteActions
   const commands = motryxSessionNavigationCommands(
@@ -32,6 +36,11 @@ test("Motryx session navigation delegates /sessions to the routed product switch
   expect(list?.slashAliases).toEqual(["resume", "continue"])
   list?.run({} as never)
   expect(opened).toBe(1)
+
+  const rename = commands.find((command) => command.name === "session.rename")
+  expect(rename?.slashName).toBe("rename")
+  rename?.run({} as never)
+  expect(renamed).toBe(1)
 })
 
 test("Motryx blocks generic new-session and quick-slot navigation", () => {
