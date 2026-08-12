@@ -588,6 +588,63 @@ describe("OpenAI Chat route", () => {
     }),
   )
 
+  it.effect("inherits streamed tool identity from earlier deltas when continuations repeat empty strings", () =>
+    Effect.gen(function* () {
+      const body = sseEvents(
+        deltaChunk({
+          role: "assistant",
+          tool_calls: [{ index: 0, id: "call_1", function: { name: "lookup", arguments: '{"query"' } }],
+        }),
+        deltaChunk({
+          tool_calls: [{ index: 0, id: "", function: { name: "", arguments: ':"weather"}' } }],
+        }),
+        deltaChunk({}, "tool_calls"),
+      )
+      const response = yield* LLMClient.generate(
+        LLM.updateRequest(request, {
+          tools: [{ name: "lookup", description: "Lookup data", inputSchema: { type: "object" } }],
+        }),
+      ).pipe(Effect.provide(fixedResponse(body)))
+
+      expect(response.events).toEqual([
+        { type: "step-start", index: 0 },
+        { type: "tool-input-start", id: "call_1", name: "lookup", providerMetadata: undefined },
+        { type: "tool-input-delta", id: "call_1", name: "lookup", text: '{"query"' },
+        { type: "tool-input-delta", id: "call_1", name: "lookup", text: ':"weather"}' },
+        { type: "tool-input-end", id: "call_1", name: "lookup", providerMetadata: undefined },
+        {
+          type: "tool-call",
+          id: "call_1",
+          name: "lookup",
+          input: { query: "weather" },
+          providerExecuted: undefined,
+          providerMetadata: undefined,
+        },
+        { type: "step-finish", index: 0, reason: "tool-calls", usage: undefined, providerMetadata: undefined },
+        { type: "finish", reason: "tool-calls", usage: undefined },
+      ])
+    }),
+  )
+
+  it.effect("rejects an initial streamed tool delta with empty identity strings", () =>
+    Effect.gen(function* () {
+      const body = sseEvents(
+        deltaChunk({
+          role: "assistant",
+          tool_calls: [{ index: 0, id: "", function: { name: "", arguments: "{}" } }],
+        }),
+        deltaChunk({}, "tool_calls"),
+      )
+      const error = yield* LLMClient.generate(
+        LLM.updateRequest(request, {
+          tools: [{ name: "lookup", description: "Lookup data", inputSchema: { type: "object" } }],
+        }),
+      ).pipe(Effect.provide(fixedResponse(body)), Effect.flip)
+
+      expect(error.message).toContain("OpenAI Chat tool call delta is missing id or name")
+    }),
+  )
+
   it.effect("does not finalize streamed tool calls without a finish reason", () =>
     Effect.gen(function* () {
       const body = sseEvents(
