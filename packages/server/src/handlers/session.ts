@@ -150,6 +150,23 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
         }),
       )
       .handle(
+        "session.update",
+        Effect.fn(function* (ctx) {
+          return {
+            data: yield* session.setTitle({ sessionID: ctx.params.sessionID, title: ctx.payload.title }).pipe(
+              Effect.catchTag(
+                "Session.NotFoundError",
+                (error) =>
+                  new SessionNotFoundError({
+                    sessionID: error.sessionID,
+                    message: `Session not found: ${error.sessionID}`,
+                  }),
+              ),
+            ),
+          }
+        }),
+      )
+      .handle(
         "session.switchAgent",
         Effect.fn(function* (ctx) {
           yield* session.switchAgent({ sessionID: ctx.params.sessionID, agent: ctx.payload.agent }).pipe(
@@ -169,14 +186,40 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
         "session.switchModel",
         Effect.fn(function* (ctx) {
           yield* session.switchModel({ sessionID: ctx.params.sessionID, model: ctx.payload.model }).pipe(
-            Effect.catchTag("Session.NotFoundError", (error) =>
-              Effect.fail(
-                new SessionNotFoundError({
-                  sessionID: error.sessionID,
-                  message: `Session not found: ${error.sessionID}`,
-                }),
-              ),
-            ),
+            Effect.catchTags({
+              "Session.NotFoundError": (error) =>
+                Effect.fail(
+                  new SessionNotFoundError({
+                    sessionID: error.sessionID,
+                    message: `Session not found: ${error.sessionID}`,
+                  }),
+                ),
+              "SessionSelection.ModelNotSelectedError": () =>
+                Effect.fail(
+                  new ServiceUnavailableError({ message: "No supported model is available", service: "catalog" }),
+                ),
+              "SessionSelection.ModelUnavailableError": (error) =>
+                Effect.fail(
+                  new InvalidRequestError({
+                    message: `Unavailable model: ${error.model.providerID}/${error.model.id}`,
+                    field: "model",
+                  }),
+                ),
+              "SessionSelection.ModelUnsupportedError": (error) =>
+                Effect.fail(
+                  new InvalidRequestError({
+                    message: `Unsupported model: ${error.model.providerID}/${error.model.id}`,
+                    field: "model",
+                  }),
+                ),
+              "SessionSelection.VariantNotFoundError": (error) =>
+                Effect.fail(
+                  new InvalidRequestError({
+                    message: `Unknown model variant: ${error.model.variant}`,
+                    field: "model.variant",
+                  }),
+                ),
+            }),
           )
           return HttpApiSchema.NoContent.make()
         }),

@@ -123,6 +123,7 @@ export class TransportReason extends Schema.Class<TransportReason>("LLM.Error.Tr
   _tag: Schema.tag("Transport"),
   message: Schema.String,
   kind: Schema.optional(Schema.String),
+  code: Schema.optional(Schema.String),
   url: Schema.optional(Schema.String),
   http: Schema.optional(HttpContext),
 }) {
@@ -175,6 +176,10 @@ export class LLMError extends Schema.TaggedErrorClass<LLMError>()("LLM.Error", {
   module: Schema.String,
   method: Schema.String,
   reason: LLMErrorReason,
+  /** Physical provider request count retained by the bounded executor. */
+  attemptCount: Schema.optional(Schema.Number),
+  /** True only when a retryable error consumed the executor's complete budget. */
+  retryExhausted: Schema.optional(Schema.Boolean),
 }) {
   override readonly cause = this.reason
 

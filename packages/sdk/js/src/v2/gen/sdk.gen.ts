@@ -215,6 +215,7 @@ import type {
   SessionStatusResponses,
   SessionSummarizeErrors,
   SessionSummarizeResponses,
+  SessionTitle,
   SessionTodoErrors,
   SessionTodoResponses,
   SessionUnrevertErrors,
@@ -381,6 +382,8 @@ import type {
   V2SessionSwitchAgentResponses,
   V2SessionSwitchModelErrors,
   V2SessionSwitchModelResponses,
+  V2SessionUpdateErrors,
+  V2SessionUpdateResponses,
   V2SessionWaitErrors,
   V2SessionWaitResponses,
   V2SkillListErrors,
@@ -5537,6 +5540,41 @@ export class Session3 extends HeyApiClient {
   }
 
   /**
+   * Update session
+   *
+   * Update mutable Session metadata.
+   */
+  public update<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      title?: SessionTitle
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "body", key: "title" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).patch<V2SessionUpdateResponses, V2SessionUpdateErrors, ThrowOnError>({
+      url: "/api/session/{sessionID}",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
    * Switch session agent
    *
    * Switch the agent used by subsequent provider turns.
@@ -5578,7 +5616,7 @@ export class Session3 extends HeyApiClient {
   /**
    * Switch session model
    *
-   * Switch the model used by subsequent provider turns.
+   * Durably request the model used after the current Session turn boundary.
    */
   public switchModel<ThrowOnError extends boolean = false>(
     parameters: {

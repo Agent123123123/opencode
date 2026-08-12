@@ -25,14 +25,6 @@ export type InvalidCursorError = { readonly _tag: "InvalidCursorError"; readonly
 export const isInvalidCursorError = (value: unknown): value is InvalidCursorError =>
   typeof value === "object" && value !== null && "_tag" in value && value["_tag"] === "InvalidCursorError"
 
-export type SessionNotFoundError = {
-  readonly _tag: "SessionNotFoundError"
-  readonly sessionID: string
-  readonly message: string
-}
-export const isSessionNotFoundError = (value: unknown): value is SessionNotFoundError =>
-  typeof value === "object" && value !== null && "_tag" in value && value["_tag"] === "SessionNotFoundError"
-
 export type ConflictError = {
   readonly _tag: "ConflictError"
   readonly message: string
@@ -48,6 +40,14 @@ export type ServiceUnavailableError = {
 }
 export const isServiceUnavailableError = (value: unknown): value is ServiceUnavailableError =>
   typeof value === "object" && value !== null && "_tag" in value && value["_tag"] === "ServiceUnavailableError"
+
+export type SessionNotFoundError = {
+  readonly _tag: "SessionNotFoundError"
+  readonly sessionID: string
+  readonly message: string
+}
+export const isSessionNotFoundError = (value: unknown): value is SessionNotFoundError =>
+  typeof value === "object" && value !== null && "_tag" in value && value["_tag"] === "SessionNotFoundError"
 
 export type MessageNotFoundError = {
   readonly _tag: "MessageNotFoundError"
@@ -332,6 +332,45 @@ export type SessionsActiveOutput = { readonly data: { readonly [x: string]: { re
 export type SessionsGetInput = { readonly sessionID: { readonly sessionID: string }["sessionID"] }
 
 export type SessionsGetOutput = {
+  readonly data: {
+    readonly id: string
+    readonly parentID?: string
+    readonly projectID: string
+    readonly agent?: string
+    readonly model?: { readonly id: string; readonly providerID: string; readonly variant?: string }
+    readonly cost: number
+    readonly tokens: {
+      readonly input: number
+      readonly output: number
+      readonly reasoning: number
+      readonly cache: { readonly read: number; readonly write: number }
+    }
+    readonly time: { readonly created: number; readonly updated: number; readonly archived?: number }
+    readonly title: string
+    readonly location: { readonly directory: string; readonly workspaceID?: string }
+    readonly subpath?: string
+    readonly revert?: {
+      readonly messageID: string
+      readonly partID?: string
+      readonly snapshot?: string
+      readonly diff?: string
+      readonly files?: ReadonlyArray<{
+        readonly path: string
+        readonly status: "added" | "modified" | "deleted"
+        readonly additions: number
+        readonly deletions: number
+        readonly patch: string
+      }>
+    }
+  }
+}["data"]
+
+export type SessionsUpdateInput = {
+  readonly sessionID: { readonly sessionID: string }["sessionID"]
+  readonly title: { readonly title: string }["title"]
+}
+
+export type SessionsUpdateOutput = {
   readonly data: {
     readonly id: string
     readonly parentID?: string
@@ -700,6 +739,18 @@ export type SessionsHistoryOutput = {
     | {
         readonly id: string
         readonly metadata?: { readonly [x: string]: JsonValue }
+        readonly type: "session.next.model.switch.requested"
+        readonly durable?: { readonly aggregateID: string; readonly seq: number; readonly version: number }
+        readonly location?: { readonly directory: string; readonly workspaceID?: string }
+        readonly data: {
+          readonly timestamp: number
+          readonly sessionID: string
+          readonly model: { readonly id: string; readonly providerID: string; readonly variant?: string }
+        }
+      }
+    | {
+        readonly id: string
+        readonly metadata?: { readonly [x: string]: JsonValue }
         readonly type: "session.next.model.switched"
         readonly durable?: { readonly aggregateID: string; readonly seq: number; readonly version: number }
         readonly location?: { readonly directory: string; readonly workspaceID?: string }
@@ -709,6 +760,14 @@ export type SessionsHistoryOutput = {
           readonly messageID: string
           readonly model: { readonly id: string; readonly providerID: string; readonly variant?: string }
         }
+      }
+    | {
+        readonly id: string
+        readonly metadata?: { readonly [x: string]: JsonValue }
+        readonly type: "session.next.title.changed"
+        readonly durable?: { readonly aggregateID: string; readonly seq: number; readonly version: number }
+        readonly location?: { readonly directory: string; readonly workspaceID?: string }
+        readonly data: { readonly timestamp: number; readonly sessionID: string; readonly title: string }
       }
     | {
         readonly id: string
@@ -788,6 +847,76 @@ export type SessionsHistoryOutput = {
           readonly sessionID: string
           readonly messageID: string
           readonly text: string
+        }
+      }
+    | {
+        readonly id: string
+        readonly metadata?: { readonly [x: string]: JsonValue }
+        readonly type: "session.turn.started"
+        readonly durable?: { readonly aggregateID: string; readonly seq: number; readonly version: number }
+        readonly location?: { readonly directory: string; readonly workspaceID?: string }
+        readonly data: {
+          readonly timestamp: number
+          readonly sessionID: string
+          readonly turnID: string
+          readonly turnStartedAt: number
+          readonly activityInputIDs: ReadonlyArray<string>
+        }
+      }
+    | {
+        readonly id: string
+        readonly metadata?: { readonly [x: string]: JsonValue }
+        readonly type: "session.turn.not_started"
+        readonly durable?: { readonly aggregateID: string; readonly seq: number; readonly version: number }
+        readonly location?: { readonly directory: string; readonly workspaceID?: string }
+        readonly data: {
+          readonly timestamp: number
+          readonly sessionID: string
+          readonly schema: "opencode.turn_not_started.v1"
+          readonly turnID: string
+          readonly activityInputIDs: ReadonlyArray<string>
+          readonly outcome: "failed" | "aborted" | "interrupted"
+          readonly reason: string
+          readonly errorClass: "transport" | "resource" | "protocol" | "interrupt" | "unknown"
+        }
+      }
+    | {
+        readonly id: string
+        readonly metadata?: { readonly [x: string]: JsonValue }
+        readonly type: "session.turn.settled"
+        readonly durable?: { readonly aggregateID: string; readonly seq: number; readonly version: number }
+        readonly location?: { readonly directory: string; readonly workspaceID?: string }
+        readonly data: {
+          readonly timestamp: number
+          readonly sessionID: string
+          readonly schema: "opencode.turn_settled.v2"
+          readonly turnID: string
+          readonly turnStartedAt: number
+          readonly activityInputIDs: ReadonlyArray<string>
+          readonly outcome: "completed" | "error" | "aborted"
+          readonly reason?: string
+          readonly errorClass?: "transport" | "resource" | "protocol" | "interrupt" | "unknown"
+          readonly abortOrigin?: "user" | "framework" | "runtime_shutdown" | "unknown"
+          readonly failure?: {
+            readonly kind:
+              | "authentication"
+              | "quota"
+              | "rate_limit"
+              | "provider_internal"
+              | "transport"
+              | "invalid_request"
+              | "content_policy"
+              | "unknown"
+            readonly safeMessage: string
+            readonly httpStatus?: number | "Infinity" | "-Infinity" | "NaN"
+            readonly transportKind?: string
+            readonly transportCode?: string
+            readonly retryable: boolean
+            readonly retryExhausted: boolean
+            readonly attemptCount: number | "Infinity" | "-Infinity" | "NaN"
+            readonly providerID: string
+            readonly modelID: string
+          }
         }
       }
     | {
@@ -1158,6 +1287,18 @@ export type SessionsEventsOutput =
   | {
       readonly id: string
       readonly metadata?: { readonly [x: string]: unknown }
+      readonly type: "session.next.model.switch.requested"
+      readonly durable?: { readonly aggregateID: string; readonly seq: number; readonly version: number }
+      readonly location?: { readonly directory: string; readonly workspaceID?: string }
+      readonly data: {
+        readonly timestamp: number
+        readonly sessionID: string
+        readonly model: { readonly id: string; readonly providerID: string; readonly variant?: string }
+      }
+    }
+  | {
+      readonly id: string
+      readonly metadata?: { readonly [x: string]: unknown }
       readonly type: "session.next.model.switched"
       readonly durable?: { readonly aggregateID: string; readonly seq: number; readonly version: number }
       readonly location?: { readonly directory: string; readonly workspaceID?: string }
@@ -1167,6 +1308,14 @@ export type SessionsEventsOutput =
         readonly messageID: string
         readonly model: { readonly id: string; readonly providerID: string; readonly variant?: string }
       }
+    }
+  | {
+      readonly id: string
+      readonly metadata?: { readonly [x: string]: unknown }
+      readonly type: "session.next.title.changed"
+      readonly durable?: { readonly aggregateID: string; readonly seq: number; readonly version: number }
+      readonly location?: { readonly directory: string; readonly workspaceID?: string }
+      readonly data: { readonly timestamp: number; readonly sessionID: string; readonly title: string }
     }
   | {
       readonly id: string
@@ -1246,6 +1395,76 @@ export type SessionsEventsOutput =
         readonly sessionID: string
         readonly messageID: string
         readonly text: string
+      }
+    }
+  | {
+      readonly id: string
+      readonly metadata?: { readonly [x: string]: unknown }
+      readonly type: "session.turn.started"
+      readonly durable?: { readonly aggregateID: string; readonly seq: number; readonly version: number }
+      readonly location?: { readonly directory: string; readonly workspaceID?: string }
+      readonly data: {
+        readonly timestamp: number
+        readonly sessionID: string
+        readonly turnID: string
+        readonly turnStartedAt: number
+        readonly activityInputIDs: ReadonlyArray<string>
+      }
+    }
+  | {
+      readonly id: string
+      readonly metadata?: { readonly [x: string]: unknown }
+      readonly type: "session.turn.not_started"
+      readonly durable?: { readonly aggregateID: string; readonly seq: number; readonly version: number }
+      readonly location?: { readonly directory: string; readonly workspaceID?: string }
+      readonly data: {
+        readonly timestamp: number
+        readonly sessionID: string
+        readonly schema: "opencode.turn_not_started.v1"
+        readonly turnID: string
+        readonly activityInputIDs: ReadonlyArray<string>
+        readonly outcome: "failed" | "aborted" | "interrupted"
+        readonly reason: string
+        readonly errorClass: "transport" | "resource" | "protocol" | "interrupt" | "unknown"
+      }
+    }
+  | {
+      readonly id: string
+      readonly metadata?: { readonly [x: string]: unknown }
+      readonly type: "session.turn.settled"
+      readonly durable?: { readonly aggregateID: string; readonly seq: number; readonly version: number }
+      readonly location?: { readonly directory: string; readonly workspaceID?: string }
+      readonly data: {
+        readonly timestamp: number
+        readonly sessionID: string
+        readonly schema: "opencode.turn_settled.v2"
+        readonly turnID: string
+        readonly turnStartedAt: number
+        readonly activityInputIDs: ReadonlyArray<string>
+        readonly outcome: "completed" | "error" | "aborted"
+        readonly reason?: string
+        readonly errorClass?: "transport" | "resource" | "protocol" | "interrupt" | "unknown"
+        readonly abortOrigin?: "user" | "framework" | "runtime_shutdown" | "unknown"
+        readonly failure?: {
+          readonly kind:
+            | "authentication"
+            | "quota"
+            | "rate_limit"
+            | "provider_internal"
+            | "transport"
+            | "invalid_request"
+            | "content_policy"
+            | "unknown"
+          readonly safeMessage: string
+          readonly httpStatus?: number
+          readonly transportKind?: string
+          readonly transportCode?: string
+          readonly retryable: boolean
+          readonly retryExhausted: boolean
+          readonly attemptCount: number
+          readonly providerID: string
+          readonly modelID: string
+        }
       }
     }
   | {

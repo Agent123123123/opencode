@@ -1,7 +1,7 @@
 import { describe, expect } from "bun:test"
 import { Effect, Fiber, Layer, Random, Ref } from "effect"
 import * as TestClock from "effect/testing/TestClock"
-import { Headers, HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
+import { Headers, HttpClient, HttpClientError, HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
 import { LLM, LLMError } from "../src"
 import { LLMClient, RequestExecutor } from "../src/route"
 import * as OpenAIChat from "../src/protocols/openai-chat"
@@ -15,7 +15,12 @@ const request = HttpClientRequest.post("https://provider.test/v1/chat?api_key=se
 )
 
 const secretRequest = HttpClientRequest.post("https://provider.test/v1/chat?api_key=query-secret-123&debug=1").pipe(
-  HttpClientRequest.setHeaders(Headers.fromInput({ authorization: "Bearer header-secret-456" })),
+  HttpClientRequest.setHeaders(
+    Headers.fromInput({
+      authorization: "Bearer header-secret-456",
+      "ChatGPT-Account-Id": "account-secret-789",
+    }),
+  ),
 )
 
 const responsesLayer = (responses: ReadonlyArray<Response>) =>
@@ -59,6 +64,21 @@ const countedResponsesLayer = (attempts: Ref.Ref<number>, responses: ReadonlyArr
     ),
   )
 
+const transportFailureLayer = (cause: unknown) =>
+  RequestExecutor.layer.pipe(
+    Layer.provide(
+      Layer.succeed(
+        HttpClient.HttpClient,
+        HttpClient.make((request) =>
+          Effect.fail(
+            new HttpClientError.HttpClientError({
+              reason: new HttpClientError.TransportError({ request, cause }),
+            }),
+          )),
+      ),
+    ),
+  )
+
 const randomMidpoint = {
   nextDoubleUnsafe: () => 0.5,
   nextIntUnsafe: () => 0,
@@ -73,6 +93,50 @@ const expectLLMError = (error: unknown) => {
 const errorHttp = (error: LLMError) => ("http" in error.reason ? error.reason.http : undefined)
 
 describe("RequestExecutor", () => {
+  it.effect("preserves a safe response-header timeout code and reason", () =>
+    Effect.gen(function* () {
+      const executor = yield* RequestExecutor.Service
+      const error = yield* executor.execute(request).pipe(Effect.flip)
+
+      expectLLMError(error)
+      expect(error.reason).toMatchObject({
+        _tag: "Transport",
+        kind: "timeout",
+        code: "UND_ERR_HEADERS_TIMEOUT",
+        message: "The provider did not send HTTP response headers before the transport deadline.",
+      })
+    }).pipe(
+      Effect.provide(
+        transportFailureLayer(
+          Object.assign(new Error("headers timed out"), { code: "UND_ERR_HEADERS_TIMEOUT" }),
+        ),
+      ),
+    ),
+  )
+
+  it.effect("extracts a nested connection reset without exposing raw exception text", () =>
+    Effect.gen(function* () {
+      const executor = yield* RequestExecutor.Service
+      const error = yield* executor.execute(request).pipe(Effect.flip)
+
+      expectLLMError(error)
+      expect(error.reason).toMatchObject({
+        _tag: "Transport",
+        kind: "connection",
+        code: "ECONNRESET",
+        message: "The provider connection closed before the response completed.",
+      })
+      expect(error.reason.message).not.toContain("secret-upstream-detail")
+    }).pipe(
+      Effect.provide(
+        transportFailureLayer({
+          message: "secret-upstream-detail",
+          cause: Object.assign(new Error("socket closed"), { code: "ECONNRESET" }),
+        }),
+      ),
+    ),
+  )
+
   it.effect("classifies context overflow responses", () =>
     Effect.gen(function* () {
       const executor = yield* RequestExecutor.Service
@@ -122,6 +186,8 @@ describe("RequestExecutor", () => {
       expect(error).toMatchObject({
         retryable: true,
         retryAfterMs: 0,
+        attemptCount: 3,
+        retryExhausted: true,
         reason: {
           _tag: "RateLimit",
           rateLimit: { retryAfterMs: 0 },
@@ -303,6 +369,8 @@ describe("RequestExecutor", () => {
       expectLLMError(error)
       expect(error.reason).toMatchObject({ _tag: "Authentication" })
       expect(error.retryable).toBe(false)
+      expect(error.attemptCount).toBe(1)
+      expect(error.retryExhausted).toBe(false)
       expect(errorHttp(error)?.bodyTruncated).toBe(true)
       expect(errorHttp(error)?.body).toHaveLength(16_384)
     }).pipe(
@@ -346,10 +414,17 @@ describe("RequestExecutor", () => {
       expect(errorHttp(error)?.body).toContain("authorization <redacted>")
       expect(errorHttp(error)?.body).not.toContain("query-secret-123")
       expect(errorHttp(error)?.body).not.toContain("header-secret-456")
+      expect(errorHttp(error)?.body).not.toContain("account-secret-789")
+      expect(errorHttp(error)?.request.headers["chatgpt-account-id"]).toBe("<redacted>")
     }).pipe(
       Effect.provide(
         responsesLayer([
-          new Response("provider echoed query-secret-123 and authorization header-secret-456", { status: 400 }),
+          new Response(
+            "provider echoed query-secret-123, authorization header-secret-456, account account-secret-789",
+            {
+              status: 400,
+            },
+          ),
         ]),
       ),
     ),

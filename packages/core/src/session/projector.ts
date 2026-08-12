@@ -240,6 +240,17 @@ const layer = Layer.effectDiscard(
         .run()
         .pipe(Effect.orDie),
     )
+    yield* events.project(SessionEvent.TitleChanged, (event) =>
+      db
+        .update(SessionTable)
+        .set({
+          title: event.data.title,
+          time_updated: DateTime.toEpochMillis(event.data.timestamp),
+        })
+        .where(eq(SessionTable.id, event.data.sessionID))
+        .run()
+        .pipe(Effect.orDie),
+    )
     yield* events.project(SessionEvent.Moved, (event) =>
       Effect.gen(function* () {
         yield* db
@@ -336,6 +347,7 @@ const layer = Layer.effectDiscard(
         .run()
         .pipe(Effect.orDie, Effect.andThen(run(db, event))),
     )
+    yield* events.project(SessionEvent.ModelSwitchRequested, () => Effect.void)
     yield* events.project(SessionEvent.ModelSwitched, (event) =>
       Effect.gen(function* () {
         yield* db

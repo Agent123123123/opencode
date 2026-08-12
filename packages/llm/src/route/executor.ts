@@ -38,6 +38,12 @@ const BASE_DELAY_MS = 500
 const MAX_DELAY_MS = 10_000
 const REDACTED = "<redacted>"
 
+type TransportDiagnostic = {
+  readonly kind: "dns" | "connection" | "timeout" | "tls" | "aborted" | "network" | "unknown"
+  readonly code?: string
+  readonly message: string
+}
+
 // One source of truth for what counts as a sensitive name across headers,
 // URL query keys, and field names embedded inside request/response bodies.
 //
@@ -46,7 +52,7 @@ const REDACTED = "<redacted>"
 // list. `SHORT_QUERY_NAME` covers anchored short keys like `?key=…` / `?sig=…`
 // that are too generic to redact substring-style without false positives.
 const SENSITIVE_NAME_SOURCE =
-  "authorization|api[-_]?key|access[-_]?token|refresh[-_]?token|id[-_]?token|token|secret|credential|signature|x-amz-signature"
+  "authorization|api[-_]?key|access[-_]?token|refresh[-_]?token|id[-_]?token|token|secret|credential|signature|x-amz-signature|chatgpt[-_]?account[-_]?id"
 const SENSITIVE_NAME = new RegExp(SENSITIVE_NAME_SOURCE, "i")
 const SHORT_QUERY_NAME = /^(key|sig)$/i
 const SENSITIVE_BODY_FIELD = new RegExp(`(?:${SENSITIVE_NAME_SOURCE}|key)`, "i")
@@ -308,6 +314,7 @@ const toHttpError = (redactedNames: ReadonlyArray<string | RegExp>) => (error: u
   const transportError = (input: {
     readonly message: string
     readonly kind?: string | undefined
+    readonly code?: string | undefined
     readonly request?: HttpClientRequest.HttpClientRequest | undefined
   }) =>
     new LLMError({
@@ -316,30 +323,101 @@ const toHttpError = (redactedNames: ReadonlyArray<string | RegExp>) => (error: u
       reason: new TransportReason({
         message: input.message,
         kind: input.kind,
+        code: input.code,
         url: input.request ? redactUrl(input.request.url) : undefined,
         http: input.request ? new HttpContext({ request: requestDetails(input.request, redactedNames) }) : undefined,
       }),
     })
 
   if (Cause.isTimeoutError(error)) {
-    return transportError({ message: error.message, kind: "Timeout" })
+    return transportError({
+      message: "The HTTP transport exceeded its execution deadline before receiving a response.",
+      kind: "timeout",
+      code: "EFFECT_TIMEOUT",
+    })
   }
   if (!HttpClientError.isHttpClientError(error)) {
-    return transportError({ message: "HTTP transport failed" })
+    return transportError(transportDiagnostic(error))
   }
   const request = "request" in error ? error.request : undefined
   if (error.reason._tag === "TransportError") {
+    const diagnostic = transportDiagnostic(error.reason.cause)
     return transportError({
-      message: error.reason.description ?? "HTTP transport failed",
-      kind: error.reason._tag,
+      ...diagnostic,
       request,
     })
   }
   return transportError({
-    message: `HTTP transport failed: ${error.reason._tag}`,
-    kind: error.reason._tag,
+    message: `The HTTP client failed before a provider response was available (${error.reason._tag}).`,
+    kind: "unknown",
+    code: `HTTP_CLIENT_${error.reason._tag.replace(/Error$/, "").replace(/([a-z])([A-Z])/g, "$1_$2").toUpperCase()}`,
     request,
   })
+}
+
+const transportDiagnostic = (error: unknown): TransportDiagnostic => {
+  const code = transportCode(error)
+  if (!code) {
+    return { kind: "unknown", message: "HTTP transport failed before a provider response was received." }
+  }
+  if (code === "UND_ERR_HEADERS_TIMEOUT") {
+    return {
+      kind: "timeout",
+      code,
+      message: "The provider did not send HTTP response headers before the transport deadline.",
+    }
+  }
+  if (code === "UND_ERR_BODY_TIMEOUT") {
+    return {
+      kind: "timeout",
+      code,
+      message: "The provider response body stopped progressing before the transport deadline.",
+    }
+  }
+  if (/TIMEOUT|ETIMEDOUT/.test(code)) {
+    return { kind: "timeout", code, message: "The provider connection exceeded the transport deadline." }
+  }
+  if (/ENOTFOUND|EAI_AGAIN|DNS/.test(code)) {
+    return { kind: "dns", code, message: "The provider host name could not be resolved." }
+  }
+  if (code === "ECONNREFUSED") {
+    return { kind: "connection", code, message: "The provider refused the network connection." }
+  }
+  if (/ECONNRESET|EPIPE|UND_ERR_SOCKET|SOCKET_CLOSED/.test(code)) {
+    return { kind: "connection", code, message: "The provider connection closed before the response completed." }
+  }
+  if (/CERT|TLS|SSL/.test(code)) {
+    return { kind: "tls", code, message: "The provider TLS connection could not be established safely." }
+  }
+  if (/ABORT/.test(code)) {
+    return { kind: "aborted", code, message: "The HTTP transport was aborted before the response completed." }
+  }
+  return { kind: "network", code, message: `HTTP transport failed with code ${code}.` }
+}
+
+const transportCode = (value: unknown, seen = new Set<object>(), depth = 0): string | undefined => {
+  if (!value || typeof value !== "object" || depth > 8 || seen.has(value)) return undefined
+  seen.add(value)
+  const item = value as Record<string, unknown>
+  const code = typeof item.code === "string" ? item.code.trim().toUpperCase() : ""
+  if (/^[A-Z][A-Z0-9_.-]{1,79}$/.test(code)) return code
+  const name = typeof item.name === "string" ? item.name : ""
+  if (name === "AbortError") return "ABORT_ERR"
+  if (name === "TimeoutError") return "ETIMEDOUT"
+  if (name === "HeadersTimeoutError") return "UND_ERR_HEADERS_TIMEOUT"
+  if (name === "BodyTimeoutError") return "UND_ERR_BODY_TIMEOUT"
+  if (name === "SocketError") return "UND_ERR_SOCKET"
+  for (const child of [item.cause, item.reason, item.error]) {
+    const nested = transportCode(child, seen, depth + 1)
+    if (nested) return nested
+  }
+  if (Array.isArray(item.errors)) {
+    for (const child of item.errors) {
+      const nested = transportCode(child, seen, depth + 1)
+      if (nested) return nested
+    }
+  }
+  return undefined
 }
 
 const retryDelay = (error: LLMError, attempt: number) => {
@@ -356,7 +434,15 @@ const retryStatusFailures = <A, R>(
   attempt = 0,
 ): Effect.Effect<A, LLMError, R> =>
   Effect.catchTag(effect, "LLM.Error", (error): Effect.Effect<A, LLMError, R> => {
-    if (!error.retryable || retries <= 0) return Effect.fail(error)
+    if (!error.retryable || retries <= 0) {
+      return Effect.fail(new LLMError({
+        module: error.module,
+        method: error.method,
+        reason: error.reason,
+        attemptCount: attempt + 1,
+        retryExhausted: error.retryable && retries <= 0,
+      }))
+    }
     return retryDelay(error, attempt).pipe(
       Effect.flatMap((delay) => Effect.sleep(delay)),
       Effect.flatMap(() => retryStatusFailures(effect, retries - 1, attempt + 1)),

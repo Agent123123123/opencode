@@ -1,15 +1,17 @@
 import { createServer } from "node:http"
 import type { IntegrationOAuthMethodRegistration } from "@opencode-ai/plugin/v2/effect/integration"
 import { define } from "@opencode-ai/plugin/v2/effect/plugin"
-import { Deferred, Effect } from "effect"
+import { Deferred, Effect, Semaphore, Stream } from "effect"
 import type { Scope } from "effect"
 import { Credential } from "../../credential"
+import { EventV2 } from "../../event"
 import { InstallationVersion } from "../../installation/version"
 import { Integration } from "../../integration"
 import { ModelV2 } from "../../model"
 import { OauthCallbackPage } from "../../oauth/page"
 import { ProviderV2 } from "../../provider"
 import type { PluginInternal } from "../internal"
+import { OpenAIChatGPT } from "./openai-chatgpt"
 
 const clientID = "app_EMoamEEZ73f0CkXaXp7hrann"
 const issuer = "https://auth.openai.com"
@@ -154,10 +156,23 @@ const headless = {
 export const OpenAIPlugin = define({
   id: "openai",
   effect: Effect.fn(function* (ctx) {
+    const events = yield* EventV2.Service
+    const loading = Semaphore.makeUnsafe(1)
+    let chatgpt = false
+
+    const load = Effect.fn("OpenAIPlugin.load")(function* () {
+      const connection = yield* ctx.integration.connection.active(Integration.ID.make("openai"))
+      const credential = connection
+        ? yield* ctx.integration.connection.resolve(connection).pipe(Effect.catch(() => Effect.succeed(undefined)))
+        : undefined
+      chatgpt = credential?.type === "oauth"
+    })
+
     yield* ctx.integration.transform((draft) => {
       draft.method.update(browser)
       draft.method.update(headless)
     })
+    yield* load()
     yield* ctx.catalog.transform(
       Effect.fn(function* (evt) {
         for (const item of evt.provider.list()) {
@@ -168,6 +183,15 @@ export const OpenAIPlugin = define({
             // OpenAIPlugin sends OpenAI models through Responses; this alias is a
             // chat-completions-only model, so hide it only from OpenAI's catalog.
             model.enabled = false
+          })
+        }
+        if (!chatgpt) return
+        const item = evt.provider.get(ProviderV2.ID.openai)
+        if (!item) return
+        for (const model of item.models.values()) {
+          if (!OpenAIChatGPT.isGPT56(model.id)) continue
+          evt.model.update(item.provider.id, model.id, (draft) => {
+            draft.limit = { ...OpenAIChatGPT.gpt56Limit }
           })
         }
       }),
@@ -185,8 +209,15 @@ export const OpenAIPlugin = define({
         evt.language = evt.sdk.responses(evt.model.api.id)
       }),
     )
+
+    const refresh = () => loading.withPermit(load().pipe(Effect.andThen(ctx.catalog.reload())))
+    yield* events.subscribe(Integration.Event.ConnectionUpdated).pipe(
+      Stream.filter((event) => event.data.integrationID === Integration.ID.make("openai")),
+      Stream.runForEach(refresh),
+      Effect.forkScoped({ startImmediately: true }),
+    )
   }),
-} satisfies PluginInternal.Plugin<PluginInternal.Requirements | Scope.Scope>)
+} satisfies PluginInternal.Plugin<PluginInternal.Requirements | EventV2.Service | Scope.Scope>)
 
 function headers(contentType: string) {
   return { "Content-Type": contentType, "User-Agent": `opencode/${InstallationVersion}` }

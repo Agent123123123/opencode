@@ -8,12 +8,14 @@ import { Project } from "./project"
 import { DateTimeUtcFromMillis, optional, RelativePath } from "./schema"
 import { SessionEvent } from "./session-event"
 import { SessionID } from "./session-id"
+import { Title } from "./session-title"
 import { Revert } from "./revert"
 
 export const ID = SessionID
 export type ID = SessionID
 
 export const Event = SessionEvent
+export { Title }
 
 export interface Info extends Schema.Schema.Type<typeof Info> {}
 export const Info = Schema.Struct({
@@ -37,7 +39,7 @@ export const Info = Schema.Struct({
     updated: DateTimeUtcFromMillis,
     archived: DateTimeUtcFromMillis.pipe(optional),
   }),
-  title: Schema.String,
+  title: Title,
   location: Location.Ref,
   subpath: RelativePath.pipe(optional),
   revert: Revert.State.pipe(optional),

@@ -75,6 +75,8 @@ function layer(options: {
 
 const resolve = (input: Parameters<SessionSelection.Interface["resolve"]>[0]) =>
   SessionSelection.Service.use((service) => service.resolve(input))
+const resolveModel = (input: Parameters<SessionSelection.Interface["resolveModel"]>[0]) =>
+  SessionSelection.Service.use((service) => service.resolveModel(input))
 
 describe("SessionSelection", () => {
   it.effect("waits for config and resolves an exact default tuple", () =>
@@ -125,6 +127,24 @@ describe("SessionSelection", () => {
           variant: ModelV2.VariantID.make("default"),
         }),
       })
+    }),
+  )
+
+  it.effect("validates a model independently of existing Session agent selectability", () =>
+    Effect.gen(function* () {
+      const waited: ConfigReadiness.Source[] = []
+      const selected = yield* resolveModel(ModelV2.Ref.make({ providerID, id: modelID })).pipe(
+        Effect.provide(layer({ agents: [agent("child", { mode: "subagent" })], waited })),
+      )
+
+      expect(selected).toEqual(
+        ModelV2.Ref.make({
+          providerID,
+          id: modelID,
+          variant: ModelV2.VariantID.make("default"),
+        }),
+      )
+      expect(waited).toEqual(["provider"])
     }),
   )
 

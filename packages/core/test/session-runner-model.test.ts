@@ -41,11 +41,14 @@ const model = (api: Api, variants: ModelV2.Info["variants"] = []) =>
     limit: { context: 100, output: 20 },
   })
 
+const sessionID = SessionV2.ID.make("ses_model_resolution")
+
 describe("SessionRunnerModel", () => {
   it.effect("maps catalog OpenAI AI SDK models into native Responses routes", () =>
     Effect.gen(function* () {
       const resolved = yield* SessionRunnerModel.fromCatalogModel(
         model({ type: "aisdk", package: "@ai-sdk/openai", url: "https://openai.example/v1" }),
+        { sessionID },
       )
 
       expect(resolved).toMatchObject({ id: "api-test-model", provider: "test-provider" })
@@ -65,6 +68,7 @@ describe("SessionRunnerModel", () => {
     Effect.gen(function* () {
       const resolved = yield* SessionRunnerModel.fromCatalogModel(
         model({ type: "aisdk", package: "@ai-sdk/openai", url: "https://openai.example/v1" }),
+        { sessionID },
       )
       const prepared = yield* LLMClient.prepare(LLM.request({ model: resolved, prompt: "Hello" }))
 
@@ -85,6 +89,7 @@ describe("SessionRunnerModel", () => {
           }),
           request: { headers: {}, body: {} },
         }),
+        { sessionID },
       )
       const request = LLM.request({ model: resolved, prompt: "Hello" })
       const headers = yield* resolved.route.auth.apply({
@@ -238,6 +243,7 @@ describe("SessionRunnerModel", () => {
     Effect.gen(function* () {
       const resolved = yield* SessionRunnerModel.fromCatalogModel(
         model({ type: "aisdk", package: "@ai-sdk/anthropic", url: "https://anthropic.example/v1" }),
+        { sessionID },
       )
 
       expect(resolved.route).toMatchObject({
@@ -252,9 +258,10 @@ describe("SessionRunnerModel", () => {
       const resolved = yield* SessionRunnerModel.fromCatalogModel(
         ModelV2.Info.make({
           ...model({ type: "aisdk", package: "@ai-sdk/openai", url: "https://openai.example/v1" }),
+          providerID: ProviderV2.ID.openai,
           request: { headers: {}, body: {} },
         }),
-        Credential.Key.make({ type: "key", key: "secret" }),
+        { sessionID, credential: Credential.Key.make({ type: "key", key: "secret" }) },
       )
       const request = LLM.request({ model: resolved, prompt: "Hello" })
       const headers = yield* resolved.route.auth.apply({
@@ -266,6 +273,7 @@ describe("SessionRunnerModel", () => {
       })
 
       expect(headers.authorization).toBe("Bearer secret")
+      expect(resolved.route.endpoint.baseURL).toBe("https://openai.example/v1")
     }),
   )
 
@@ -277,7 +285,7 @@ describe("SessionRunnerModel", () => {
           ...model({ type: "aisdk", package: "@ai-sdk/openai", url: "https://openai.example/v1" }),
           request: { headers: {}, body: { apiKey: "configured-secret" } },
         }),
-        credential,
+        { sessionID, credential },
       )
       const headers = yield* resolved.route.auth.apply({
         request: LLM.request({ model: resolved, prompt: "Hello" }),
@@ -292,23 +300,63 @@ describe("SessionRunnerModel", () => {
     }),
   )
 
-  it.effect("does not project OAuth account metadata into the request body", () =>
+  it.effect("does not apply the ChatGPT transport to another provider's OAuth credential", () =>
     Effect.gen(function* () {
+      const credential = Credential.OAuth.make({
+        type: "oauth",
+        methodID: Integration.MethodID.make("device"),
+        access: "secret",
+        refresh: "refresh",
+        expires: Date.now() + 60_000,
+        metadata: { accountID: "acc_other", orgID: "org_123" },
+      })
       const resolved = yield* SessionRunnerModel.fromCatalogModel(
         ModelV2.Info.make({
           ...model({ type: "aisdk", package: "@ai-sdk/openai", url: "https://openai.example/v1" }),
           request: { headers: {}, body: {} },
         }),
-        Credential.OAuth.make({
-          type: "oauth",
-          methodID: Integration.MethodID.make("device"),
-          access: "secret",
-          refresh: "refresh",
-          expires: Date.now() + 60_000,
-          metadata: { server: "https://console.example", orgID: "org_123" },
-        }),
+        { sessionID, credential },
       )
 
+      expect(resolved.route.endpoint.baseURL).toBe("https://openai.example/v1")
+      expect(resolved.route.defaults.http?.body).toEqual({})
+    }),
+  )
+
+  it.effect("projects OpenAI OAuth credentials into the ChatGPT Codex transport", () =>
+    Effect.gen(function* () {
+      const credential = Credential.OAuth.make({
+        type: "oauth",
+        methodID: Integration.MethodID.make("chatgpt-browser"),
+        access: "oauth-access",
+        refresh: "oauth-refresh",
+        expires: Date.now() + 60_000,
+        metadata: { accountID: "acc_123" },
+      })
+      const resolved = yield* SessionRunnerModel.fromCatalogModel(
+        ModelV2.Info.make({
+          ...model({ type: "aisdk", package: "@ai-sdk/openai", url: "https://api.openai.com/v1" }),
+          providerID: ProviderV2.ID.openai,
+          request: { headers: {}, body: {} },
+          limit: { context: 200_000, output: 128_000 },
+        }),
+        { sessionID, credential },
+      )
+      const headers = yield* resolved.route.auth.apply({
+        request: LLM.request({ model: resolved, prompt: "Hello" }),
+        method: "POST",
+        url: "https://chatgpt.com/backend-api/codex/responses",
+        body: "{}",
+        headers: Headers.fromInput(resolved.route.defaults.headers),
+      })
+
+      expect(resolved.route.endpoint.baseURL).toBe("https://chatgpt.com/backend-api/codex")
+      expect(headers.authorization).toBe("Bearer oauth-access")
+      expect(headers["chatgpt-account-id"]).toBe("acc_123")
+      expect(headers.originator).toBe("opencode")
+      expect(headers["session-id"]).toBe(sessionID)
+      expect(headers["user-agent"]).toContain("opencode/")
+      expect(resolved.route.defaults.limits).toEqual({ context: 200_000, output: 128_000 })
       expect(resolved.route.defaults.http?.body).toEqual({})
     }),
   )
@@ -317,6 +365,7 @@ describe("SessionRunnerModel", () => {
     Effect.gen(function* () {
       const failure = yield* SessionRunnerModel.fromCatalogModel(
         model({ type: "aisdk", package: "@ai-sdk/google", url: "https://google.example/v1" }),
+        { sessionID },
       ).pipe(Effect.flip)
 
       expect(failure).toMatchObject({

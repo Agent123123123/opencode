@@ -982,6 +982,15 @@ const scenarios: Scenario[] = [
     }))
     .json(200, data(object)),
   http.protected
+    .patch("/api/session/{sessionID}", "v2.session.update")
+    .seeded((ctx) => ctx.session({ title: "Session update" }))
+    .at((ctx) => ({
+      path: route("/api/session/{sessionID}", { sessionID: ctx.state.id }),
+      headers: { ...ctx.headers(), "content-type": "application/json" },
+      body: { title: "Updated session" },
+    }))
+    .json(200, data(object)),
+  http.protected
     .post("/api/session/{sessionID}/agent", "v2.session.switchAgent")
     .seeded((ctx) => ctx.session({ title: "Switch agent" }))
     .at((ctx) => ({

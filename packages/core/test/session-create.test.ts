@@ -1,6 +1,6 @@
 import { describe, expect } from "bun:test"
 import path from "path"
-import { Effect, Layer, Stream } from "effect"
+import { DateTime, Effect, Layer, Stream } from "effect"
 import { AgentV2 } from "@opencode-ai/core/agent"
 import { asc, eq } from "drizzle-orm"
 import { Database } from "@opencode-ai/core/database/database"
@@ -21,6 +21,8 @@ import { SessionProjector } from "@opencode-ai/core/session/projector"
 import { SessionExecution } from "@opencode-ai/core/session/execution"
 import { SessionInput } from "@opencode-ai/core/session/input"
 import { SessionEvent } from "@opencode-ai/core/session/event"
+import { SessionMessage } from "@opencode-ai/core/session/message"
+import { SessionModelSwitch } from "@opencode-ai/core/session/model-switch"
 import { SessionTable } from "@opencode-ai/core/session/sql"
 import { SessionStore } from "@opencode-ai/core/session/store"
 import { WorkspaceV2 } from "@opencode-ai/core/workspace"
@@ -303,6 +305,64 @@ describe("SessionV2.create", () => {
     }),
   )
 
+  it.effect("rebuilds the renamed title from durable events in a fresh projection database", () =>
+    Effect.gen(function* () {
+      const session = yield* SessionV2.Service
+      const sourceDb = (yield* Database.Service).db
+      const created = yield* session.create({ id: SessionV2.ID.make("ses_title_replay"), location })
+      yield* session.setTitle({ sessionID: created.id, title: "Durable replay title" })
+      const serialized = (yield* sourceDb
+        .select()
+        .from(EventTable)
+        .where(eq(EventTable.aggregate_id, created.id))
+        .orderBy(asc(EventTable.seq))
+        .all()
+        .pipe(Effect.orDie)).map((event) => ({
+        id: event.id,
+        aggregateID: event.aggregate_id,
+        seq: event.seq,
+        type: event.type,
+        data: event.data,
+      }))
+
+      const tmp = yield* Effect.acquireRelease(
+        Effect.promise(() => tmpdir()),
+        (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+      )
+      const targetDatabase = Database.layerFromPath(path.join(tmp.path, "title-target.sqlite"))
+      const targetLayer = AppNodeBuilder.build(
+        LayerNode.group([Database.node, EventV2.node, SessionProjector.node, SessionStore.node]),
+        [[Database.node, targetDatabase]],
+      )
+
+      yield* Effect.gen(function* () {
+        const { db } = yield* Database.Service
+        const events = yield* EventV2.Service
+        const store = yield* SessionStore.Service
+        yield* db
+          .insert(ProjectTable)
+          .values({ id: ProjectV2.ID.global, worktree: location.directory, sandboxes: [] })
+          .run()
+          .pipe(Effect.orDie)
+
+        expect(yield* events.replayAll(serialized)).toBe(created.id)
+        expect(yield* store.get(created.id)).toMatchObject({ id: created.id, title: "Durable replay title" })
+        expect(
+          (yield* db
+            .select()
+            .from(EventTable)
+            .where(eq(EventTable.aggregate_id, created.id))
+            .orderBy(asc(EventTable.seq))
+            .all()
+            .pipe(Effect.orDie)).map((event) => event.type),
+        ).toEqual([
+          EventV2.versionedType(SessionV1.Event.Created.type, 1),
+          EventV2.versionedType(SessionEvent.TitleChanged.type, 1),
+        ])
+      }).pipe(Effect.provide(Layer.fresh(targetLayer)))
+    }),
+  )
+
   it.effect("does not mask unrelated created projector defects", () =>
     Effect.gen(function* () {
       const session = yield* SessionV2.Service
@@ -359,10 +419,119 @@ describe("SessionV2.create", () => {
     }),
   )
 
-  it.effect("switches the selected model through the durable Session event", () =>
+  it.effect("renames a Session through one durable event without changing its identity or prompt history", () =>
+    Effect.gen(function* () {
+      const session = yield* SessionV2.Service
+      const { db } = yield* Database.Service
+      const events = yield* EventV2.Service
+      const created = yield* session.create({ location })
+      const first = yield* session.prompt({
+        sessionID: created.id,
+        prompt: Prompt.make({ text: "before rename" }),
+        resume: false,
+      })
+      yield* SessionInput.promoteSteers(db, events, created.id, Number.MAX_SAFE_INTEGER)
+
+      const [renamed, second] = yield* Effect.all(
+        [
+          session.setTitle({ sessionID: created.id, title: "Renamed Orchestrator" }),
+          session.prompt({
+            sessionID: created.id,
+            prompt: Prompt.make({ text: "after rename" }),
+            resume: false,
+          }),
+        ],
+        { concurrency: "unbounded" },
+      )
+      const same = yield* session.setTitle({ sessionID: created.id, title: "Renamed Orchestrator" })
+      yield* SessionInput.promoteSteers(db, events, created.id, Number.MAX_SAFE_INTEGER)
+
+      expect(renamed).toMatchObject({
+        id: created.id,
+        title: "Renamed Orchestrator",
+        agent: created.agent,
+        model: created.model,
+        location: created.location,
+        cost: created.cost,
+        tokens: created.tokens,
+      })
+      expect(same).toEqual(renamed)
+      expect(
+        (yield* session.context(created.id)).map((message) => [
+          message.id,
+          message.type,
+          message.type === "user" ? message.text : undefined,
+        ]),
+      ).toEqual([
+        [first.id, "user", "before rename"],
+        [second.id, "user", "after rename"],
+      ])
+      expect(
+        (yield* db
+          .select()
+          .from(EventTable)
+          .where(eq(EventTable.aggregate_id, created.id))
+          .orderBy(asc(EventTable.seq))
+          .all()
+          .pipe(Effect.orDie)).filter((event) => event.type.includes("title.changed")),
+      ).toMatchObject([
+        {
+          type: EventV2.versionedType(SessionEvent.TitleChanged.type, 1),
+          data: { sessionID: created.id, title: "Renamed Orchestrator" },
+        },
+      ])
+    }),
+  )
+
+  it.effect("projects concurrent title changes in durable aggregate order", () =>
+    Effect.gen(function* () {
+      const session = yield* SessionV2.Service
+      const { db } = yield* Database.Service
+      const created = yield* session.create({ location })
+
+      yield* Effect.all(
+        [
+          session.setTitle({ sessionID: created.id, title: "Concurrent A" }),
+          session.setTitle({ sessionID: created.id, title: "Concurrent B" }),
+        ],
+        { concurrency: "unbounded" },
+      )
+      const changes = (yield* db
+        .select()
+        .from(EventTable)
+        .where(eq(EventTable.aggregate_id, created.id))
+        .orderBy(asc(EventTable.seq))
+        .all()
+        .pipe(Effect.orDie)).filter((event) => event.type.includes("title.changed"))
+
+      expect(changes).toHaveLength(2)
+      expect(new Set(changes.map((event) => event.data.title))).toEqual(new Set(["Concurrent A", "Concurrent B"]))
+      const finalTitle = changes.at(-1)?.data.title
+      if (typeof finalTitle !== "string") throw new Error("title event did not contain a string title")
+      expect((yield* session.get(created.id)).title).toBe(finalTitle)
+    }),
+  )
+
+  it.effect("rejects a title update for a missing Session", () =>
+    Effect.gen(function* () {
+      const session = yield* SessionV2.Service
+      const missing = SessionV2.ID.make("ses_missing_title_update")
+
+      expect(
+        yield* session.setTitle({ sessionID: missing, title: "Missing" }).pipe(
+          Effect.flip,
+          Effect.map((error) => error._tag),
+        ),
+      ).toBe("Session.NotFoundError")
+    }),
+  )
+
+  it.effect("persists desired model before applying it at a Session boundary", () =>
     Effect.gen(function* () {
       const session = yield* SessionV2.Service
       const created = yield* session.create({ location })
+      const { db } = yield* Database.Service
+      const events = yield* EventV2.Service
       const model = ModelV2.Ref.make({
         id: ModelV2.ID.make("sonnet"),
         providerID: ProviderV2.ID.anthropic,
@@ -371,10 +540,14 @@ describe("SessionV2.create", () => {
 
       yield* session.switchModel({ sessionID: created.id, model })
 
-      expect(yield* session.get(created.id)).toMatchObject({ model })
+      expect(yield* session.get(created.id)).toMatchObject({ model: created.model })
       expect(
         Array.from(yield* session.events({ sessionID: created.id }).pipe(Stream.take(1), Stream.runCollect)),
-      ).toMatchObject([{ type: "session.next.model.switched", data: { model } }])
+      ).toMatchObject([{ type: "session.next.model.switch.requested", data: { model } }])
+
+      expect(yield* SessionModelSwitch.applyPending(db, events, created.id)).toBe(true)
+      expect(yield* session.get(created.id)).toMatchObject({ model })
+      expect(yield* SessionModelSwitch.pending(db, created.id)).toBeUndefined()
     }),
   )
 
@@ -391,7 +564,43 @@ describe("SessionV2.create", () => {
       expect(
         yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, created.id)).all().pipe(Effect.orDie),
       ).toHaveLength(2)
-      expect(yield* session.get(created.id)).toMatchObject({ model })
+      expect(yield* SessionModelSwitch.pending(db, created.id)).toMatchObject({ model })
+      expect(yield* session.get(created.id)).toMatchObject({ model: created.model })
+    }),
+  )
+
+  it.effect("does not lose a newer desired model when an older apply commits afterward", () =>
+    Effect.gen(function* () {
+      const session = yield* SessionV2.Service
+      const created = yield* session.create({ location })
+      const { db } = yield* Database.Service
+      const events = yield* EventV2.Service
+      const older = ModelV2.Ref.make({ id: ModelV2.ID.make("older"), providerID: ProviderV2.ID.anthropic })
+      const newer = ModelV2.Ref.make({ id: ModelV2.ID.make("newer"), providerID: ProviderV2.ID.anthropic })
+
+      yield* events.publish(SessionEvent.ModelSwitchRequested, {
+        sessionID: created.id,
+        timestamp: DateTime.makeUnsafe(1),
+        model: older,
+      })
+      expect(yield* SessionModelSwitch.pending(db, created.id)).toMatchObject({ model: older })
+      yield* events.publish(SessionEvent.ModelSwitchRequested, {
+        sessionID: created.id,
+        timestamp: DateTime.makeUnsafe(2),
+        model: newer,
+      })
+      yield* events.publish(SessionEvent.ModelSwitched, {
+        sessionID: created.id,
+        messageID: SessionMessage.ID.create(),
+        timestamp: DateTime.makeUnsafe(3),
+        model: older,
+      })
+
+      expect(yield* SessionModelSwitch.pending(db, created.id)).toMatchObject({ model: newer })
+      expect(yield* SessionModelSwitch.pendingSessionIDs(db)).toContain(created.id)
+      expect(yield* SessionModelSwitch.applyPending(db, events, created.id)).toBe(true)
+      expect(yield* session.get(created.id)).toMatchObject({ model: newer })
+      expect(yield* SessionModelSwitch.pending(db, created.id)).toBeUndefined()
     }),
   )
 

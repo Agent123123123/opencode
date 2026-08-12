@@ -11,6 +11,7 @@ import { FileAttachment, Prompt } from "./prompt"
 import { SessionID } from "./session-id"
 import { Location } from "./location"
 import { SessionMessage } from "./session-message"
+import { Title } from "./session-title"
 import { Revert } from "./revert"
 
 export { FileAttachment }
@@ -47,6 +48,12 @@ const stepSettlementOptions = {
     version: 2,
   },
 } as const
+const turnSettlementOptions = {
+  durable: {
+    aggregate: "sessionID",
+    version: 2,
+  },
+} as const
 
 export const UnknownError = SessionMessage.UnknownError
 export type UnknownError = SessionMessage.UnknownError
@@ -72,6 +79,27 @@ export const ModelSwitched = Event.define({
   },
 })
 export type ModelSwitched = typeof ModelSwitched.Type
+
+/** Durable intent. The runner applies it at the next boundary for this Session. */
+export const ModelSwitchRequested = Event.define({
+  type: "session.next.model.switch.requested",
+  ...options,
+  schema: {
+    ...Base,
+    model: Model.Ref,
+  },
+})
+export type ModelSwitchRequested = typeof ModelSwitchRequested.Type
+
+export const TitleChanged = Event.define({
+  type: "session.next.title.changed",
+  ...options,
+  schema: {
+    ...Base,
+    title: Title,
+  },
+})
+export type TitleChanged = typeof TitleChanged.Type
 
 export const Moved = Event.define({
   type: "session.next.moved",
@@ -110,6 +138,29 @@ export const ContextUpdated = Event.define({
 export type ContextUpdated = typeof ContextUpdated.Type
 
 export namespace Turn {
+  export const Failure = Schema.Struct({
+    kind: Schema.Literals([
+      "authentication",
+      "quota",
+      "rate_limit",
+      "provider_internal",
+      "transport",
+      "invalid_request",
+      "content_policy",
+      "unknown",
+    ]),
+    safeMessage: Schema.String,
+    httpStatus: Schema.Number.pipe(optional),
+    transportKind: Schema.String.pipe(optional),
+    transportCode: Schema.String.pipe(optional),
+    retryable: Schema.Boolean,
+    retryExhausted: Schema.Boolean,
+    attemptCount: Schema.Number,
+    providerID: Schema.String,
+    modelID: Schema.String,
+  })
+  export type Failure = typeof Failure.Type
+
   export const Started = Event.define({
     type: "session.turn.started",
     ...options,
@@ -143,10 +194,10 @@ export namespace Turn {
 
   export const Settled = Event.define({
     type: "session.turn.settled",
-    ...options,
+    ...turnSettlementOptions,
     schema: {
       ...Base,
-      schema: Schema.Literal("opencode.turn_settled.v1"),
+      schema: Schema.Literal("opencode.turn_settled.v2"),
       turnID: SessionMessage.ID,
       turnStartedAt: DateTimeUtcFromMillis,
       activityInputIDs: Schema.Array(SessionMessage.ID),
@@ -154,6 +205,7 @@ export namespace Turn {
       reason: Schema.String.pipe(optional),
       errorClass: Schema.Literals(["transport", "resource", "protocol", "interrupt", "unknown"]).pipe(optional),
       abortOrigin: Schema.Literals(["user", "framework", "runtime_shutdown", "unknown"]).pipe(optional),
+      failure: Failure.pipe(optional),
     },
   })
   export type Settled = typeof Settled.Type
@@ -497,7 +549,9 @@ export namespace RevertEvent {
 
 export const DurableDefinitions = Event.inventory(
   AgentSwitched,
+  ModelSwitchRequested,
   ModelSwitched,
+  TitleChanged,
   Moved,
   Prompted,
   PromptAdmitted,
@@ -531,7 +585,9 @@ export const DurableDefinitions = Event.inventory(
 
 export const Definitions = Event.inventory(
   AgentSwitched,
+  ModelSwitchRequested,
   ModelSwitched,
+  TitleChanged,
   Moved,
   Prompted,
   PromptAdmitted,

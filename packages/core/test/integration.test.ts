@@ -254,6 +254,61 @@ describe("Integration", () => {
     }),
   )
 
+  it.effect("refreshes expiring OAuth credentials before returning transport material", () =>
+    Effect.gen(function* () {
+      const integrations = yield* Integration.Service
+      const credentials = yield* Credential.Service
+      const integrationID = Integration.ID.make("test-openai-refresh")
+      const methodID = Integration.MethodID.make("chatgpt-browser")
+      let refreshes = 0
+      yield* integrations.transform((editor) =>
+        editor.method.update({
+          integrationID,
+          method: { id: methodID, type: "oauth", label: "ChatGPT" },
+          authorize: () => Effect.never,
+          refresh: (current) =>
+            Effect.sync(() => {
+              refreshes += 1
+              return Credential.OAuth.make({
+                ...current,
+                access: "access-new",
+                refresh: "refresh-new",
+                expires: Duration.toMillis(Duration.hours(1)),
+                metadata: { accountID: "acc_123" },
+              })
+            }),
+        }),
+      )
+      const stored = yield* credentials.create({
+        integrationID,
+        value: Credential.OAuth.make({
+          type: "oauth",
+          methodID,
+          access: "access-old",
+          refresh: "refresh-old",
+          expires: 0,
+        }),
+      })
+      const connection = yield* integrations.connection.active(integrationID)
+      if (!connection) return yield* Effect.die("expected active OpenAI connection")
+
+      const resolved = yield* integrations.connection.resolve(connection)
+
+      expect(refreshes).toBe(1)
+      expect(resolved).toEqual(
+        Credential.OAuth.make({
+          type: "oauth",
+          methodID,
+          access: "access-new",
+          refresh: "refresh-new",
+          expires: Duration.toMillis(Duration.hours(1)),
+          metadata: { accountID: "acc_123" },
+        }),
+      )
+      expect((yield* credentials.get(stored.id))?.value).toEqual(resolved)
+    }),
+  )
+
   it.effect("expires abandoned OAuth attempts", () =>
     Effect.gen(function* () {
       const integrations = yield* Integration.Service

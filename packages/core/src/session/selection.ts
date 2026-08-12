@@ -46,6 +46,8 @@ export type Error =
   | ModelUnsupportedError
   | VariantNotFoundError
 
+export type ModelError = ModelNotSelectedError | ModelUnavailableError | ModelUnsupportedError | VariantNotFoundError
+
 export type Selection = {
   readonly agent: AgentV2.ID
   readonly model: ModelV2.Ref
@@ -56,12 +58,27 @@ export interface Interface {
     readonly agent?: AgentV2.ID
     readonly model?: ModelV2.Ref
   }) => Effect.Effect<Selection, Error>
+  readonly resolveModel: (model?: ModelV2.Ref) => Effect.Effect<ModelV2.Ref, ModelError>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/v2/SessionSelection") {}
 
 /** Test or embedding seam for supplying a location selection resolver directly. */
-export const layerWith = (resolve: Interface["resolve"]) => Layer.succeed(Service, Service.of({ resolve }))
+export const layerWith = (resolve: Interface["resolve"]) =>
+  Layer.succeed(
+    Service,
+    Service.of({
+      resolve,
+      resolveModel: (model) =>
+        resolve({ model }).pipe(
+          Effect.catchTags({
+            "SessionSelection.AgentNotFoundError": Effect.die,
+            "SessionSelection.AgentUnavailableError": Effect.die,
+          }),
+          Effect.map((selection) => selection.model),
+        ),
+    }),
+  )
 
 export const locationLayer = Layer.effect(
   Service,
@@ -70,14 +87,41 @@ export const locationLayer = Layer.effect(
     const catalog = yield* Catalog.Service
     const readiness = yield* ConfigReadiness.Service
 
+    const resolveModel = Effect.fn("SessionSelection.resolveModel")(function* (requested?: ModelV2.Ref) {
+      yield* readiness.wait("provider")
+      const available = yield* catalog.model.available()
+      let model: ModelV2.Info | undefined
+      if (requested) {
+        model = available.find((item) => item.providerID === requested.providerID && item.id === requested.id)
+        if (!model) return yield* new ModelUnavailableError({ model: requested })
+      } else {
+        const preferred = yield* catalog.model.default()
+        model =
+          (preferred &&
+          available.some((item) => item.providerID === preferred.providerID && item.id === preferred.id) &&
+          SessionModelSupport.supported(preferred)
+            ? preferred
+            : undefined) ?? available.find(SessionModelSupport.supported)
+        if (!model) return yield* new ModelNotSelectedError()
+      }
+
+      const ref = ModelV2.Ref.make({
+        id: model.id,
+        providerID: model.providerID,
+        variant: requested?.variant ?? ModelV2.VariantID.make("default"),
+      })
+      if (!SessionModelSupport.supported(model)) return yield* new ModelUnsupportedError({ model: ref })
+      if (ref.variant !== "default" && !model.variants.some((variant) => variant.id === ref.variant))
+        return yield* new VariantNotFoundError({ model: ref })
+      return ref
+    })
+
     return Service.of({
+      resolveModel,
       resolve: Effect.fn("SessionSelection.resolve")(function* (input) {
         // Config plugins are loaded asynchronously with the rest of the location runtime. A
         // selection made before either commit would validate against a partial catalog.
-        yield* Effect.all([readiness.wait("agent"), readiness.wait("provider")], {
-          discard: true,
-          concurrency: "unbounded",
-        })
+        yield* readiness.wait("agent")
 
         const selectedAgent = yield* agents.select(input.agent)
         if (!selectedAgent.info) return yield* new AgentNotFoundError({ agent: selectedAgent.id })
@@ -86,33 +130,7 @@ export const locationLayer = Layer.effect(
         if (selectedAgent.info.mode === "subagent" || (input.agent === undefined && selectedAgent.info.hidden))
           return yield* new AgentUnavailableError({ agent: selectedAgent.id })
 
-        const requested = input.model ?? selectedAgent.info.model
-        const available = yield* catalog.model.available()
-        let model: ModelV2.Info | undefined
-        if (requested) {
-          model = available.find((item) => item.providerID === requested.providerID && item.id === requested.id)
-          if (!model) return yield* new ModelUnavailableError({ model: requested })
-        } else {
-          const preferred = yield* catalog.model.default()
-          model =
-            (preferred &&
-            available.some((item) => item.providerID === preferred.providerID && item.id === preferred.id) &&
-            SessionModelSupport.supported(preferred)
-              ? preferred
-              : undefined) ?? available.find(SessionModelSupport.supported)
-          if (!model) return yield* new ModelNotSelectedError()
-        }
-
-        const ref = ModelV2.Ref.make({
-          id: model.id,
-          providerID: model.providerID,
-          variant: requested?.variant ?? ModelV2.VariantID.make("default"),
-        })
-        if (!SessionModelSupport.supported(model)) return yield* new ModelUnsupportedError({ model: ref })
-        if (ref.variant !== "default" && !model.variants.some((variant) => variant.id === ref.variant))
-          return yield* new VariantNotFoundError({ model: ref })
-
-        return { agent: selectedAgent.id, model: ref }
+        return { agent: selectedAgent.id, model: yield* resolveModel(input.model ?? selectedAgent.info.model) }
       }),
     })
   }),
