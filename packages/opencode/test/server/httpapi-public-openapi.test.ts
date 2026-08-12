@@ -168,6 +168,7 @@ describe("PublicApi OpenAPI v2 errors", () => {
     ]) {
       expect(spec.paths[path]?.post?.requestBody?.required, path).toBe(true)
     }
+    expect(spec.paths["/api/session/{sessionID}"]?.patch?.requestBody?.required).toBe(true)
   })
 
   test("documents integration discovery and connection routes", () => {
@@ -248,6 +249,7 @@ describe("PublicApi OpenAPI v2 errors", () => {
     const spec = OpenApi.fromApi(PublicApi) as OpenApiSpec
 
     for (const route of [
+      ["patch", "/api/session/{sessionID}"],
       ["post", "/api/session/{sessionID}/prompt"],
       ["post", "/api/session/{sessionID}/compact"],
       ["post", "/api/session/{sessionID}/wait"],

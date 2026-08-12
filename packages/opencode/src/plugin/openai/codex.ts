@@ -1,15 +1,16 @@
 import type { Hooks, PluginInput } from "@opencode-ai/plugin"
 import { InstallationVersion } from "@opencode-ai/core/installation/version"
 import { OAUTH_DUMMY_KEY } from "../../auth"
-import os from "os"
 import { setTimeout as sleep } from "node:timers/promises"
 import { createServer } from "http"
 import { OpenAIWebSocketPool } from "./ws-pool"
 import { OauthCallbackPage } from "@opencode-ai/core/oauth/page"
+import { OpenAITransport } from "@opencode-ai/core/plugin/provider/openai-transport"
+import { OpenAIChatGPT } from "@opencode-ai/core/plugin/provider/openai-chatgpt"
 
 const CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
 const ISSUER = "https://auth.openai.com"
-const CODEX_API_ENDPOINT = "https://chatgpt.com/backend-api/codex/responses"
+const CODEX_API_ENDPOINT = OpenAITransport.codexResponsesURL
 const OAUTH_PORT = 1455
 const OAUTH_POLLING_SAFETY_MARGIN_MS = 3000
 const ALLOWED_MODELS = new Set(["gpt-5.5", "gpt-5.3-codex-spark", "gpt-5.4", "gpt-5.4-mini"])
@@ -299,13 +300,14 @@ export async function CodexAuthPlugin(input: PluginInput, options: CodexAuthPlug
                   output: 0,
                   cache: { read: 0, write: 0 },
                 },
-                limit:
-                  model.id.includes("gpt-5.5") || model.id.includes("gpt-5.6")
-                    ? {
-                        context: 400_000,
-                        input: 272_000,
-                        output: 128_000,
-                      }
+                limit: model.id.includes("gpt-5.5")
+                  ? {
+                      context: 400_000,
+                      input: 272_000,
+                      output: 128_000,
+                    }
+                  : OpenAIChatGPT.isGPT56(model.id)
+                    ? { ...OpenAIChatGPT.gpt56Limit }
                     : model.limit,
               },
             ]),
@@ -383,7 +385,11 @@ export async function CodexAuthPlugin(input: PluginInput, options: CodexAuthPlug
               authWithAccount.accountId = refreshed.accountId
             }
 
-            const headers = new Headers()
+            const headers = new Headers(
+              OpenAITransport.codexHeaders({
+                accountID: authWithAccount.accountId,
+              }),
+            )
             if (init?.headers) {
               if (init.headers instanceof Headers) {
                 init.headers.forEach((value, key) => headers.set(key, value))
@@ -398,9 +404,6 @@ export async function CodexAuthPlugin(input: PluginInput, options: CodexAuthPlug
               }
             }
             headers.set("authorization", `Bearer ${currentAuth.access}`)
-            if (authWithAccount.accountId) {
-              headers.set("ChatGPT-Account-Id", authWithAccount.accountId)
-            }
 
             const parsed =
               requestInput instanceof URL
@@ -543,9 +546,7 @@ export async function CodexAuthPlugin(input: PluginInput, options: CodexAuthPlug
     },
     "chat.headers": async (input, output) => {
       if (input.model.providerID !== "openai") return
-      output.headers.originator = "opencode"
-      output.headers["User-Agent"] = `opencode/${InstallationVersion} (${os.platform()} ${os.release()}; ${os.arch()})`
-      output.headers["session-id"] = input.sessionID
+      Object.assign(output.headers, OpenAITransport.codexHeaders({ sessionID: input.sessionID }))
       // Temporary fetch-layer hack: title generation currently shares the conversation
       // session ID, so the OpenAI plugin marks it for HTTP fallback until transport
       // context can be passed directly instead of smuggled through headers.

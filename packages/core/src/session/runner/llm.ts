@@ -34,6 +34,7 @@ import { SessionSchema } from "../schema"
 import { SessionStore } from "../store"
 import { type RunError, Service } from "./index"
 import { SessionRunnerModel } from "./model"
+import { SessionModelSwitch } from "../model-switch"
 import { createLLMEventPublisher } from "./publish-llm-event"
 import { toLLMMessages } from "./to-llm-message"
 import { MAX_STEPS_PROMPT } from "./max-steps"
@@ -169,6 +170,9 @@ const layer = Layer.effect(
       started: boolean
       turnStartedAt?: DateTime.Utc
       activityInputIDs: ReadonlyArray<SessionMessage.ID>
+      interruptedToolsReconciled: boolean
+      providerID?: string
+      modelID?: string
     }
 
     const continueAfterCompaction = (step: number) => new TurnTransitionError({ _tag: "ContinueAfterCompaction", step })
@@ -202,8 +206,6 @@ const layer = Layer.effect(
       const session = yield* getSession(sessionID)
       if (session.location.directory !== location.directory || session.location.workspaceID !== location.workspaceID)
         return yield* Effect.interrupt
-      const agent = yield* agents.select(session.agent)
-      const toolFibers = yield* FiberSet.make<void, ToolOutputStore.Error>()
       let needsContinuation = false
       let currentStep = step
       const cutoff = promotion ? yield* EventV2.latestSequence(db, session.id) : -1
@@ -211,7 +213,24 @@ const layer = Layer.effect(
         ? yield* SessionInput.pendingActivityIDs(db, session.id, promotion, cutoff)
         : []
       activity.activityInputIDs = mergeInputIDs(activity.activityInputIDs, pendingActivityInputIDs)
+      if (promotion) {
+        let promoted = 0
+        if (promotion === "steer") promoted = yield* SessionInput.promoteSteers(db, events, session.id, cutoff)
+        if (promotion === "queue") {
+          promoted += Number(yield* SessionInput.promoteNextQueued(db, events, session.id))
+          promoted += yield* SessionInput.promoteSteers(db, events, session.id, cutoff)
+        }
+        if (promoted > 0) currentStep = 1
+      }
+      if (!activity.interruptedToolsReconciled) {
+        yield* failInterruptedTools(session.id)
+        activity.interruptedToolsReconciled = true
+      }
+      const agent = yield* agents.select(session.agent)
+      const toolFibers = yield* FiberSet.make<void, ToolOutputStore.Error>()
       const model = yield* models.resolve(session)
+      activity.providerID = model.provider
+      activity.modelID = model.id
       const effectiveModel = {
         id: ModelV2.ID.make(model.id),
         providerID: ProviderV2.ID.make(model.provider),
@@ -224,15 +243,6 @@ const layer = Layer.effect(
       activity.activityInputIDs = activityBeforePromotion
       const contextSource = loadSystemContext(session, agent, effectiveModel, activityBeforePromotion)
       const initialized = yield* SessionContextEpoch.initialize(db, contextSource, session.id)
-      if (promotion) {
-        let promoted = 0
-        if (promotion === "steer") promoted = yield* SessionInput.promoteSteers(db, events, session.id, cutoff)
-        if (promotion === "queue") {
-          promoted += Number(yield* SessionInput.promoteNextQueued(db, events, session.id))
-          promoted += yield* SessionInput.promoteSteers(db, events, session.id, cutoff)
-        }
-        if (promoted > 0) currentStep = 1
-      }
       const activityInputIDs = mergeInputIDs(
         activityBeforePromotion,
         currentActivityInputIDs(yield* getContext(session.id)),
@@ -453,18 +463,20 @@ const layer = Layer.effect(
       readonly sessionID: SessionSchema.ID
       readonly force: boolean
     }) {
+      yield* SessionModelSwitch.applyPending(db, events, input.sessionID)
       const hasSteer = yield* SessionInput.hasPending(db, input.sessionID, "steer")
       const hasQueue = hasSteer ? false : yield* SessionInput.hasPending(db, input.sessionID, "queue")
       if (!input.force && !hasSteer && !hasQueue) return
-      yield* failInterruptedTools(input.sessionID)
       let promotion: SessionInput.Delivery | undefined = hasSteer ? "steer" : hasQueue ? "queue" : undefined
       let shouldRun = input.force || hasSteer || hasQueue
       while (shouldRun) {
+        yield* SessionModelSwitch.applyPending(db, events, input.sessionID)
         const activity: Activity = {
           turnID: SessionMessage.ID.create(),
           startCommitEntered: false,
           started: false,
           activityInputIDs: [],
+          interruptedToolsReconciled: false,
         }
         const activityExit = yield* Effect.uninterruptibleMask((restore) =>
           restore(
@@ -522,7 +534,7 @@ const layer = Layer.effect(
                 yield* events.publish(SessionEvent.Turn.Settled, {
                   sessionID: input.sessionID,
                   timestamp: yield* DateTime.now,
-                  schema: "opencode.turn_settled.v1",
+                  schema: "opencode.turn_settled.v2",
                   turnID: activity.turnID,
                   turnStartedAt,
                   activityInputIDs: activity.activityInputIDs,
@@ -530,8 +542,11 @@ const layer = Layer.effect(
                   ...(Exit.isFailure(exit)
                     ? {
                         reason: failureReason,
-                        errorClass: interrupted ? ("interrupt" as const) : ("unknown" as const),
+                        errorClass: interrupted ? ("interrupt" as const) : runtimeErrorClass(error),
                         ...(interrupted ? { abortOrigin: "framework" as const } : {}),
+                        ...(!interrupted
+                          ? { failure: runtimeFailure(error, activity.providerID, activity.modelID) }
+                          : {}),
                       }
                     : {}),
                 })
@@ -539,6 +554,7 @@ const layer = Layer.effect(
             ),
           ),
         )
+        yield* SessionModelSwitch.applyPending(db, events, input.sessionID)
         if (Exit.isFailure(activityExit)) return yield* Effect.failCause(activityExit.cause)
         shouldRun = yield* SessionInput.hasPending(db, input.sessionID, "queue")
         promotion = shouldRun ? "queue" : undefined
@@ -595,3 +611,54 @@ const mergeInputIDs = (
   current: ReadonlyArray<SessionMessage.ID>,
   added: ReadonlyArray<SessionMessage.ID>,
 ): ReadonlyArray<SessionMessage.ID> => [...new Set([...current, ...added])]
+
+const failureKind = (error: unknown): SessionEvent.Turn.Failure["kind"] => {
+  if (!(error instanceof LLMError)) return "unknown"
+  switch (error.reason._tag) {
+    case "Authentication": return "authentication"
+    case "QuotaExceeded": return "quota"
+    case "RateLimit": return "rate_limit"
+    case "ProviderInternal": return "provider_internal"
+    case "Transport": return "transport"
+    case "InvalidRequest":
+    case "NoRoute":
+    case "InvalidProviderOutput": return "invalid_request"
+    case "ContentPolicy": return "content_policy"
+    case "UnknownProvider": return "unknown"
+  }
+}
+
+const runtimeErrorClass = (error: unknown) => {
+  const kind = failureKind(error)
+  if (kind === "authentication" || kind === "quota" || kind === "rate_limit") return "resource" as const
+  if (kind === "provider_internal" || kind === "transport") return "transport" as const
+  return "unknown" as const
+}
+
+const runtimeFailure = (
+  error: unknown,
+  providerID?: string,
+  modelID?: string,
+): SessionEvent.Turn.Failure => {
+  const llmError = error instanceof LLMError ? error : undefined
+  const reason = llmError?.reason
+  const httpStatus = reason && "http" in reason
+    ? reason.http?.response?.status
+    : reason && "status" in reason && typeof reason.status === "number"
+      ? reason.status
+      : undefined
+  const message = llmError?.reason.message ?? "Agent turn failed before a typed provider error was available"
+  const safeMessage = message.replace(/\s+/g, " ").trim().slice(0, 500) || "Agent turn failed"
+  return {
+    kind: failureKind(error),
+    safeMessage,
+    ...(httpStatus === undefined ? {} : { httpStatus }),
+    ...(reason?._tag === "Transport" && reason.kind ? { transportKind: reason.kind } : {}),
+    ...(reason?._tag === "Transport" && reason.code ? { transportCode: reason.code } : {}),
+    retryable: llmError?.retryable ?? false,
+    retryExhausted: llmError?.retryExhausted ?? false,
+    attemptCount: Math.max(1, Math.trunc(llmError?.attemptCount ?? 1)),
+    providerID: providerID ?? "unknown",
+    modelID: modelID ?? "unknown",
+  }
+}

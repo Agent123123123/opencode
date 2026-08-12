@@ -9,7 +9,7 @@ describe("public event manifest", () => {
     expect(EventManifest.Definitions).toBe(SchemaEventManifest.Definitions)
     expect(EventManifest.Latest).toBe(SchemaEventManifest.Latest)
     expect(EventManifest.Durable).toBe(SchemaEventManifest.Durable)
-    expect(EventManifest.Latest.size).toBe(91)
+    expect(EventManifest.Latest.size).toBe(93)
     expect(EventManifest.Latest.get("session.turn.started")).toBe(SessionEvent.Turn.Started)
     expect(EventManifest.Latest.get("session.turn.not_started")).toBe(SessionEvent.Turn.NotStarted)
     expect(EventManifest.Latest.get("session.turn.settled")).toBe(SessionEvent.Turn.Settled)

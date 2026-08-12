@@ -188,6 +188,18 @@ export const hasPending = Effect.fn("SessionInput.hasPending")(function* (
   return row !== undefined
 })
 
+/** Sessions whose durable inbox still contains work that has not been claimed by a runner. */
+export const pendingSessionIDs = Effect.fn("SessionInput.pendingSessionIDs")(function* (db: DatabaseService) {
+  const rows = yield* db
+    .selectDistinct({ sessionID: SessionInputTable.session_id })
+    .from(SessionInputTable)
+    .where(isNull(SessionInputTable.promoted_seq))
+    .orderBy(asc(SessionInputTable.session_id))
+    .all()
+    .pipe(Effect.orDie)
+  return rows.map((row) => SessionSchema.ID.make(row.sessionID))
+})
+
 /** Read the exact pending inputs that the next promotion will publish, without mutating inbox state. */
 export const pendingActivityIDs = Effect.fn("SessionInput.pendingActivityIDs")(function* (
   db: DatabaseService,

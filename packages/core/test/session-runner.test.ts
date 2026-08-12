@@ -4,6 +4,7 @@ import {
   LLMError,
   LLMEvent,
   Model,
+  ProviderInternalReason,
   TransportReason,
   InvalidRequestReason,
   type LLMClientShape,
@@ -31,6 +32,7 @@ import { SessionMessage } from "@opencode-ai/core/session/message"
 import { Prompt } from "@opencode-ai/core/session/prompt"
 import { SessionProjector } from "@opencode-ai/core/session/projector"
 import { SessionExecution } from "@opencode-ai/core/session/execution"
+import { reconcilePending } from "@opencode-ai/core/session/execution/local"
 import { SessionRunCoordinator } from "@opencode-ai/core/session/run-coordinator"
 import { SessionRunner } from "@opencode-ai/core/session/runner"
 import * as SessionRunnerLLM from "@opencode-ai/core/session/runner/llm"
@@ -578,7 +580,7 @@ describe("SessionRunnerLLM", () => {
         return yield* Effect.die("Expected a complete durable turn proof")
       expect(started.data.activityInputIDs).toEqual([admitted.id])
       expect(settled.data).toMatchObject({
-        schema: "opencode.turn_settled.v1",
+        schema: "opencode.turn_settled.v2",
         turnID: started.data.turnID,
         turnStartedAt: started.data.turnStartedAt,
         activityInputIDs: [admitted.id],
@@ -630,6 +632,38 @@ describe("SessionRunnerLLM", () => {
           (event) => event.type === "session.turn.started" && event.data.turnID === notStarted.data.turnID,
         ),
       ).toBe(false)
+    }),
+  )
+
+  it.effect("claims an admitted input before model resolution and records a pre-start failure", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const { db } = yield* Database.Service
+      const session = yield* SessionV2.Service
+      const admitted = yield* session.prompt({
+        sessionID,
+        prompt: Prompt.make({ text: "Fail during model resolution" }),
+        resume: false,
+      })
+      modelResolveHook = Effect.die(new Error("model resolution failed"))
+
+      const exit = yield* session.resume(sessionID).pipe(Effect.exit)
+
+      expect(Exit.isFailure(exit)).toBe(true)
+      expect(yield* SessionInput.find(db, admitted.id)).toHaveProperty("promotedSeq")
+      const history = yield* session.history({ sessionID, limit: 100 })
+      expect(
+        history.events.find(
+          (event) => event.type === "session.turn.not_started" && event.data.activityInputIDs.includes(admitted.id),
+        ),
+      ).toMatchObject({
+        type: "session.turn.not_started",
+        data: {
+          activityInputIDs: [admitted.id],
+          outcome: "failed",
+          reason: "model resolution failed",
+        },
+      })
     }),
   )
 
@@ -737,6 +771,7 @@ describe("SessionRunnerLLM", () => {
     Effect.gen(function* () {
       yield* setup
       const session = yield* SessionV2.Service
+      const { db } = yield* Database.Service
       requests.length = 0
       responses = undefined
       streamGate = undefined
@@ -749,6 +784,7 @@ describe("SessionRunnerLLM", () => {
       expect(yield* session.messages({ sessionID })).toMatchObject([
         { id: message.id, type: "user", text: "Run automatically" },
       ])
+      expect(yield* SessionInput.find(db, message.id)).toHaveProperty("promotedSeq")
     }),
   )
 
@@ -777,7 +813,7 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
-  it.effect("retries the first provider turn after system context becomes available", () =>
+  it.effect("allows an explicit retry after pre-start context initialization fails", () =>
     Effect.gen(function* () {
       yield* setup
       const session = yield* SessionV2.Service
@@ -792,7 +828,14 @@ describe("SessionRunnerLLM", () => {
       expect(Exit.isFailure(exit)).toBe(true)
       if (Exit.isFailure(exit)) expect(Cause.squash(exit.cause)).toBeInstanceOf(SystemContext.InitializationBlocked)
       expect(requests).toHaveLength(0)
-      expect(yield* SessionInput.hasPending(db, sessionID, "steer")).toBe(true)
+      expect(yield* SessionInput.hasPending(db, sessionID, "steer")).toBe(false)
+      expect(yield* SessionInput.find(db, messageID)).toHaveProperty("promotedSeq")
+      expect((yield* session.history({ sessionID, limit: 100 })).events).toContainEqual(
+        expect.objectContaining({
+          type: "session.turn.not_started",
+          data: expect.objectContaining({ activityInputIDs: [messageID], outcome: "failed" }),
+        }),
+      )
       expect(
         yield* db
           .select()
@@ -802,7 +845,7 @@ describe("SessionRunnerLLM", () => {
       ).toBeUndefined()
 
       systemUnavailable = false
-      yield* session.prompt({ id: messageID, sessionID, prompt: Prompt.make({ text: "First" }) })
+      yield* session.resume(sessionID)
 
       expect(requests).toHaveLength(1)
       expect(requests[0]?.messages.map((message) => message.role)).toEqual(["user"])
@@ -1585,7 +1628,7 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
-  it.effect("reloads a model switch before a tool-driven continuation turn", () =>
+  it.effect("keeps one model through a tool-driven turn and applies a durable switch after settlement", () =>
     Effect.gen(function* () {
       yield* setup
       const session = yield* SessionV2.Service
@@ -1611,9 +1654,8 @@ describe("SessionRunnerLLM", () => {
       toolExecutionsReady = 1
       const run = yield* Effect.forkChild(session.resume(sessionID))
       yield* Deferred.await(toolExecutionsStarted)
-      yield* events.publish(SessionEvent.ModelSwitched, {
+      yield* events.publish(SessionEvent.ModelSwitchRequested, {
         sessionID,
-        messageID: SessionMessage.ID.create(),
         timestamp: DateTime.makeUnsafe(1),
         model: { id: ModelV2.ID.make("replacement"), providerID: ProviderV2.ID.make("fake") },
       })
@@ -1621,12 +1663,46 @@ describe("SessionRunnerLLM", () => {
       yield* Deferred.succeed(toolExecutionGate, undefined)
       yield* Fiber.join(run)
 
-      expect(requests.map((request) => request.model)).toEqual([model, replacementModel])
+      expect(requests.map((request) => request.model)).toEqual([model, model])
       expect(requests.map((request) => request.system.map((part) => part.text))).toEqual([
         ["Initial context"],
         ["Initial context"],
       ])
-      expect(systemTexts(requests[1]!)).toContain("Replacement context")
+      expect(yield* session.get(sessionID)).toMatchObject({
+        model: { id: "replacement", providerID: "fake" },
+      })
+    }),
+  )
+
+  it.effect("runs a new prompt on the applied model and persists its normal reply", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const events = yield* EventV2.Service
+      const execution = yield* SessionExecution.Service
+      yield* events.publish(SessionEvent.ModelSwitchRequested, {
+        sessionID,
+        timestamp: DateTime.makeUnsafe(1),
+        model: { id: ModelV2.ID.make("replacement"), providerID: ProviderV2.ID.make("fake") },
+      })
+      yield* execution.wake(sessionID)
+      while ((yield* session.get(sessionID)).model?.id !== "replacement") yield* Effect.yieldNow
+
+      requests.length = 0
+      response = fragmentFixture("text", "text-after-switch", ["MODEL_SWITCH_PROMPT_OK"]).completeEvents
+      yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Reply after switching" }), resume: false })
+      yield* session.resume(sessionID)
+
+      expect(requests).toHaveLength(1)
+      expect(requests[0]?.model).toBe(replacementModel)
+      expect(yield* session.messages({ sessionID })).toContainEqual(
+        expect.objectContaining({
+          type: "assistant",
+          finish: "stop",
+          model: { id: "replacement", providerID: "fake", variant: "default" },
+          content: [{ type: "text", id: "text-after-switch", text: "MODEL_SWITCH_PROMPT_OK" }],
+        }),
+      )
     }),
   )
 
@@ -2496,6 +2572,82 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
+  it.effect("reconciles a pending durable input through the execution startup path", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const { db } = yield* Database.Service
+      const session = yield* SessionV2.Service
+      const execution = yield* SessionExecution.Service
+      const admitted = yield* session.prompt({
+        sessionID,
+        prompt: Prompt.make({ text: "Resume after execution service restart" }),
+        delivery: "queue",
+        resume: false,
+      })
+
+      requests.length = 0
+      expect(yield* reconcilePending(db, execution.wake)).toBe(1)
+      while (requests.length === 0) yield* Effect.yieldNow
+
+      expect(userTexts(requests[0]!)).toEqual(["Resume after execution service restart"])
+      expect(yield* SessionInput.find(db, admitted.id)).toHaveProperty("promotedSeq")
+    }),
+  )
+
+  it.effect("reconciles a durable model request without starting a provider turn", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const { db } = yield* Database.Service
+      const events = yield* EventV2.Service
+      const session = yield* SessionV2.Service
+      const execution = yield* SessionExecution.Service
+      yield* events.publish(SessionEvent.ModelSwitchRequested, {
+        sessionID,
+        timestamp: DateTime.makeUnsafe(1),
+        model: { id: ModelV2.ID.make("replacement"), providerID: ProviderV2.ID.make("fake") },
+      })
+
+      requests.length = 0
+      expect(yield* reconcilePending(db, execution.wake)).toBe(1)
+      while ((yield* session.get(sessionID)).model?.id !== "replacement") yield* Effect.yieldNow
+
+      expect(requests).toHaveLength(0)
+      expect(yield* session.get(sessionID)).toMatchObject({
+        model: { id: "replacement", providerID: "fake" },
+      })
+    }),
+  )
+
+  it.effect("coalesces concurrent wakes into one durable input promotion", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const execution = yield* SessionExecution.Service
+      const admitted = yield* session.prompt({
+        sessionID,
+        prompt: Prompt.make({ text: "Promote exactly once" }),
+        delivery: "queue",
+        resume: false,
+      })
+
+      requests.length = 0
+      yield* Effect.all([execution.wake(sessionID), execution.wake(sessionID), execution.wake(sessionID)], {
+        concurrency: "unbounded",
+        discard: true,
+      })
+      while (requests.length === 0) yield* Effect.yieldNow
+      while ((yield* execution.active).has(sessionID)) yield* Effect.yieldNow
+
+      expect(requests).toHaveLength(1)
+      const history = yield* session.history({ sessionID, limit: 100 })
+      expect(
+        history.events.filter(
+          (event) => event.type === SessionEvent.Prompted.type && event.data.messageID === admitted.id,
+        ),
+      ).toHaveLength(1)
+    }),
+  )
+
   it.effect("retries inbox input after prompt projection rolls back", () =>
     Effect.gen(function* () {
       yield* setup
@@ -3248,7 +3400,13 @@ describe("SessionRunnerLLM", () => {
       yield* setup
       const session = yield* SessionV2.Service
       yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Fail raw stream durably" }), resume: false })
-      const failure = providerUnavailable()
+      const failure = new LLMError({
+        module: "test",
+        method: "stream",
+        reason: new ProviderInternalReason({ message: "Provider unavailable", status: 503 }),
+        attemptCount: 3,
+        retryExhausted: true,
+      })
       responseStream = Stream.fail(failure)
 
       expect(yield* session.resume(sessionID).pipe(Effect.flip)).toBe(failure)
@@ -3257,6 +3415,58 @@ describe("SessionRunnerLLM", () => {
         { type: "user", text: "Fail raw stream durably" },
         { type: "assistant", finish: "error", error: { type: "unknown", message: "Provider unavailable" } },
       ])
+      const settled = (yield* session.history({ sessionID, limit: 100 })).events.findLast(
+        (event) => event.type === "session.turn.settled",
+      )
+      expect(settled?.data).toMatchObject({
+        schema: "opencode.turn_settled.v2",
+        outcome: "error",
+        errorClass: "transport",
+        failure: {
+          kind: "provider_internal",
+          safeMessage: "Provider unavailable",
+          httpStatus: 503,
+          retryable: true,
+          retryExhausted: true,
+          attemptCount: 3,
+          providerID: "fake",
+          modelID: "fake-model",
+        },
+      })
+    }),
+  )
+
+  it.effect("persists structured transport diagnostics in terminal turn truth", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Fail transport durably" }), resume: false })
+      const failure = new LLMError({
+        module: "test",
+        method: "stream",
+        reason: new TransportReason({
+          message: "The provider did not send HTTP response headers before the transport deadline.",
+          kind: "timeout",
+          code: "UND_ERR_HEADERS_TIMEOUT",
+        }),
+      })
+      responseStream = Stream.fail(failure)
+
+      expect(yield* session.resume(sessionID).pipe(Effect.flip)).toBe(failure)
+      const settled = (yield* session.history({ sessionID, limit: 100 })).events.findLast(
+        (event) => event.type === "session.turn.settled",
+      )
+      expect(settled?.data).toMatchObject({
+        outcome: "error",
+        failure: {
+          kind: "transport",
+          safeMessage: "The provider did not send HTTP response headers before the transport deadline.",
+          transportKind: "timeout",
+          transportCode: "UND_ERR_HEADERS_TIMEOUT",
+          providerID: "fake",
+          modelID: "fake-model",
+        },
+      })
     }),
   )
 

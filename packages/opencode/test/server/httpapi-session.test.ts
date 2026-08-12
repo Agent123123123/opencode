@@ -557,8 +557,146 @@ describe("session HttpApi", () => {
         })
         expect(prompt.status).toBe(404)
         expect(yield* responseJson(prompt)).toEqual(expected)
+
+        const update = yield* request(`/api/session/${missing}`, {
+          method: "PATCH",
+          headers: { ...headers, "content-type": "application/json" },
+          body: JSON.stringify({ title: "Missing" }),
+        })
+        expect(update.status).toBe(404)
+        expect(yield* responseJson(update)).toEqual(expected)
       }),
     { git: true, config: { formatter: false, lsp: false } },
+  )
+
+  it.instance(
+    "durably renames a v2 Session and exposes the new title through exact readback",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const headers = { "x-opencode-directory": test.directory }
+        const session = yield* createSession({ title: "Before rename" })
+        const update = yield* request(`/api/session/${session.id}`, {
+          method: "PATCH",
+          headers: { ...headers, "content-type": "application/json" },
+          body: JSON.stringify({ title: "After rename" }),
+        })
+
+        expect(update.status).toBe(200)
+        expect(yield* responseJson(update)).toMatchObject({
+          data: { id: session.id, title: "After rename" },
+        })
+        expect(
+          yield* requestJson<{ data: { id: string; title: string } }>(`/api/session/${session.id}`, { headers }),
+        ).toMatchObject({ data: { id: session.id, title: "After rename" } })
+        expect(
+          yield* requestJson<{ data: Array<{ type: string; data: Record<string, unknown> }> }>(
+            `/api/session/${session.id}/history`,
+            { headers },
+          ),
+        ).toMatchObject({
+          data: [
+            {
+              type: "session.next.title.changed",
+              data: { sessionID: session.id, title: "After rename" },
+            },
+          ],
+        })
+
+        for (const title of ["", " untrimmed", "x".repeat(101)]) {
+          const invalid = yield* request(`/api/session/${session.id}`, {
+            method: "PATCH",
+            headers: { ...headers, "content-type": "application/json" },
+            body: JSON.stringify({ title }),
+          })
+          expect(invalid.status).toBe(400)
+          expect(yield* responseJson(invalid)).toMatchObject({ _tag: "InvalidRequestError" })
+        }
+      }),
+    { git: true, config: { formatter: false, lsp: false } },
+  )
+
+  it.live("keeps one v2 Session responsive across rename and subsequent prompts", () =>
+    Effect.gen(function* () {
+      const llm = yield* TestLLMServer
+      yield* llm.text("reply before rename", { usage: { input: 2, output: 3 } })
+      yield* llm.text("reply after rename", { usage: { input: 4, output: 5 } })
+      const providerConfig = testProviderConfig(llm.url)
+      const directory = yield* tmpdirScoped({
+        git: true,
+        config: {
+          ...providerConfig,
+          provider: {
+            test: {
+              ...providerConfig.provider.test,
+              options: { apiKey: "test-key", baseURL: llm.url, body: { apiKey: "test-key" } },
+            },
+          },
+        },
+      })
+      const headers = { "x-opencode-directory": directory }
+      const create = yield* request("/api/session", {
+        method: "POST",
+        headers: { ...headers, "content-type": "application/json" },
+        body: JSON.stringify({
+          agent: "build",
+          model: { providerID: "test", id: "test-model", variant: "default" },
+          location: { directory },
+        }),
+      })
+      const created = (yield* responseJson(create)) as { data: { id: string } }
+      expect(create.status, JSON.stringify(created)).toBe(200)
+      const sessionID = created.data.id
+      const prompt = (text: string) =>
+        request(`/api/session/${sessionID}/prompt`, {
+          method: "POST",
+          headers: { ...headers, "content-type": "application/json" },
+          body: JSON.stringify({ prompt: { text } }),
+        })
+      const messages = () =>
+        requestJson<{ data: SessionMessage.Message[] }>(`/api/session/${sessionID}/message?order=asc`, { headers }).pipe(
+          Effect.map(({ data }) => data),
+        )
+      const assistantTexts = (items: SessionMessage.Message[]) =>
+        items.flatMap((message) =>
+          message.type === "assistant"
+            ? message.content.flatMap((part) => (part.type === "text" ? [part.text] : []))
+            : [],
+        )
+
+      expect((yield* prompt("before rename")).status).toBe(200)
+      const update = yield* request(`/api/session/${sessionID}`, {
+        method: "PATCH",
+        headers: { ...headers, "content-type": "application/json" },
+        body: JSON.stringify({ title: "连续会话 Session" }),
+      })
+      expect(update.status).toBe(200)
+      expect(yield* responseJson(update)).toMatchObject({ data: { id: sessionID, title: "连续会话 Session" } })
+      yield* pollWithTimeout(
+        messages().pipe(
+          Effect.map((items) => (assistantTexts(items).includes("reply before rename") ? items : undefined)),
+        ),
+        "first assistant reply did not complete after rename",
+        "10 seconds",
+      )
+
+      expect((yield* prompt("after rename")).status).toBe(200)
+      const finalMessages = yield* pollWithTimeout(
+        messages().pipe(
+          Effect.map((items) => (assistantTexts(items).includes("reply after rename") ? items : undefined)),
+        ),
+        "second assistant reply did not complete",
+        "10 seconds",
+      )
+      expect(assistantTexts(finalMessages)).toEqual(["reply before rename", "reply after rename"])
+      expect(
+        finalMessages.flatMap((message) => (message.type === "user" ? [message.text] : [])),
+      ).toEqual(["before rename", "after rename"])
+      expect(
+        yield* requestJson<{ data: { id: string; title: string } }>(`/api/session/${sessionID}`, { headers }),
+      ).toMatchObject({ data: { id: sessionID, title: "连续会话 Session" } })
+    }).pipe(Effect.provide(TestLLMServer.layer), Effect.provide(AppNodeBuilder.build(CrossSpawnSpawner.node))),
+    30_000,
   )
 
   it.instance(

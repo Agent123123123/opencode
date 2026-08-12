@@ -1,16 +1,31 @@
 import { Cause, Effect, Layer } from "effect"
+import { Database } from "../../database/database"
 import { LocationServiceMap } from "../../location-service-map"
 import { makeGlobalNode } from "../../effect/app-node"
+import { SessionInput } from "../input"
+import { SessionModelSwitch } from "../model-switch"
 import { SessionRunCoordinator } from "../run-coordinator"
 import { SessionRunner } from "../runner"
 import { SessionSchema } from "../schema"
 import { SessionStore } from "../store"
 import { SessionExecution } from "../execution"
 
+export const reconcilePending = Effect.fn("SessionExecutionLocal.reconcilePending")(function* (
+  db: Database.Interface["db"],
+  wake: (sessionID: SessionSchema.ID) => Effect.Effect<void>,
+) {
+  const sessionIDs = Array.from(
+    new Set([...(yield* SessionInput.pendingSessionIDs(db)), ...(yield* SessionModelSwitch.pendingSessionIDs(db))]),
+  )
+  yield* Effect.forEach(sessionIDs, wake, { discard: true })
+  return sessionIDs.length
+})
+
 /** Current-process routing for implicit-local Locations. Future remote placement belongs here. */
 const layer = Layer.effect(
   SessionExecution.Service,
   Effect.gen(function* () {
+    const { db } = yield* Database.Service
     const store = yield* SessionStore.Service
     const locations = yield* LocationServiceMap.Service
     const coordinator = yield* SessionRunCoordinator.make<SessionSchema.ID, SessionRunner.RunError>({
@@ -28,6 +43,8 @@ const layer = Layer.effect(
       }),
     })
 
+    yield* reconcilePending(db, coordinator.wake)
+
     return SessionExecution.Service.of({
       active: coordinator.active,
       interrupt: coordinator.interrupt,
@@ -40,7 +57,7 @@ const layer = Layer.effect(
 export const node = makeGlobalNode({
   service: SessionExecution.Service,
   layer,
-  deps: [SessionStore.node, LocationServiceMap.node],
+  deps: [Database.node, SessionStore.node, LocationServiceMap.node],
 })
 
 export * as SessionExecutionLocal from "./local"

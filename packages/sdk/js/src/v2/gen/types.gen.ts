@@ -17,7 +17,9 @@ export type Event =
   | EventMessagePartUpdated
   | EventMessagePartRemoved
   | EventSessionNextAgentSwitched
+  | EventSessionNextModelSwitchRequested
   | EventSessionNextModelSwitched
+  | EventSessionNextTitleChanged
   | EventSessionNextMoved
   | EventSessionNextPrompted
   | EventSessionNextPromptAdmitted
@@ -833,12 +835,30 @@ export type GlobalEvent = {
       }
     | {
         id: string
+        type: "session.next.model.switch.requested"
+        properties: {
+          timestamp: number
+          sessionID: string
+          model: ModelRef
+        }
+      }
+    | {
+        id: string
         type: "session.next.model.switched"
         properties: {
           timestamp: number
           sessionID: string
           messageID: string
           model: ModelRef
+        }
+      }
+    | {
+        id: string
+        type: "session.next.title.changed"
+        properties: {
+          timestamp: number
+          sessionID: string
+          title: SessionTitle
         }
       }
     | {
@@ -914,7 +934,7 @@ export type GlobalEvent = {
         properties: {
           timestamp: number
           sessionID: string
-          schema: "opencode.turn_settled.v1"
+          schema: "opencode.turn_settled.v2"
           turnID: string
           turnStartedAt: number
           activityInputIDs: Array<string>
@@ -922,6 +942,26 @@ export type GlobalEvent = {
           reason?: string
           errorClass?: "transport" | "resource" | "protocol" | "interrupt" | "unknown"
           abortOrigin?: "user" | "framework" | "runtime_shutdown" | "unknown"
+          failure?: {
+            kind:
+              | "authentication"
+              | "quota"
+              | "rate_limit"
+              | "provider_internal"
+              | "transport"
+              | "invalid_request"
+              | "content_policy"
+              | "unknown"
+            safeMessage: string
+            httpStatus?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+            transportKind?: string
+            transportCode?: string
+            retryable: boolean
+            retryExhausted: boolean
+            attemptCount: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+            providerID: string
+            modelID: string
+          }
         }
       }
     | {
@@ -1653,7 +1693,9 @@ export type GlobalEvent = {
     | SyncEventMessagePartUpdated
     | SyncEventMessagePartRemoved
     | SyncEventSessionNextAgentSwitched
+    | SyncEventSessionNextModelSwitchRequested
     | SyncEventSessionNextModelSwitched
+    | SyncEventSessionNextTitleChanged
     | SyncEventSessionNextMoved
     | SyncEventSessionNextPrompted
     | SyncEventSessionNextPromptAdmitted
@@ -2781,7 +2823,9 @@ export type UnknownError1 = {
 
 export type SessionDurableEvent =
   | SessionNextAgentSwitched
+  | SessionNextModelSwitchRequested
   | SessionNextModelSwitched
+  | SessionNextTitleChanged
   | SessionNextMoved
   | SessionNextPrompted
   | SessionNextPromptAdmitted
@@ -2911,14 +2955,16 @@ export type V2Event =
   | MessagePartUpdated
   | MessagePartRemoved
   | SessionNextAgentSwitched
+  | SessionNextModelSwitchRequested
   | SessionNextModelSwitched
+  | SessionNextTitleChanged
   | SessionNextMoved
   | SessionNextPrompted
   | SessionNextPromptAdmitted
   | SessionNextContextUpdated
   | SessionTurnStarted
   | SessionTurnNotStarted
-  | SessionTurnSettled
+  | SessionTurnSettled1
   | SessionNextSynthetic
   | SessionNextShellStarted
   | SessionNextShellEnded
@@ -3089,6 +3135,8 @@ export type ModelRef = {
   providerID: string
   variant?: string
 }
+
+export type SessionTitle = string
 
 export type LocationRef = {
   directory: string
@@ -3364,6 +3412,22 @@ export type SyncEventSessionNextAgentSwitched = {
   }
 }
 
+export type SyncEventSessionNextModelSwitchRequested = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "session.next.model.switch.requested.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      timestamp: number
+      sessionID: string
+      model: ModelRef
+    }
+  }
+}
+
 export type SyncEventSessionNextModelSwitched = {
   type: "sync"
   id: string
@@ -3377,6 +3441,22 @@ export type SyncEventSessionNextModelSwitched = {
       sessionID: string
       messageID: string
       model: ModelRef
+    }
+  }
+}
+
+export type SyncEventSessionNextTitleChanged = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "session.next.title.changed.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      timestamp: number
+      sessionID: string
+      title: SessionTitle
     }
   }
 }
@@ -3494,14 +3574,14 @@ export type SyncEventSessionTurnSettled = {
   type: "sync"
   id: string
   syncEvent: {
-    type: "session.turn.settled.1"
+    type: "session.turn.settled.2"
     id: string
     seq: number
     aggregateID: string
     data: {
       timestamp: number
       sessionID: string
-      schema: "opencode.turn_settled.v1"
+      schema: "opencode.turn_settled.v2"
       turnID: string
       turnStartedAt: number
       activityInputIDs: Array<string>
@@ -3509,6 +3589,26 @@ export type SyncEventSessionTurnSettled = {
       reason?: string
       errorClass?: "transport" | "resource" | "protocol" | "interrupt" | "unknown"
       abortOrigin?: "user" | "framework" | "runtime_shutdown" | "unknown"
+      failure?: {
+        kind:
+          | "authentication"
+          | "quota"
+          | "rate_limit"
+          | "provider_internal"
+          | "transport"
+          | "invalid_request"
+          | "content_policy"
+          | "unknown"
+        safeMessage: string
+        httpStatus?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        transportKind?: string
+        transportCode?: string
+        retryable: boolean
+        retryExhausted: boolean
+        attemptCount: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        providerID: string
+        modelID: string
+      }
     }
   }
 }
@@ -4034,7 +4134,7 @@ export type SessionV2Info = {
     updated: number
     archived?: number
   }
-  title: string
+  title: SessionTitle
   location: LocationRef
   subpath?: string
   revert?: RevertState
@@ -4293,6 +4393,25 @@ export type SessionNextAgentSwitched = {
   }
 }
 
+export type SessionNextModelSwitchRequested = {
+  id: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  type: "session.next.model.switch.requested"
+  durable?: {
+    aggregateID: string
+    seq: number
+    version: number
+  }
+  location?: LocationRef
+  data: {
+    timestamp: number
+    sessionID: string
+    model: ModelRef
+  }
+}
+
 export type SessionNextModelSwitched = {
   id: string
   metadata?: {
@@ -4310,6 +4429,25 @@ export type SessionNextModelSwitched = {
     sessionID: string
     messageID: string
     model: ModelRef
+  }
+}
+
+export type SessionNextTitleChanged = {
+  id: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  type: "session.next.title.changed"
+  durable?: {
+    aggregateID: string
+    seq: number
+    version: number
+  }
+  location?: LocationRef
+  data: {
+    timestamp: number
+    sessionID: string
+    title: SessionTitle
   }
 }
 
@@ -4455,7 +4593,7 @@ export type SessionTurnSettled = {
   data: {
     timestamp: number
     sessionID: string
-    schema: "opencode.turn_settled.v1"
+    schema: "opencode.turn_settled.v2"
     turnID: string
     turnStartedAt: number
     activityInputIDs: Array<string>
@@ -4463,6 +4601,26 @@ export type SessionTurnSettled = {
     reason?: string
     errorClass?: "transport" | "resource" | "protocol" | "interrupt" | "unknown"
     abortOrigin?: "user" | "framework" | "runtime_shutdown" | "unknown"
+    failure?: {
+      kind:
+        | "authentication"
+        | "quota"
+        | "rate_limit"
+        | "provider_internal"
+        | "transport"
+        | "invalid_request"
+        | "content_policy"
+        | "unknown"
+      safeMessage: string
+      httpStatus?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      transportKind?: string
+      transportCode?: string
+      retryable: boolean
+      retryExhausted: boolean
+      attemptCount: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      providerID: string
+      modelID: string
+    }
   }
 }
 
@@ -4950,6 +5108,52 @@ export type SessionNextRevertCommitted = {
     timestamp: number
     sessionID: string
     messageID: string
+  }
+}
+
+export type SessionTurnSettled1 = {
+  id: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  type: "session.turn.settled"
+  durable?: {
+    aggregateID: string
+    seq: number
+    version: number
+  }
+  location?: LocationRef
+  data: {
+    timestamp: number
+    sessionID: string
+    schema: "opencode.turn_settled.v2"
+    turnID: string
+    turnStartedAt: number
+    activityInputIDs: Array<string>
+    outcome: "completed" | "error" | "aborted"
+    reason?: string
+    errorClass?: "transport" | "resource" | "protocol" | "interrupt" | "unknown"
+    abortOrigin?: "user" | "framework" | "runtime_shutdown" | "unknown"
+    failure?: {
+      kind:
+        | "authentication"
+        | "quota"
+        | "rate_limit"
+        | "provider_internal"
+        | "transport"
+        | "invalid_request"
+        | "content_policy"
+        | "unknown"
+      safeMessage: string
+      httpStatus?: number | "NaN" | "Infinity" | "-Infinity"
+      transportKind?: string
+      transportCode?: string
+      retryable: boolean
+      retryExhausted: boolean
+      attemptCount: number | "NaN" | "Infinity" | "-Infinity"
+      providerID: string
+      modelID: string
+    }
   }
 }
 
@@ -6441,6 +6645,16 @@ export type EventSessionNextAgentSwitched = {
   }
 }
 
+export type EventSessionNextModelSwitchRequested = {
+  id: string
+  type: "session.next.model.switch.requested"
+  properties: {
+    timestamp: number
+    sessionID: string
+    model: ModelRef
+  }
+}
+
 export type EventSessionNextModelSwitched = {
   id: string
   type: "session.next.model.switched"
@@ -6449,6 +6663,16 @@ export type EventSessionNextModelSwitched = {
     sessionID: string
     messageID: string
     model: ModelRef
+  }
+}
+
+export type EventSessionNextTitleChanged = {
+  id: string
+  type: "session.next.title.changed"
+  properties: {
+    timestamp: number
+    sessionID: string
+    title: SessionTitle
   }
 }
 
@@ -6531,7 +6755,7 @@ export type EventSessionTurnSettled = {
   properties: {
     timestamp: number
     sessionID: string
-    schema: "opencode.turn_settled.v1"
+    schema: "opencode.turn_settled.v2"
     turnID: string
     turnStartedAt: number
     activityInputIDs: Array<string>
@@ -6539,6 +6763,26 @@ export type EventSessionTurnSettled = {
     reason?: string
     errorClass?: "transport" | "resource" | "protocol" | "interrupt" | "unknown"
     abortOrigin?: "user" | "framework" | "runtime_shutdown" | "unknown"
+    failure?: {
+      kind:
+        | "authentication"
+        | "quota"
+        | "rate_limit"
+        | "provider_internal"
+        | "transport"
+        | "invalid_request"
+        | "content_policy"
+        | "unknown"
+      safeMessage: string
+      httpStatus?: number | "NaN" | "Infinity" | "-Infinity"
+      transportKind?: string
+      transportCode?: string
+      retryable: boolean
+      retryExhausted: boolean
+      attemptCount: number | "NaN" | "Infinity" | "-Infinity"
+      providerID: string
+      modelID: string
+    }
   }
 }
 
@@ -11710,6 +11954,45 @@ export type V2SessionGetResponses = {
 
 export type V2SessionGetResponse = V2SessionGetResponses[keyof V2SessionGetResponses]
 
+export type V2SessionUpdateData = {
+  body: {
+    title: SessionTitle
+  }
+  path: {
+    sessionID: string
+  }
+  query?: never
+  url: "/api/session/{sessionID}"
+}
+
+export type V2SessionUpdateErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * SessionNotFoundError
+   */
+  404: SessionNotFoundError
+}
+
+export type V2SessionUpdateError = V2SessionUpdateErrors[keyof V2SessionUpdateErrors]
+
+export type V2SessionUpdateResponses = {
+  /**
+   * Success
+   */
+  200: {
+    data: SessionV2Info
+  }
+}
+
+export type V2SessionUpdateResponse = V2SessionUpdateResponses[keyof V2SessionUpdateResponses]
+
 export type V2SessionSwitchAgentData = {
   body: {
     agent: string
@@ -11771,6 +12054,10 @@ export type V2SessionSwitchModelErrors = {
    * SessionNotFoundError
    */
   404: SessionNotFoundError
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
 }
 
 export type V2SessionSwitchModelError = V2SessionSwitchModelErrors[keyof V2SessionSwitchModelErrors]

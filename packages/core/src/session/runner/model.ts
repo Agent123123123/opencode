@@ -13,6 +13,7 @@ import { Credential } from "../../credential"
 import { Integration } from "../../integration"
 import { ModelV2 } from "../../model"
 import { ProviderV2 } from "../../provider"
+import { OpenAITransport } from "../../plugin/provider/openai-transport"
 import { SessionSchema } from "../schema"
 import { SessionModelSupport } from "../model-support"
 
@@ -131,8 +132,9 @@ const apiName = (model: ModelV2.Info) =>
 
 export const fromCatalogModel = (
   model: ModelV2.Info,
-  credential?: Credential.Value,
+  input: { readonly sessionID: SessionSchema.ID; readonly credential?: Credential.Value },
 ): Effect.Effect<Model, UnsupportedApiError> => {
+  const credential = input.credential
   const resolved =
     credential?.type !== "key" || credential.metadata === undefined
       ? model
@@ -141,9 +143,14 @@ export const fromCatalogModel = (
         })
   const key = apiKey(resolved, credential)
   if (resolved.api.type === "aisdk" && resolved.api.package === "@ai-sdk/openai") {
+    const oauth = OpenAITransport.fromCredential({
+      providerID: resolved.providerID,
+      credential,
+      sessionID: input.sessionID,
+    })
     return Effect.succeed(
       withDefaults(resolved, OpenAIResponses.route)
-        .with({ auth: key === undefined ? Auth.none : Auth.bearer(key) })
+        .with(oauth ?? { auth: key === undefined ? Auth.none : Auth.bearer(key) })
         .model({ id: resolved.api.id }),
     )
   }
@@ -171,7 +178,9 @@ export const fromCatalogModel = (
 }
 
 export const resolve = (session: SessionSchema.Info, model: ModelV2.Info, credential?: Credential.Value) =>
-  withVariant(model, session.model?.variant).pipe(Effect.flatMap((model) => fromCatalogModel(model, credential)))
+  withVariant(model, session.model?.variant).pipe(
+    Effect.flatMap((model) => fromCatalogModel(model, { credential, sessionID: session.id })),
+  )
 
 export const supported = SessionModelSupport.supported
 

@@ -38,6 +38,7 @@ import { Revert } from "@opencode-ai/schema/revert"
 import { FSUtil } from "./fs-util"
 import { SessionDurable } from "@opencode-ai/schema/durable-event-manifest"
 import { SessionSelection } from "./session/selection"
+import { SessionModelSwitch } from "./session/model-switch"
 
 export const RevertState = Revert.State
 export type RevertState = Revert.State
@@ -153,11 +154,15 @@ export interface Interface {
     after?: number
     limit: number
   }) => Effect.Effect<{ events: ReadonlyArray<SessionEvent.DurableEvent>; hasMore: boolean }, NotFoundError>
+  readonly setTitle: (input: {
+    sessionID: SessionSchema.ID
+    title: SessionSchema.Title
+  }) => Effect.Effect<SessionSchema.Info, NotFoundError>
   readonly switchAgent: (input: { sessionID: SessionSchema.ID; agent: string }) => Effect.Effect<void, NotFoundError>
   readonly switchModel: (input: {
     sessionID: SessionSchema.ID
     model: ModelV2.Ref
-  }) => Effect.Effect<void, NotFoundError>
+  }) => Effect.Effect<void, NotFoundError | SessionSelection.ModelError>
   readonly prompt: (input: {
     id?: SessionMessage.ID
     sessionID: SessionSchema.ID
@@ -215,6 +220,10 @@ const layer = Layer.effect(
       new CreateConflictError({ sessionID, reason })
     const selection = (input: { agent?: AgentV2.ID; model?: ModelV2.Ref }, location: Location.Ref) =>
       SessionSelection.Service.use((service) => service.resolve(input)).pipe(Effect.provide(locations.get(location)))
+    const modelSelection = (model: ModelV2.Ref, location: Location.Ref) =>
+      SessionSelection.Service.use((service) => service.resolveModel(model)).pipe(
+        Effect.provide(locations.get(location)),
+      )
     const verify = (
       session: SessionSchema.Info,
       expected: SessionSelection.Selection,
@@ -396,6 +405,16 @@ const layer = Layer.effect(
           manifest: SessionDurable,
         })
       }),
+      setTitle: Effect.fn("V2Session.setTitle")(function* (input) {
+        const current = yield* result.get(input.sessionID)
+        if (current.title === input.title) return current
+        yield* events.publish(SessionEvent.TitleChanged, {
+          sessionID: input.sessionID,
+          timestamp: yield* DateTime.now,
+          title: input.title,
+        })
+        return yield* result.get(input.sessionID)
+      }),
       prompt: Effect.fn("V2Session.prompt")((input) =>
         Effect.uninterruptible(
           Effect.gen(function* () {
@@ -440,18 +459,16 @@ const layer = Layer.effect(
       }),
       switchModel: Effect.fn("V2Session.switchModel")(function* (input) {
         const session = yield* result.get(input.sessionID)
-        if (
-          session.model?.providerID === input.model.providerID &&
-          session.model.id === input.model.id &&
-          (session.model.variant ?? "default") === (input.model.variant ?? "default")
-        )
-          return
-        yield* events.publish(SessionEvent.ModelSwitched, {
+        const selected = yield* modelSelection(input.model, session.location)
+        const requested = yield* SessionModelSwitch.pending(db, input.sessionID)
+        if (sameModel(requested?.model, selected)) return
+        if (!requested && sameModel(session.model, selected)) return
+        yield* events.publish(SessionEvent.ModelSwitchRequested, {
           sessionID: input.sessionID,
-          messageID: SessionMessage.ID.create(),
           timestamp: yield* DateTime.now,
-          model: input.model,
+          model: selected,
         })
+        yield* execution.wake(input.sessionID)
       }),
       compact: Effect.fn("V2Session.compact")(function* (input) {
         yield* result.get(input.sessionID)

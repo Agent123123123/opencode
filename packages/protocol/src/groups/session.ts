@@ -171,6 +171,22 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
         ),
     )
     .add(
+      HttpApiEndpoint.patch("session.update", "/api/session/:sessionID", {
+        params: { sessionID: Session.ID },
+        payload: Schema.Struct({ title: Session.Title }),
+        success: Schema.Struct({ data: Session.Info }),
+        error: [InvalidRequestError, SessionNotFoundError],
+      })
+        .middleware(sessionLocationMiddleware)
+        .annotateMerge(
+          OpenApi.annotations({
+            identifier: "v2.session.update",
+            summary: "Update session",
+            description: "Update mutable Session metadata.",
+          }),
+        ),
+    )
+    .add(
       HttpApiEndpoint.post("session.switchAgent", "/api/session/:sessionID/agent", {
         params: { sessionID: Session.ID },
         payload: Schema.Struct({ agent: Agent.ID }),
@@ -191,14 +207,14 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
         params: { sessionID: Session.ID },
         payload: Schema.Struct({ model: Model.Ref }),
         success: HttpApiSchema.NoContent,
-        error: SessionNotFoundError,
+        error: [SessionNotFoundError, InvalidRequestError, ServiceUnavailableError],
       })
         .middleware(sessionLocationMiddleware)
         .annotateMerge(
           OpenApi.annotations({
             identifier: "v2.session.switchModel",
             summary: "Switch session model",
-            description: "Switch the model used by subsequent provider turns.",
+            description: "Durably request the model used after the current Session turn boundary.",
           }),
         ),
     )
