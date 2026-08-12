@@ -81,7 +81,7 @@ describe("Motryx product TUI", () => {
 function debugSnapshot(): MotryxControlSnapshot {
   const now = "2026-07-19T00:00:00.000Z"
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     projectID: "/tmp/project",
     orchestratorSessionID: "ses_orch",
     projectionRevision: "server:revision",
@@ -137,9 +137,11 @@ function debugSnapshot(): MotryxControlSnapshot {
     ],
     artifacts: [],
     resourceBlocks: [],
+    incidents: [],
     functionSlots: [],
     inboxItems: [],
     deliveryFences: [],
+    attention: { visibleOpenIncidentCount: 0, failedLaneCount: 0 },
     diagnostics: [],
   }
 }

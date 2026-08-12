@@ -75,6 +75,17 @@ test("refreshes exact sessions into reactive getters", async () => {
     await data.session.refresh("ses_test")
 
     expect(data.session.get("ses_test")?.title).toBe("Test session")
+    emitEvent(events, {
+      id: "evt_title_changed_1",
+      type: "session.next.title.changed",
+      properties: {
+        sessionID: "ses_test",
+        timestamp: 42,
+        title: "Renamed session",
+      },
+    })
+    await wait(() => data.session.get("ses_test")?.title === "Renamed session")
+    expect(data.session.get("ses_test")?.time.updated).toBe(42)
     await Bun.sleep(20)
     for (const path of ["/api/agent", "/api/command", "/api/integration", "/api/model", "/api/provider", "/api/skill"])
       expect(requested.has(path)).toBe(false)

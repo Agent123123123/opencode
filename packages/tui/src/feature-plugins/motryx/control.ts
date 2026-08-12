@@ -1,6 +1,6 @@
 import path from "node:path"
 
-export const MOTRYX_CONTROL_SCHEMA_VERSION = 2 as const
+export const MOTRYX_CONTROL_SCHEMA_VERSION = 3 as const
 
 export type MotryxControlConfig = {
   apiURL: string
@@ -101,6 +101,44 @@ export type MotryxLaneProjection = {
   checkerRuntimeReadiness: string
   coordinatorRuntime?: MotryxRuntimeTargetProjection
   checkerRuntime?: MotryxRuntimeTargetProjection
+  failure?: MotryxLaneFailureProjection
+}
+
+export type MotryxLaneFailureProjection = {
+  incidentID: string
+  role: "coordinator" | "checker"
+  kind: string
+  safeSummary: string
+  openedAt: number
+  presentationState: "VISIBLE" | "DISMISSED"
+}
+
+export type MotryxRuntimeIncidentProjection = {
+  incidentID: string
+  scopeKind: "LANE" | "SESSION"
+  laneID?: string
+  role: string
+  failedPhase: string
+  failureKind: string
+  status: "OPEN" | "RESOLVED"
+  presentationState: "VISIBLE" | "DISMISSED"
+  safeSummary: string
+  instanceID?: string
+  sessionID?: string
+  turnID?: string
+  providerID?: string
+  modelID?: string
+  httpStatus?: number
+  transportKind?: string
+  transportCode?: string
+  retryable?: boolean
+  retryExhausted?: boolean
+  attemptCount?: number
+  recoveryID?: string
+  occurrenceCount: number
+  openedAt: number
+  lastSeenAt: number
+  resolvedAt?: number
 }
 
 export type MotryxAgentProjection = {
@@ -165,6 +203,11 @@ export type MotryxControlSnapshot = {
   agents: MotryxAgentProjection[]
   artifacts: MotryxArtifactProjection[]
   resourceBlocks: Record<string, unknown>[]
+  incidents: MotryxRuntimeIncidentProjection[]
+  attention: {
+    visibleOpenIncidentCount: number
+    failedLaneCount: number
+  }
   functionSlots: MotryxFunctionSlotProjection[]
   inboxItems: MotryxInboxProjection[]
   deliveryFences: MotryxDeliveryFenceProjection[]
@@ -295,7 +338,7 @@ async function parseSessionListResponse(response: Response, config: MotryxContro
 
 export function parseMotryxSessionList(value: unknown, expected: MotryxControlConfig): MotryxSessionList {
   const root = requiredRecord(value, "sessions")
-  if (root.schemaVersion !== MOTRYX_CONTROL_SCHEMA_VERSION) fail("sessions.schemaVersion must be 2")
+  if (root.schemaVersion !== MOTRYX_CONTROL_SCHEMA_VERSION) fail("sessions.schemaVersion must be 3")
   const projectID = exactProject(root.projectID, expected.projectID, "sessions.projectID")
   if (root.status !== "ROUTABLE" && root.status !== "SWITCHING" && root.status !== "UNAVAILABLE") {
     fail("sessions.status is invalid")
@@ -394,9 +437,52 @@ export async function fetchMotryxControlSnapshot(
   return parseMotryxControlSnapshot(value, config)
 }
 
+export async function dismissMotryxIncident(
+  config: MotryxControlConfig,
+  input: { incidentID: string; snapshot: MotryxControlSnapshot },
+  options: { signal?: AbortSignal; fetcher?: MotryxFetcher } = {},
+): Promise<{ incidentID: string; status: string; presentationState: "DISMISSED"; dismissedAt: number }> {
+  const url = new URL(`/ic/incidents/${encodeURIComponent(input.incidentID)}/dismiss`, config.apiURL)
+  const response = await (options.fetcher ?? fetch)(url, {
+    method: "POST",
+    signal: options.signal,
+    headers: {
+      accept: "application/json",
+      "content-type": "application/json",
+      authorization: `Bearer ${config.token}`,
+    },
+    body: JSON.stringify({
+      orchestratorSessionID: config.orchestratorSessionID,
+      expectedServerGeneration: input.snapshot.route.serverGeneration,
+      expectedBindingGeneration: input.snapshot.binding.bindingGeneration,
+      expectedProjectionRevision: input.snapshot.projectionRevision,
+    }),
+  })
+  let value: unknown
+  try {
+    value = await response.json()
+  } catch {
+    throw new MotryxControlSchemaError("Motryx incident dismissal response contains invalid JSON")
+  }
+  if (!response.ok) {
+    const detail = isRecord(value) && typeof value.message === "string" ? `: ${value.message}` : ""
+    throw new MotryxControlHttpError(response.status, `Motryx incident dismissal returned HTTP ${response.status}${detail}`)
+  }
+  const result = requiredRecord(value, "incident dismissal")
+  if (result.schemaVersion !== MOTRYX_CONTROL_SCHEMA_VERSION) fail("incident dismissal schemaVersion must be 3")
+  if (result.incidentID !== input.incidentID) fail("incident dismissal returned a different incident")
+  if (result.presentationState !== "DISMISSED") fail("incident dismissal did not persist DISMISSED")
+  return {
+    incidentID: input.incidentID,
+    status: requiredString(result.status, "incident dismissal.status"),
+    presentationState: "DISMISSED",
+    dismissedAt: finiteNumber(result.dismissedAt, "incident dismissal.dismissedAt"),
+  }
+}
+
 export function parseMotryxControlSnapshot(value: unknown, expected: MotryxControlConfig): MotryxControlSnapshot {
   const root = requiredRecord(value, "snapshot")
-  if (root.schemaVersion !== MOTRYX_CONTROL_SCHEMA_VERSION) fail("snapshot.schemaVersion must be 2")
+  if (root.schemaVersion !== MOTRYX_CONTROL_SCHEMA_VERSION) fail("snapshot.schemaVersion must be 3")
   const projectID = exactProject(root.projectID, expected.projectID, "snapshot.projectID")
   const orchestratorSessionID = exactString(
     root.orchestratorSessionID,
@@ -430,6 +516,8 @@ export function parseMotryxControlSnapshot(value: unknown, expected: MotryxContr
     resourceBlocks: requiredArray(root.resourceBlocks, "snapshot.resourceBlocks", (item, label) =>
       requiredRecord(item, label),
     ),
+    incidents: requiredArray(root.incidents, "snapshot.incidents", parseRuntimeIncident),
+    attention: parseAttention(root.attention),
     functionSlots: requiredArray(root.functionSlots, "snapshot.functionSlots", parseFunctionSlot),
     inboxItems: requiredArray(root.inboxItems, "snapshot.inboxItems", parseInboxItem),
     deliveryFences: requiredArray(root.deliveryFences, "snapshot.deliveryFences", parseDeliveryFence),
@@ -527,7 +615,71 @@ function parseLane(value: unknown, label: string): MotryxLaneProjection {
     checkerRuntimeReadiness: requiredString(item.checkerRuntimeReadiness, `${label}.checkerRuntimeReadiness`),
     coordinatorRuntime: parseRuntimeTarget(item.coordinatorRuntime, `${label}.coordinatorRuntime`),
     checkerRuntime: parseRuntimeTarget(item.checkerRuntime, `${label}.checkerRuntime`),
+    failure: item.failure === undefined ? undefined : parseLaneFailure(item.failure, `${label}.failure`),
   })
+}
+
+function parseLaneFailure(value: unknown, label: string): MotryxLaneFailureProjection {
+  const item = requiredRecord(value, label)
+  if (item.role !== "coordinator" && item.role !== "checker") fail(`${label}.role is invalid`)
+  if (item.presentationState !== "VISIBLE" && item.presentationState !== "DISMISSED") {
+    fail(`${label}.presentationState is invalid`)
+  }
+  return {
+    incidentID: requiredString(item.incidentID, `${label}.incidentID`),
+    role: item.role,
+    kind: requiredString(item.kind, `${label}.kind`),
+    safeSummary: requiredString(item.safeSummary, `${label}.safeSummary`),
+    openedAt: finiteNumber(item.openedAt, `${label}.openedAt`),
+    presentationState: item.presentationState,
+  }
+}
+
+function parseRuntimeIncident(value: unknown, label: string): MotryxRuntimeIncidentProjection {
+  const item = requiredRecord(value, label)
+  if (item.scopeKind !== "LANE" && item.scopeKind !== "SESSION") fail(`${label}.scopeKind is invalid`)
+  if (item.status !== "OPEN" && item.status !== "RESOLVED") fail(`${label}.status is invalid`)
+  if (item.presentationState !== "VISIBLE" && item.presentationState !== "DISMISSED") {
+    fail(`${label}.presentationState is invalid`)
+  }
+  return compact({
+    incidentID: requiredString(item.incidentID, `${label}.incidentID`),
+    scopeKind: item.scopeKind,
+    laneID: optionalString(item.laneID, `${label}.laneID`),
+    role: requiredString(item.role, `${label}.role`),
+    failedPhase: requiredString(item.failedPhase, `${label}.failedPhase`),
+    failureKind: requiredString(item.failureKind, `${label}.failureKind`),
+    status: item.status,
+    presentationState: item.presentationState,
+    safeSummary: requiredString(item.safeSummary, `${label}.safeSummary`),
+    instanceID: optionalString(item.instanceID, `${label}.instanceID`),
+    sessionID: optionalString(item.sessionID, `${label}.sessionID`),
+    turnID: optionalString(item.turnID, `${label}.turnID`),
+    providerID: optionalString(item.providerID, `${label}.providerID`),
+    modelID: optionalString(item.modelID, `${label}.modelID`),
+    httpStatus: optionalFiniteNumber(item.httpStatus, `${label}.httpStatus`),
+    transportKind: optionalString(item.transportKind, `${label}.transportKind`),
+    transportCode: optionalString(item.transportCode, `${label}.transportCode`),
+    retryable: optionalBoolean(item.retryable, `${label}.retryable`),
+    retryExhausted: optionalBoolean(item.retryExhausted, `${label}.retryExhausted`),
+    attemptCount: optionalFiniteNumber(item.attemptCount, `${label}.attemptCount`),
+    recoveryID: optionalString(item.recoveryID, `${label}.recoveryID`),
+    occurrenceCount: positiveInteger(item.occurrenceCount, `${label}.occurrenceCount`),
+    openedAt: finiteNumber(item.openedAt, `${label}.openedAt`),
+    lastSeenAt: finiteNumber(item.lastSeenAt, `${label}.lastSeenAt`),
+    resolvedAt: optionalFiniteNumber(item.resolvedAt, `${label}.resolvedAt`),
+  }) as MotryxRuntimeIncidentProjection
+}
+
+function parseAttention(value: unknown): MotryxControlSnapshot["attention"] {
+  const item = requiredRecord(value, "snapshot.attention")
+  return {
+    visibleOpenIncidentCount: nonNegativeInteger(
+      item.visibleOpenIncidentCount,
+      "snapshot.attention.visibleOpenIncidentCount",
+    ),
+    failedLaneCount: nonNegativeInteger(item.failedLaneCount, "snapshot.attention.failedLaneCount"),
+  }
 }
 
 function parseRuntimeTarget(value: unknown, label: string): MotryxRuntimeTargetProjection | undefined {
@@ -650,6 +802,12 @@ function finiteNumber(value: unknown, label: string): number {
 function optionalFiniteNumber(value: unknown, label: string): number | undefined {
   if (value === undefined) return
   return finiteNumber(value, label)
+}
+
+function optionalBoolean(value: unknown, label: string): boolean | undefined {
+  if (value === undefined) return
+  if (typeof value !== "boolean") fail(`${label} must be a boolean`)
+  return value
 }
 
 function nonNegativeInteger(value: unknown, label: string): number {

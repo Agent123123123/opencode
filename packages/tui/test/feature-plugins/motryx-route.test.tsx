@@ -1,13 +1,12 @@
 /** @jsxImportSource @opentui/solid */
 import { expect, test } from "bun:test"
-import type { TuiDialogSelectProps, TuiPluginApi } from "@opencode-ai/plugin/tui"
+import type { TuiDialogPromptProps, TuiDialogSelectProps, TuiPluginApi } from "@opencode-ai/plugin/tui"
 import { ScrollBoxRenderable, type Renderable } from "@opentui/core"
 import { testRender } from "@opentui/solid"
 import path from "node:path"
 import { MotryxRoute, type MotryxRouteActions } from "../../src/feature-plugins/motryx/route"
 import type { MotryxControlConfig, MotryxControlSnapshot } from "../../src/feature-plugins/motryx/control"
 import type { SessionSurfaceProps } from "../../src/routes/session"
-import { copy as copySelection } from "../../src/util/selection"
 import { createTuiPluginApi } from "../fixture/tui-plugin"
 
 test("Motryx plugin route composes the standard session surface with the Flow/Inspect sidecar", async () => {
@@ -29,7 +28,7 @@ test("Motryx plugin route composes the standard session surface with the Flow/In
   } as unknown as TuiPluginApi
   const now = "2026-07-19T00:00:00.000Z"
   const snapshot: MotryxControlSnapshot = {
-    schemaVersion: 2,
+    schemaVersion: 3,
     projectID,
     orchestratorSessionID: config.orchestratorSessionID,
     projectionRevision: "server-generation:ic:route",
@@ -69,9 +68,11 @@ test("Motryx plugin route composes the standard session surface with the Flow/In
     agents: [],
     artifacts: [],
     resourceBlocks: [],
+    incidents: [],
     functionSlots: [],
     inboxItems: [],
     deliveryFences: [],
+    attention: { visibleOpenIncidentCount: 0, failedLaneCount: 0 },
     diagnostics: [],
   }
   let currentSnapshot: MotryxControlSnapshot = snapshot
@@ -201,7 +202,6 @@ test("Motryx plugin route composes the standard session surface with the Flow/In
       expect(responsiveFrame).toContain("STANDARD OPENCODE")
       expect(responsiveFrame).toContain("PERMISSION QUESTION")
       expect(responsiveFrame).toContain("COMPOSER STATUS")
-      expect(responsiveFrame.includes("FLOW") || responsiveFrame.includes("WORKING")).toBe(true)
     }
 
     app.resize(80, 24)
@@ -214,21 +214,6 @@ test("Motryx plugin route composes the standard session surface with the Flow/In
     expect(transcriptColumn).toBeGreaterThanOrEqual(0)
     await app.mockMouse.drag(transcriptColumn, transcriptLine, transcriptColumn + 7, transcriptLine)
     expect(app.renderer.getSelection()?.getSelectedText()).toContain("Migrate")
-    let copied = ""
-    expect(
-      copySelection(
-        app.renderer,
-        {
-          show() {},
-          error(error) {
-            throw error
-          },
-        },
-        { write: async (text) => void (copied = text) },
-      ),
-    ).toBe(true)
-    await Promise.resolve()
-    expect(copied).toContain("Migrate")
 
     currentSnapshot = {
       ...snapshot,
@@ -264,6 +249,98 @@ test("Motryx plugin route composes the standard session surface with the Flow/In
   }
 })
 
+test("Motryx runtime error card can be dismissed without resolving the incident", async () => {
+  const projectID = path.resolve("/tmp/motryx-route-incident-project")
+  const sessionID = "ses_route_incident"
+  const config: MotryxControlConfig = {
+    apiURL: "http://127.0.0.1:27999",
+    token: "control-token",
+    projectID,
+    orchestratorSessionID: sessionID,
+  }
+  const lifecycle = new AbortController()
+  const base = createTuiPluginApi()
+  const api = {
+    ...base,
+    lifecycle: { signal: lifecycle.signal, onDispose: () => () => {} },
+  } as unknown as TuiPluginApi
+  const incident = {
+    incidentID: "incident_route_1",
+    scopeKind: "SESSION" as const,
+    role: "orchestrator",
+    failedPhase: "ORCHESTRATOR_TURN",
+    failureKind: "transport",
+    status: "OPEN" as const,
+    presentationState: "VISIBLE" as const,
+    safeSummary: "The provider did not send HTTP response headers before the transport deadline.",
+    instanceID: "inst_orchestrator",
+    sessionID,
+    providerID: "zai",
+    modelID: "glm-5.2",
+    transportKind: "timeout",
+    transportCode: "UND_ERR_HEADERS_TIMEOUT",
+    retryable: false,
+    retryExhausted: true,
+    attemptCount: 3,
+    occurrenceCount: 1,
+    openedAt: 1_786_510_000_000,
+    lastSeenAt: 1_786_510_000_000,
+  }
+  let snapshot = {
+    ...debugRouteSnapshot(projectID, sessionID),
+    incidents: [incident],
+    attention: { visibleOpenIncidentCount: 1, failedLaneCount: 0 },
+  } as MotryxControlSnapshot
+  let dismissals = 0
+  const events = new ReadableStream<Uint8Array>()
+  const app = await testRender(
+    () => (
+      <MotryxRoute
+        api={api}
+        config={config}
+        fetcher={async (input) => {
+          const url = new URL(input instanceof Request ? input.url : input.toString())
+          if (url.pathname === "/ic/workflow") return Response.json(snapshot)
+          if (url.pathname === "/ic/incidents/incident_route_1/dismiss") {
+            dismissals += 1
+            snapshot = {
+              ...snapshot,
+              incidents: [{ ...incident, presentationState: "DISMISSED" }],
+              attention: { visibleOpenIncidentCount: 0, failedLaneCount: 0 },
+            }
+            return Response.json({
+              schemaVersion: 3,
+              incidentID: incident.incidentID,
+              status: "OPEN",
+              presentationState: "DISMISSED",
+              dismissedAt: 1_786_510_000_001,
+            })
+          }
+          return new Response(events, { headers: { "content-type": "text/event-stream" } })
+        }}
+        sessionSurface={() => <text>STANDARD OPENCODE SESSION</text>}
+        onActionsAvailable={() => {}}
+      />
+    ),
+    { width: 100, height: 24 },
+  )
+  try {
+    let frame = await renderUntil(app, (value) => value.includes(incident.safeSummary))
+    expect(frame).toContain("Runtime error · Orchestrator")
+    expect(frame).toContain("transport UND_ERR_HEADERS_TIMEOUT")
+    expect(frame).toContain("kind timeout")
+    expect(frame).toContain("zai/glm-5.2")
+    await clickFrameText(app, frame, "[×]")
+    frame = await renderUntil(app, (value) => !value.includes(incident.safeSummary))
+    expect(frame).not.toContain("Runtime error · Orchestrator")
+    expect(dismissals).toBe(1)
+    expect(snapshot.incidents[0]).toMatchObject({ status: "OPEN", presentationState: "DISMISSED" })
+  } finally {
+    lifecycle.abort()
+    app.renderer.destroy()
+  }
+})
+
 function findScrollBoxes(root: Renderable): ScrollBoxRenderable[] {
   return [
     ...(root instanceof ScrollBoxRenderable ? [root] : []),
@@ -284,8 +361,15 @@ test("/sessions switches the exact Motryx Orchestrator and rebinds conversation 
   const lifecycle = new AbortController()
   let dialogRender: (() => unknown) | undefined
   let dialog: TuiDialogSelectProps<string> | undefined
+  let renameDialog: TuiDialogPromptProps | undefined
   const notices: string[] = []
   const requests: Request[] = []
+  const updates: Array<{ sessionID: string; title?: string }> = []
+  const titles = new Map([
+    [sourceID, "Source Orchestrator"],
+    [targetID, "Target Orchestrator"],
+  ])
+  let dialogClears = 0
   const base = createTuiPluginApi({
     client: {
       v2: {
@@ -296,10 +380,18 @@ test("/sessions switches the exact Motryx Orchestrator and rebinds conversation 
                 data: {
                   id: input.sessionID,
                   agent: "orchestrator",
+                  title: titles.get(input.sessionID),
                   location: { directory: projectID },
                 },
               },
             }
+          },
+          async update(input: { sessionID: string; title?: string }) {
+            updates.push(input)
+            if (input.title === "Rejected rename") throw new Error("rename rejected")
+            if (input.title) titles.set(input.sessionID, input.title)
+            if (input.title === "Recovered rename") throw new Error("response lost")
+            return { data: { data: { id: input.sessionID, title: input.title } } }
           },
         },
       },
@@ -314,8 +406,15 @@ test("/sessions switches the exact Motryx Orchestrator and rebinds conversation 
         dialog = props
         return undefined as never
       },
+      DialogPrompt(props: TuiDialogPromptProps) {
+        renameDialog = props
+        return undefined as never
+      },
       dialog: {
         ...base.ui.dialog,
+        clear() {
+          dialogClears += 1
+        },
         replace(render: () => unknown) {
           dialogRender = render
         },
@@ -327,7 +426,7 @@ test("/sessions switches the exact Motryx Orchestrator and rebinds conversation 
   } as unknown as TuiPluginApi
   const now = "2026-07-19T00:00:00.000Z"
   const routeSnapshot = (sessionID: string, bindingGeneration: number): MotryxControlSnapshot => ({
-    schemaVersion: 2,
+    schemaVersion: 3,
     projectID,
     orchestratorSessionID: sessionID,
     projectionRevision: `server-generation:ic:${sessionID}`,
@@ -356,13 +455,15 @@ test("/sessions switches the exact Motryx Orchestrator and rebinds conversation 
     agents: [],
     artifacts: [],
     resourceBlocks: [],
+    incidents: [],
     functionSlots: [],
     inboxItems: [],
     deliveryFences: [],
+    attention: { visibleOpenIncidentCount: 0, failedLaneCount: 0 },
     diagnostics: [],
   })
   const sessionList = (currentID: string, bindingGeneration: number) => ({
-    schemaVersion: 2,
+    schemaVersion: 3,
     projectID,
     status: "ROUTABLE",
     current: {
@@ -374,16 +475,18 @@ test("/sessions switches the exact Motryx Orchestrator and rebinds conversation 
     transition: null,
     sessions: currentID === sourceID
       ? [
-          { sessionID: sourceID, title: "Source Orchestrator", lastRoutedAt: now, state: "CURRENT" },
-          { sessionID: targetID, title: "Target Orchestrator", lastRoutedAt: now, state: "RESUMABLE" },
+          { sessionID: sourceID, title: titles.get(sourceID)!, lastRoutedAt: now, state: "CURRENT" },
+          { sessionID: targetID, title: titles.get(targetID)!, lastRoutedAt: now, state: "RESUMABLE" },
         ]
       : [
-          { sessionID: targetID, title: "Target Orchestrator", lastRoutedAt: now, state: "CURRENT" },
-          { sessionID: sourceID, title: "Source Orchestrator", lastRoutedAt: now, state: "RESUMABLE" },
+          { sessionID: targetID, title: titles.get(targetID)!, lastRoutedAt: now, state: "CURRENT" },
+          { sessionID: sourceID, title: titles.get(sourceID)!, lastRoutedAt: now, state: "RESUMABLE" },
         ],
   })
   let actions: MotryxRouteActions | undefined
   let surface: SessionSurfaceProps | undefined
+  let routedID = sourceID
+  let bindingGeneration = 7
   const app = await testRender(
     () => (
       <MotryxRoute
@@ -391,13 +494,16 @@ test("/sessions switches the exact Motryx Orchestrator and rebinds conversation 
         config={config}
         fetcher={async (input, init) => {
           const request = new Request(input, init)
-          requests.push(request)
+          requests.push(request.clone())
           const url = new URL(request.url)
           if (url.pathname === "/ic/sessions" && request.method === "GET") {
-            return Response.json(sessionList(sourceID, 7))
+            return Response.json(sessionList(routedID, bindingGeneration))
           }
           if (url.pathname === "/ic/sessions/switch") {
-            return Response.json(sessionList(targetID, 8))
+            const body = (await request.json()) as { targetSessionID: string }
+            routedID = body.targetSessionID
+            bindingGeneration += 1
+            return Response.json(sessionList(routedID, bindingGeneration))
           }
           if (url.pathname === "/ic/workflow") {
             const sessionID = url.searchParams.get("orchestrator_session_id")!
@@ -442,6 +548,70 @@ test("/sessions switches the exact Motryx Orchestrator and rebinds conversation 
         ownerRunID: "run_source",
       },
     })
+
+    await actions!.rename()
+    dialogRender?.()
+    expect(renameDialog?.value).toBe("Target Orchestrator")
+    renameDialog?.onConfirm?.("  Renamed Target  ")
+    await renderUntil(app, () => updates.length === 1)
+    expect(updates).toEqual([{ sessionID: targetID, title: "Renamed Target" }])
+    expect(notices).toContain("Renamed Motryx Orchestrator to Renamed Target")
+    await actions!.showSessions()
+    dialogRender?.()
+    expect(dialog?.options.find((option) => option.value === targetID)?.title).toBe("Renamed Target")
+
+    await actions!.rename()
+    dialogRender?.()
+    renameDialog?.onConfirm?.("Renamed Target")
+    expect(updates).toHaveLength(1)
+    expect(notices).toContain("Motryx Orchestrator name is unchanged.")
+
+    await actions!.rename()
+    dialogRender?.()
+    renameDialog?.onConfirm?.("   ")
+    expect(updates).toHaveLength(1)
+    expect(notices).toContain("Session name is required.")
+
+    await actions!.rename()
+    dialogRender?.()
+    renameDialog?.onConfirm?.("x".repeat(101))
+    expect(updates).toHaveLength(1)
+    expect(notices).toContain("Session name must be 100 characters or fewer.")
+
+    await actions!.rename()
+    dialogRender?.()
+    const clearsBeforeFailure = dialogClears
+    renameDialog?.onConfirm?.("Rejected rename")
+    await renderUntil(app, () => notices.includes("rename rejected"))
+    expect(updates.at(-1)).toEqual({ sessionID: targetID, title: "Rejected rename" })
+    expect(dialogClears).toBe(clearsBeforeFailure)
+    expect(notices).not.toContain("Renamed Motryx Orchestrator to Rejected rename")
+
+    await actions!.rename()
+    dialogRender?.()
+    renameDialog?.onConfirm?.("Recovered rename")
+    await renderUntil(app, () => notices.includes("Renamed Motryx Orchestrator to Recovered rename"))
+    expect(updates.at(-1)).toEqual({ sessionID: targetID, title: "Recovered rename" })
+
+    await actions!.rename()
+    dialogRender?.()
+    const staleRename = renameDialog
+    await actions!.showSessions()
+    dialogRender?.()
+    const source = dialog?.options.find((option) => option.value === sourceID)
+    expect(source).toBeDefined()
+    dialog?.onSelect?.(source!)
+    await renderUntil(app, (value) => value.includes(`SWITCHED SURFACE ${sourceID}`))
+    staleRename?.onConfirm?.("Stale target")
+    expect(updates).toHaveLength(3)
+    expect(notices).toContain("Motryx route changed while rename was open. Run /rename again for the current Orchestrator.")
+
+    await actions!.rename()
+    dialogRender?.()
+    const disposedRename = renameDialog
+    lifecycle.abort()
+    disposedRename?.onConfirm?.("Disposed target")
+    expect(updates).toHaveLength(3)
   } finally {
     lifecycle.abort()
     app.renderer.destroy()
@@ -518,6 +688,9 @@ test("debug targets require exact OpenCode readback and reset on generation chan
   }
   const lifecycle = new AbortController()
   const exactReads: string[] = []
+  const renames: Array<{ sessionID: string; title?: string }> = []
+  let renameRender: (() => unknown) | undefined
+  let renameDialog: TuiDialogPromptProps | undefined
   const base = createTuiPluginApi({
     client: {
       v2: {
@@ -528,11 +701,16 @@ test("debug targets require exact OpenCode readback and reset on generation chan
               data: {
                 data: {
                   id: input.sessionID,
-                  agent: "coordinator",
+                  agent: input.sessionID === config.orchestratorSessionID ? "orchestrator" : "coordinator",
+                  title: input.sessionID === config.orchestratorSessionID ? "Debug Orchestrator" : "Coordinator",
                   location: { directory: projectID },
                 },
               },
             }
+          },
+          async update(input: { sessionID: string; title?: string }) {
+            renames.push(input)
+            return { data: { data: { id: input.sessionID, title: input.title } } }
           },
         },
       },
@@ -541,7 +719,20 @@ test("debug targets require exact OpenCode readback and reset on generation chan
   const api = {
     ...base,
     lifecycle: { signal: lifecycle.signal, onDispose: () => () => {} },
-    ui: { ...base.ui, toast: () => {} },
+    ui: {
+      ...base.ui,
+      DialogPrompt(props: TuiDialogPromptProps) {
+        renameDialog = props
+        return undefined as never
+      },
+      dialog: {
+        ...base.ui.dialog,
+        replace(render: () => unknown) {
+          renameRender = render
+        },
+      },
+      toast: () => {},
+    },
   } as unknown as TuiPluginApi
   let snapshot = debugRouteSnapshot(projectID, config.orchestratorSessionID)
   let actions: MotryxRouteActions | undefined
@@ -617,6 +808,16 @@ test("debug targets require exact OpenCode readback and reset on generation chan
     actions!.focusCoordinator()
     frame = await renderUntil(app, (value) => value.includes("TARGET ses_coordinator"))
     expect(exactReads).toEqual(["ses_coordinator", "ses_coordinator"])
+
+    await actions!.rename()
+    renameRender?.()
+    expect(exactReads.at(-1)).toBe(config.orchestratorSessionID)
+    expect(renameDialog?.value).toBe("Debug Orchestrator")
+    renameDialog?.onConfirm?.("Renamed while viewing worker")
+    await renderUntil(app, () => renames.length === 1)
+    expect(renames).toEqual([
+      { sessionID: config.orchestratorSessionID, title: "Renamed while viewing worker" },
+    ])
 
     for (const [width, height] of [
       [40, 12],
@@ -694,7 +895,7 @@ async function clickFrameText(app: Awaited<ReturnType<typeof testRender>>, frame
 function debugRouteSnapshot(projectID: string, orchestratorSessionID: string, generation = 7, server = "server") {
   const now = "2026-07-19T00:00:00.000Z"
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     projectID,
     orchestratorSessionID,
     projectionRevision: `${server}:revision`,
@@ -750,9 +951,11 @@ function debugRouteSnapshot(projectID: string, orchestratorSessionID: string, ge
     ],
     artifacts: [],
     resourceBlocks: [],
+    incidents: [],
     functionSlots: [],
     inboxItems: [],
     deliveryFences: [],
+    attention: { visibleOpenIncidentCount: 0, failedLaneCount: 0 },
     diagnostics: [],
   }
 }

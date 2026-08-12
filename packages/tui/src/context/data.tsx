@@ -161,6 +161,12 @@ export const {
         case "session.next.agent.switched":
         case "session.next.model.switched":
           break
+        case "session.next.title.changed": {
+          if (!store.session.info[event.data.sessionID]) break
+          setStore("session", "info", event.data.sessionID, "title", event.data.title)
+          setStore("session", "info", event.data.sessionID, "time", "updated", event.data.timestamp)
+          break
+        }
         case "session.next.prompted": {
           message.update(event.data.sessionID, (draft) => {
             message.prepend(draft, {
