@@ -44,6 +44,13 @@ type TransportDiagnostic = {
   readonly message: string
 }
 
+const retryableTransportKinds = new Set<TransportDiagnostic["kind"]>([
+  "connection",
+  "dns",
+  "network",
+  "timeout",
+])
+
 // One source of truth for what counts as a sensitive name across headers,
 // URL query keys, and field names embedded inside request/response bodies.
 //
@@ -313,7 +320,7 @@ const statusError =
 const toHttpError = (redactedNames: ReadonlyArray<string | RegExp>) => (error: unknown) => {
   const transportError = (input: {
     readonly message: string
-    readonly kind?: string | undefined
+    readonly kind?: TransportDiagnostic["kind"] | undefined
     readonly code?: string | undefined
     readonly request?: HttpClientRequest.HttpClientRequest | undefined
   }) =>
@@ -326,6 +333,7 @@ const toHttpError = (redactedNames: ReadonlyArray<string | RegExp>) => (error: u
         code: input.code,
         url: input.request ? redactUrl(input.request.url) : undefined,
         http: input.request ? new HttpContext({ request: requestDetails(input.request, redactedNames) }) : undefined,
+        canRetry: input.kind !== undefined && retryableTransportKinds.has(input.kind),
       }),
     })
 
@@ -380,7 +388,7 @@ const transportDiagnostic = (error: unknown): TransportDiagnostic => {
   if (/ENOTFOUND|EAI_AGAIN|DNS/.test(code)) {
     return { kind: "dns", code, message: "The provider host name could not be resolved." }
   }
-  if (code === "ECONNREFUSED") {
+  if (code === "ECONNREFUSED" || code === "CONNECTIONREFUSED") {
     return { kind: "connection", code, message: "The provider refused the network connection." }
   }
   if (/ECONNRESET|EPIPE|UND_ERR_SOCKET|SOCKET_CLOSED/.test(code)) {

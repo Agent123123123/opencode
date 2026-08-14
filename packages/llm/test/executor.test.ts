@@ -96,9 +96,12 @@ describe("RequestExecutor", () => {
   it.effect("preserves a safe response-header timeout code and reason", () =>
     Effect.gen(function* () {
       const executor = yield* RequestExecutor.Service
-      const error = yield* executor.execute(request).pipe(Effect.flip)
+      const fiber = yield* executor.execute(request).pipe(Effect.flip, Effect.forkChild)
+      yield* TestClock.adjust(10_000)
+      const error = yield* Fiber.join(fiber)
 
       expectLLMError(error)
+      expect(error).toMatchObject({ retryable: true, attemptCount: 3, retryExhausted: true })
       expect(error.reason).toMatchObject({
         _tag: "Transport",
         kind: "timeout",
@@ -117,9 +120,12 @@ describe("RequestExecutor", () => {
   it.effect("extracts a nested connection reset without exposing raw exception text", () =>
     Effect.gen(function* () {
       const executor = yield* RequestExecutor.Service
-      const error = yield* executor.execute(request).pipe(Effect.flip)
+      const fiber = yield* executor.execute(request).pipe(Effect.flip, Effect.forkChild)
+      yield* TestClock.adjust(10_000)
+      const error = yield* Fiber.join(fiber)
 
       expectLLMError(error)
+      expect(error).toMatchObject({ retryable: true, attemptCount: 3, retryExhausted: true })
       expect(error.reason).toMatchObject({
         _tag: "Transport",
         kind: "connection",
@@ -133,6 +139,47 @@ describe("RequestExecutor", () => {
           message: "secret-upstream-detail",
           cause: Object.assign(new Error("socket closed"), { code: "ECONNRESET" }),
         }),
+      ),
+    ),
+  )
+
+  it.effect("retries CONNECTIONREFUSED before an HTTP response and preserves the exact code", () =>
+    Effect.gen(function* () {
+      const executor = yield* RequestExecutor.Service
+      const fiber = yield* executor.execute(request).pipe(Effect.flip, Effect.forkChild)
+      yield* TestClock.adjust(10_000)
+      const error = yield* Fiber.join(fiber)
+
+      expectLLMError(error)
+      expect(error).toMatchObject({ retryable: true, attemptCount: 3, retryExhausted: true })
+      expect(error.reason).toMatchObject({
+        _tag: "Transport",
+        kind: "connection",
+        code: "CONNECTIONREFUSED",
+        message: "The provider refused the network connection.",
+      })
+    }).pipe(
+      Effect.provide(
+        transportFailureLayer(Object.assign(new Error("connection refused"), { code: "CONNECTIONREFUSED" })),
+      ),
+    ),
+  )
+
+  it.effect("does not retry non-transient TLS transport failures", () =>
+    Effect.gen(function* () {
+      const executor = yield* RequestExecutor.Service
+      const error = yield* executor.execute(request).pipe(Effect.flip)
+
+      expectLLMError(error)
+      expect(error).toMatchObject({ retryable: false, attemptCount: 1, retryExhausted: false })
+      expect(error.reason).toMatchObject({
+        _tag: "Transport",
+        kind: "tls",
+        code: "CERT_HAS_EXPIRED",
+      })
+    }).pipe(
+      Effect.provide(
+        transportFailureLayer(Object.assign(new Error("certificate expired"), { code: "CERT_HAS_EXPIRED" })),
       ),
     ),
   )
