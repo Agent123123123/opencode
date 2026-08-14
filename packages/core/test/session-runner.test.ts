@@ -605,6 +605,43 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
+  it.effect("keeps a successor turn owned by its promoted continuation input after an earlier input lost its process", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const { db } = yield* Database.Service
+      const events = yield* EventV2.Service
+      const session = yield* SessionV2.Service
+      const predecessor = yield* session.prompt({
+        sessionID,
+        prompt: Prompt.make({ text: "Original managed input" }),
+        delivery: "queue",
+        resume: false,
+      })
+      expect(yield* SessionInput.promoteNextQueued(db, events, sessionID)).toBe(true)
+      const successor = yield* session.prompt({
+        sessionID,
+        prompt: Prompt.make({ text: "Continue after exact process loss" }),
+        delivery: "queue",
+        resume: false,
+      })
+      response = fragmentFixture("text", "text-process-loss-successor", ["Continued"]).completeEvents
+
+      yield* session.resume(sessionID)
+
+      const history = yield* session.history({ sessionID, limit: 100 })
+      const started = history.events.find((event) => event.type === "session.turn.started")
+      expect(started).toMatchObject({
+        type: "session.turn.started",
+        data: { activityInputIDs: [successor.id] },
+      })
+      expect(started?.data.activityInputIDs).not.toContain(predecessor.id)
+      expect(userTexts(requests.at(-1)!)).toEqual([
+        "Original managed input",
+        "Continue after exact process loss",
+      ])
+    }),
+  )
+
   it.effect("publishes only NotStarted when a promoted activity fails before the start boundary", () =>
     Effect.gen(function* () {
       yield* setup

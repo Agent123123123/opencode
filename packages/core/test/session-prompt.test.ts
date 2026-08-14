@@ -15,6 +15,7 @@ import { Prompt } from "@opencode-ai/core/session/prompt"
 import { SessionMessage } from "@opencode-ai/core/session/message"
 import { SessionProjector } from "@opencode-ai/core/session/projector"
 import { SessionExecution } from "@opencode-ai/core/session/execution"
+import { closeManagedExecutionGates } from "@opencode-ai/core/session/execution/local"
 import { SessionInput } from "@opencode-ai/core/session/input"
 import { SessionInputTable, SessionMessageTable, SessionTable } from "@opencode-ai/core/session/sql"
 import { SessionStore } from "@opencode-ai/core/session/store"
@@ -418,12 +419,15 @@ describe("SessionV2.prompt", () => {
         .update(SessionTable)
         .set({
           execution_managed: true,
-          execution_gate_open: false,
-          execution_gate_reason: "host_process_started",
+          execution_gate_open: true,
+          execution_gate_reason: "previous_process_active",
+          active_turn_id: SessionMessage.ID.make("msg_retired_turn"),
+          active_input_ids: [messageID],
         })
         .where(eq(SessionTable.id, sessionID))
         .run()
         .pipe(Effect.orDie)
+      yield* closeManagedExecutionGates(db)
       yield* session.prompt({
         id: messageID,
         sessionID,
@@ -439,6 +443,12 @@ describe("SessionV2.prompt", () => {
         open: false,
         reason: "host_process_started",
       })
+      expect(yield* db
+        .select({ activeTurnID: SessionTable.active_turn_id, activeInputIDs: SessionTable.active_input_ids })
+        .from(SessionTable)
+        .where(eq(SessionTable.id, sessionID))
+        .get()
+        .pipe(Effect.orDie)).toEqual({ activeTurnID: null, activeInputIDs: null })
 
       expect(yield* session.setExecutionGate({
         sessionID,

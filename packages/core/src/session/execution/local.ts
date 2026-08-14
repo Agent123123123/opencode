@@ -17,7 +17,15 @@ export const closeManagedExecutionGates = Effect.fn("SessionExecutionLocal.close
 ) {
   yield* db
     .update(SessionTable)
-    .set({ execution_gate_open: false, execution_gate_reason: "host_process_started" })
+    .set({
+      execution_gate_open: false,
+      execution_gate_reason: "host_process_started",
+      // active_turn_id is a current-process runner projection. Durable
+      // Turn.Started history remains authoritative, but a replacement process
+      // must not attach newly admitted continuation input to its predecessor.
+      active_turn_id: null,
+      active_input_ids: null,
+    })
     .where(eq(SessionTable.execution_managed, true))
     .run()
     .pipe(Effect.orDie)
