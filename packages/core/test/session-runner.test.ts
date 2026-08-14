@@ -464,7 +464,10 @@ const fragmentFixture = (kind: FragmentKind, id: string, chunks: readonly string
         delta: SessionEvent.Tool.Input.Delta,
         partialEvents,
         completeEvents: [...partialEvents, LLMEvent.toolInputEnd({ id, name: "echo" })],
-        expectedAssistant: { type: "assistant", content: [expectedContent] },
+        expectedAssistant: {
+          type: "assistant",
+          content: [{ type: "tool", id, state: { status: "error" } }],
+        },
         expectedContent,
       }
     }
@@ -520,7 +523,11 @@ const verifyPartialFlushOnFailure = (kind: FragmentKind) =>
         type: "assistant",
         finish: "error",
         error: { type: "unknown", message: "Provider unavailable" },
-        content: [fixture.expectedContent],
+        content: [
+          kind === "tool input"
+            ? { type: "tool", id: fragmentID(kind, "partial"), state: { status: "error" } }
+            : fixture.expectedContent,
+        ],
       },
     ])
   })
@@ -3509,7 +3516,10 @@ describe("SessionRunnerLLM", () => {
           message: "The provider did not send HTTP response headers before the transport deadline.",
           kind: "timeout",
           code: "UND_ERR_HEADERS_TIMEOUT",
+          canRetry: true,
         }),
+        attemptCount: 3,
+        retryExhausted: true,
       })
       responseStream = Stream.fail(failure)
 
@@ -3524,6 +3534,9 @@ describe("SessionRunnerLLM", () => {
           safeMessage: "The provider did not send HTTP response headers before the transport deadline.",
           transportKind: "timeout",
           transportCode: "UND_ERR_HEADERS_TIMEOUT",
+          retryable: true,
+          retryExhausted: true,
+          attemptCount: 3,
           providerID: "fake",
           modelID: "fake-model",
         },
@@ -3543,16 +3556,34 @@ describe("SessionRunnerLLM", () => {
 
       requests.length = 0
       const executionCount = executions.length
+      toolExecutionsReady = 1
+      toolExecutionsStarted = yield* Deferred.make<void>()
+      toolExecutionGate = yield* Deferred.make<void>()
       response = [
         LLMEvent.stepStart({ index: 0 }),
         LLMEvent.toolCall({ id: "call-before-provider-error", name: "echo", input: { text: "settled" } }),
         LLMEvent.providerError({ message: "Provider unavailable" }),
       ]
 
-      yield* session.resume(sessionID)
+      const resumed = yield* session.resume(sessionID).pipe(Effect.forkChild)
+      yield* Deferred.await(toolExecutionsStarted)
+      yield* Deferred.succeed(toolExecutionGate, undefined)
+      yield* Fiber.join(resumed)
 
       expect(requests).toHaveLength(1)
       expect(executions.slice(executionCount)).toEqual(["settled"])
+      const history = yield* session.history({ sessionID, limit: 100 })
+      const toolSuccess = history.events.findIndex(
+        (event) => event.type === "session.next.tool.success" && event.data.callID === "call-before-provider-error",
+      )
+      const turnSettled = history.events.findIndex((event) => event.type === "session.turn.settled")
+      expect(toolSuccess).toBeGreaterThanOrEqual(0)
+      expect(turnSettled).toBeGreaterThan(toolSuccess)
+      expect(
+        history.events.some(
+          (event) => event.type === "session.next.tool.failed" && event.data.callID === "call-before-provider-error",
+        ),
+      ).toBe(false)
     }),
   )
 
@@ -3644,6 +3675,50 @@ describe("SessionRunnerLLM", () => {
           finish: "error",
           error: { type: "unknown", message: "Provider unavailable" },
           content: [{ type: "tool", id: "call-hosted-raw-failure", state: { status: "error" } }],
+        },
+      ])
+    }),
+  )
+
+  it.effect("closes a partial local tool before settling a failed turn", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      yield* session.prompt({
+        sessionID,
+        prompt: Prompt.make({ text: "Fail after partial local tool input" }),
+        resume: false,
+      })
+      const failure = providerUnavailable()
+      responseStream = Stream.concat(
+        Stream.fromIterable([
+          LLMEvent.stepStart({ index: 0 }),
+          LLMEvent.toolInputStart({ id: "call-local-partial-failure", name: "echo" }),
+          LLMEvent.toolInputDelta({
+            id: "call-local-partial-failure",
+            name: "echo",
+            text: '{"text":"partial"}',
+          }),
+          LLMEvent.toolInputEnd({ id: "call-local-partial-failure", name: "echo" }),
+        ]),
+        Stream.fail(failure),
+      )
+
+      expect(yield* session.resume(sessionID).pipe(Effect.flip)).toBe(failure)
+
+      const history = yield* session.history({ sessionID, limit: 100 })
+      const toolFailed = history.events.findIndex(
+        (event) => event.type === "session.next.tool.failed" && event.data.callID === "call-local-partial-failure",
+      )
+      const turnSettled = history.events.findIndex((event) => event.type === "session.turn.settled")
+      expect(toolFailed).toBeGreaterThanOrEqual(0)
+      expect(turnSettled).toBeGreaterThan(toolFailed)
+      expect(yield* session.context(sessionID)).toMatchObject([
+        { type: "user", text: "Fail after partial local tool input" },
+        {
+          type: "assistant",
+          finish: "error",
+          content: [{ type: "tool", id: "call-local-partial-failure", state: { status: "error" } }],
         },
       ])
     }),

@@ -155,6 +155,18 @@ export default {
         );
       `)
       yield* tx.run(`
+        CREATE TABLE \`session_input_cancellation\` (
+          \`id\` text PRIMARY KEY,
+          \`session_id\` text NOT NULL,
+          \`cancel_seq\` integer NOT NULL,
+          \`origin\` text NOT NULL,
+          \`reason\` text NOT NULL,
+          \`input_visibility\` text NOT NULL,
+          \`time_canceled\` integer NOT NULL,
+          CONSTRAINT \`fk_session_input_cancellation_session_id_session_id_fk\` FOREIGN KEY (\`session_id\`) REFERENCES \`session\`(\`id\`) ON DELETE CASCADE
+        );
+      `)
+      yield* tx.run(`
         CREATE TABLE \`session_input\` (
           \`id\` text PRIMARY KEY,
           \`session_id\` text NOT NULL,
@@ -162,6 +174,7 @@ export default {
           \`delivery\` text NOT NULL,
           \`admitted_seq\` integer NOT NULL,
           \`promoted_seq\` integer,
+          \`turn_id\` text,
           \`time_created\` integer NOT NULL,
           CONSTRAINT \`fk_session_input_session_id_session_id_fk\` FOREIGN KEY (\`session_id\`) REFERENCES \`session\`(\`id\`) ON DELETE CASCADE
         );
@@ -209,6 +222,11 @@ export default {
           \`time_updated\` integer NOT NULL,
           \`time_compacting\` integer,
           \`time_archived\` integer,
+          \`execution_managed\` integer DEFAULT false NOT NULL,
+          \`execution_gate_open\` integer DEFAULT true NOT NULL,
+          \`execution_gate_reason\` text DEFAULT 'ordinary_session' NOT NULL,
+          \`active_turn_id\` text,
+          \`active_input_ids\` text,
           CONSTRAINT \`fk_session_project_id_project_id_fk\` FOREIGN KEY (\`project_id\`) REFERENCES \`project\`(\`id\`) ON DELETE CASCADE
         );
       `)
@@ -247,6 +265,9 @@ export default {
       yield* tx.run(`CREATE INDEX \`part_message_id_id_idx\` ON \`part\` (\`message_id\`,\`id\`);`)
       yield* tx.run(`CREATE INDEX \`part_session_idx\` ON \`part\` (\`session_id\`);`)
       yield* tx.run(
+        `CREATE UNIQUE INDEX \`session_input_cancellation_session_seq_idx\` ON \`session_input_cancellation\` (\`session_id\`,\`cancel_seq\`);`,
+      )
+      yield* tx.run(
         `CREATE INDEX \`session_input_session_pending_delivery_seq_idx\` ON \`session_input\` (\`session_id\`,\`promoted_seq\`,\`delivery\`,\`admitted_seq\`);`,
       )
       yield* tx.run(
@@ -254,6 +275,9 @@ export default {
       )
       yield* tx.run(
         `CREATE UNIQUE INDEX \`session_input_session_promoted_seq_idx\` ON \`session_input\` (\`session_id\`,\`promoted_seq\`);`,
+      )
+      yield* tx.run(
+        `CREATE INDEX \`session_input_orphaned_promoted_idx\` ON \`session_input\` (\`session_id\`,\`promoted_seq\`,\`turn_id\`);`,
       )
       yield* tx.run(
         `CREATE UNIQUE INDEX \`session_message_session_seq_idx\` ON \`session_message\` (\`session_id\`,\`seq\`);`,

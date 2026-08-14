@@ -112,6 +112,17 @@ export const Moved = Event.define({
 })
 export type Moved = typeof Moved.Type
 
+export const ExecutionGateChanged = Event.define({
+  type: "session.next.execution_gate.changed",
+  ...options,
+  schema: {
+    ...Base,
+    open: Schema.Boolean,
+    reason: Schema.String,
+  },
+})
+export type ExecutionGateChanged = typeof ExecutionGateChanged.Type
+
 export const Prompted = Event.define({
   type: "session.next.prompted",
   ...options,
@@ -125,6 +136,19 @@ export const PromptAdmitted = Event.define({
   schema: PromptFields,
 })
 export type PromptAdmitted = typeof PromptAdmitted.Type
+
+export const PromptCanceled = Event.define({
+  type: "session.next.prompt.canceled",
+  ...options,
+  schema: {
+    ...Base,
+    messageID: SessionMessage.ID,
+    origin: Schema.Literals(["user", "framework", "runtime_shutdown", "stale", "business"]),
+    reason: Schema.String,
+    inputVisibility: Schema.Literals(["missing", "admitted_unpromoted"]),
+  },
+})
+export type PromptCanceled = typeof PromptCanceled.Type
 
 export const ContextUpdated = Event.define({
   type: "session.next.context.updated",
@@ -555,6 +579,8 @@ export const DurableDefinitions = Event.inventory(
   Moved,
   Prompted,
   PromptAdmitted,
+  PromptCanceled,
+  ExecutionGateChanged,
   ContextUpdated,
   Turn.Started,
   Turn.NotStarted,
@@ -591,6 +617,8 @@ export const Definitions = Event.inventory(
   Moved,
   Prompted,
   PromptAdmitted,
+  PromptCanceled,
+  ExecutionGateChanged,
   ContextUpdated,
   Turn.Started,
   Turn.NotStarted,

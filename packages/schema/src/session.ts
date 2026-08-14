@@ -43,7 +43,18 @@ export const Info = Schema.Struct({
   location: Location.Ref,
   subpath: RelativePath.pipe(optional),
   revert: Revert.State.pipe(optional),
+  execution: Schema.Struct({
+    managed: Schema.Boolean,
+    gateOpen: Schema.Boolean,
+  }),
 }).annotate({ identifier: "SessionV2.Info" })
+
+export const ExecutionGate = Schema.Struct({
+  managed: Schema.Boolean,
+  open: Schema.Boolean,
+  reason: Schema.String,
+}).annotate({ identifier: "SessionV2.ExecutionGate" })
+export type ExecutionGate = typeof ExecutionGate.Type
 
 export const ListAnchor = Schema.Struct({
   id: ID,

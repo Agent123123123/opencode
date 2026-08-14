@@ -1,4 +1,5 @@
 import { Cause, Effect, Layer } from "effect"
+import { eq } from "drizzle-orm"
 import { Database } from "../../database/database"
 import { LocationServiceMap } from "../../location-service-map"
 import { makeGlobalNode } from "../../effect/app-node"
@@ -9,13 +10,29 @@ import { SessionRunner } from "../runner"
 import { SessionSchema } from "../schema"
 import { SessionStore } from "../store"
 import { SessionExecution } from "../execution"
+import { SessionTable } from "../sql"
+
+export const closeManagedExecutionGates = Effect.fn("SessionExecutionLocal.closeManagedExecutionGates")(function* (
+  db: Database.Interface["db"],
+) {
+  yield* db
+    .update(SessionTable)
+    .set({ execution_gate_open: false, execution_gate_reason: "host_process_started" })
+    .where(eq(SessionTable.execution_managed, true))
+    .run()
+    .pipe(Effect.orDie)
+})
 
 export const reconcilePending = Effect.fn("SessionExecutionLocal.reconcilePending")(function* (
   db: Database.Interface["db"],
   wake: (sessionID: SessionSchema.ID) => Effect.Effect<void>,
 ) {
   const sessionIDs = Array.from(
-    new Set([...(yield* SessionInput.pendingSessionIDs(db)), ...(yield* SessionModelSwitch.pendingSessionIDs(db))]),
+    new Set([
+      ...(yield* SessionInput.pendingSessionIDs(db)),
+      ...(yield* SessionInput.orphanedPromotedSessionIDs(db)),
+      ...(yield* SessionModelSwitch.pendingSessionIDs(db)),
+    ]),
   )
   yield* Effect.forEach(sessionIDs, wake, { discard: true })
   return sessionIDs.length
@@ -43,6 +60,7 @@ const layer = Layer.effect(
       }),
     })
 
+    yield* closeManagedExecutionGates(db)
     yield* reconcilePending(db, coordinator.wake)
 
     return SessionExecution.Service.of({

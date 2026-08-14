@@ -73,6 +73,7 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
               id: ctx.payload.id,
               agent: ctx.payload.agent,
               model: ctx.payload.model,
+              executionManaged: ctx.payload.executionManaged,
               location: ctx.payload.location ?? { directory: AbsolutePath.make(process.cwd()) },
             })
             .pipe(
@@ -119,6 +120,40 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
             )
           return {
             data: yield* create,
+          }
+        }),
+      )
+      .handle(
+        "session.executionGate",
+        Effect.fn(function* (ctx) {
+          return {
+            data: yield* session.executionGate(ctx.params.sessionID).pipe(
+              Effect.catchTag("Session.NotFoundError", (error) =>
+                Effect.fail(new SessionNotFoundError({
+                  sessionID: error.sessionID,
+                  message: `Session not found: ${error.sessionID}`,
+                })),
+              ),
+            ),
+          }
+        }),
+      )
+      .handle(
+        "session.executionGate.set",
+        Effect.fn(function* (ctx) {
+          return {
+            data: yield* session.setExecutionGate({
+              sessionID: ctx.params.sessionID,
+              open: ctx.payload.open,
+              reason: ctx.payload.reason,
+            }).pipe(
+              Effect.catchTag("Session.NotFoundError", (error) =>
+                Effect.fail(new SessionNotFoundError({
+                  sessionID: error.sessionID,
+                  message: `Session not found: ${error.sessionID}`,
+                })),
+              ),
+            ),
           }
         }),
       )
@@ -254,6 +289,50 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
                   ),
                 ),
               ),
+          }
+        }),
+      )
+      .handle(
+        "session.input",
+        Effect.fn(function* (ctx) {
+          return {
+            data: yield* session.input({
+              sessionID: ctx.params.sessionID,
+              inputID: ctx.params.inputID,
+            }).pipe(
+              Effect.catchTag("Session.NotFoundError", (error) =>
+                Effect.fail(new SessionNotFoundError({
+                  sessionID: error.sessionID,
+                  message: `Session not found: ${error.sessionID}`,
+                })),
+              ),
+            ),
+          }
+        }),
+      )
+      .handle(
+        "session.input.cancel",
+        Effect.fn(function* (ctx) {
+          return {
+            data: yield* session.cancelInput({
+              sessionID: ctx.params.sessionID,
+              inputID: ctx.params.inputID,
+              origin: ctx.payload.origin,
+              reason: ctx.payload.reason,
+            }).pipe(
+              Effect.catchTag("Session.NotFoundError", (error) =>
+                Effect.fail(new SessionNotFoundError({
+                  sessionID: error.sessionID,
+                  message: `Session not found: ${error.sessionID}`,
+                })),
+              ),
+              Effect.catchTag("Session.PromptConflictError", (error) =>
+                Effect.fail(new ConflictError({
+                  message: `Input cancellation conflicts with durable state: ${error.messageID}`,
+                  resource: error.messageID,
+                })),
+              ),
+            ),
           }
         }),
       )
@@ -453,7 +532,16 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
       .handle(
         "session.interrupt",
         Effect.fn(function* (ctx) {
-          yield* session.interrupt(ctx.params.sessionID)
+          const accepted = yield* session.interruptExact({
+            sessionID: ctx.params.sessionID,
+            turnID: ctx.payload.turnID,
+          })
+          if (!accepted) {
+            return yield* new ConflictError({
+              message: "Exact turn is not the active execution",
+              resource: ctx.payload.turnID,
+            })
+          }
           return HttpApiSchema.NoContent.make()
         }),
       )

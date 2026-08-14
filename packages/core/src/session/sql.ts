@@ -57,6 +57,11 @@ export const SessionTable = sqliteTable(
     ...Timestamps,
     time_compacting: integer(),
     time_archived: integer(),
+    execution_managed: integer({ mode: "boolean" }).notNull().default(false),
+    execution_gate_open: integer({ mode: "boolean" }).notNull().default(true),
+    execution_gate_reason: text().notNull().default("ordinary_session"),
+    active_turn_id: text().$type<SessionMessage.ID>(),
+    active_input_ids: text({ mode: "json" }).$type<SessionMessage.ID[]>(),
   },
   (table) => [
     index("session_project_idx").on(table.project_id),
@@ -149,6 +154,7 @@ export const SessionInputTable = sqliteTable(
     delivery: text().$type<SessionInput.Delivery>().notNull(),
     admitted_seq: integer().notNull(),
     promoted_seq: integer(),
+    turn_id: text().$type<SessionMessage.ID>(),
     time_created: integer()
       .notNull()
       .$default(() => Date.now()),
@@ -162,6 +168,26 @@ export const SessionInputTable = sqliteTable(
     ),
     uniqueIndex("session_input_session_admitted_seq_idx").on(table.session_id, table.admitted_seq),
     uniqueIndex("session_input_session_promoted_seq_idx").on(table.session_id, table.promoted_seq),
+    index("session_input_orphaned_promoted_idx").on(table.session_id, table.promoted_seq, table.turn_id),
+  ],
+)
+
+export const SessionInputCancellationTable = sqliteTable(
+  "session_input_cancellation",
+  {
+    id: text().$type<SessionMessage.ID>().primaryKey(),
+    session_id: text()
+      .$type<SessionSchema.ID>()
+      .notNull()
+      .references(() => SessionTable.id, { onDelete: "cascade" }),
+    cancel_seq: integer().notNull(),
+    origin: text().$type<SessionInput.CancelOrigin>().notNull(),
+    reason: text().notNull(),
+    input_visibility: text().$type<"missing" | "admitted_unpromoted">().notNull(),
+    time_canceled: integer().notNull(),
+  },
+  (table) => [
+    uniqueIndex("session_input_cancellation_session_seq_idx").on(table.session_id, table.cancel_seq),
   ],
 )
 

@@ -83,6 +83,7 @@ type CreateInput = {
   agent?: AgentV2.ID
   model?: ModelV2.Ref
   location: Location.Ref
+  executionManaged?: boolean
 }
 
 type CompactInput = {
@@ -110,7 +111,7 @@ export class PromptConflictError extends Schema.TaggedErrorClass<PromptConflictE
 
 export class CreateConflictError extends Schema.TaggedErrorClass<CreateConflictError>()("Session.CreateConflictError", {
   sessionID: SessionSchema.ID,
-  reason: Schema.Literals(["location", "selection"]),
+  reason: Schema.Literals(["location", "selection", "execution"]),
 }) {}
 export const MessageNotFoundError = SessionRevert.MessageNotFoundError
 export type MessageNotFoundError = SessionRevert.MessageNotFoundError
@@ -170,6 +171,22 @@ export interface Interface {
     delivery?: SessionInput.Delivery
     resume?: boolean
   }) => Effect.Effect<SessionInput.Admitted, NotFoundError | PromptConflictError>
+  readonly input: (input: {
+    sessionID: SessionSchema.ID
+    inputID: SessionMessage.ID
+  }) => Effect.Effect<SessionInput.Status, NotFoundError>
+  readonly cancelInput: (input: {
+    sessionID: SessionSchema.ID
+    inputID: SessionMessage.ID
+    origin: SessionInput.CancelOrigin
+    reason: string
+  }) => Effect.Effect<SessionInput.CancelResult, NotFoundError | PromptConflictError>
+  readonly executionGate: (sessionID: SessionSchema.ID) => Effect.Effect<SessionSchema.ExecutionGate, NotFoundError>
+  readonly setExecutionGate: (input: {
+    sessionID: SessionSchema.ID
+    open: boolean
+    reason: string
+  }) => Effect.Effect<SessionSchema.ExecutionGate, NotFoundError>
   readonly shell: (input: {
     id?: EventV2.ID
     sessionID: SessionSchema.ID
@@ -187,6 +204,10 @@ export interface Interface {
   readonly active: Effect.Effect<ReadonlySet<SessionSchema.ID>>
   readonly resume: (sessionID: SessionSchema.ID) => Effect.Effect<void, NotFoundError | SessionRunner.RunError>
   readonly interrupt: (sessionID: SessionSchema.ID) => Effect.Effect<void>
+  readonly interruptExact: (input: {
+    sessionID: SessionSchema.ID
+    turnID: SessionMessage.ID
+  }) => Effect.Effect<boolean>
   readonly revert: {
     readonly stage: (input: {
       sessionID: SessionSchema.ID
@@ -216,7 +237,7 @@ const layer = Layer.effect(
       left?.id === right.id &&
       left.providerID === right.providerID &&
       (left.variant ?? "default") === (right.variant ?? "default")
-    const conflict = (sessionID: SessionSchema.ID, reason: "location" | "selection") =>
+    const conflict = (sessionID: SessionSchema.ID, reason: "location" | "selection" | "execution") =>
       new CreateConflictError({ sessionID, reason })
     const selection = (input: { agent?: AgentV2.ID; model?: ModelV2.Ref }, location: Location.Ref) =>
       SessionSelection.Service.use((service) => service.resolve(input)).pipe(Effect.provide(locations.get(location)))
@@ -228,10 +249,13 @@ const layer = Layer.effect(
       session: SessionSchema.Info,
       expected: SessionSelection.Selection,
       location: Location.Ref,
+      executionManaged?: boolean,
     ): Effect.Effect<SessionSchema.Info, CreateConflictError> => {
       if (!sameLocation(session.location, location)) return Effect.fail(conflict(session.id, "location"))
       if (session.agent !== expected.agent || !sameModel(session.model, expected.model))
         return Effect.fail(conflict(session.id, "selection"))
+      if (executionManaged !== undefined && session.execution.managed !== executionManaged)
+        return Effect.fail(conflict(session.id, "execution"))
       return Effect.succeed(session)
     }
     const decodeMessage = Schema.decodeUnknownEffect(SessionMessage.Message)
@@ -257,7 +281,7 @@ const layer = Layer.effect(
             { agent: input.agent ?? recorded.agent, model: input.model ?? recorded.model },
             input.location,
           )
-          return yield* verify(recorded, selected, input.location)
+          return yield* verify(recorded, selected, input.location, input.executionManaged)
         }
         const selected = yield* selection({ agent: input.agent, model: input.model }, input.location)
         const project = yield* projects.resolve(input.location.directory)
@@ -282,6 +306,7 @@ const layer = Layer.effect(
           cost: 0,
           tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
           time: { created: now, updated: now },
+          metadata: { executionManaged: input.executionManaged === true },
         })
         const projected = yield* events
           .publish(SessionV1.Event.Created, { sessionID, info }, { location: input.location })
@@ -301,11 +326,13 @@ const layer = Layer.effect(
                 )
             }),
           )
-        if (projected.type === "existing") return yield* verify(projected.session, selected, input.location)
+        if (projected.type === "existing") {
+          return yield* verify(projected.session, selected, input.location, input.executionManaged)
+        }
         // TODO: Restore recorded sessions onto replacement synchronized workspaces in a future API slice.
         return yield* result.get(sessionID).pipe(
           Effect.orDie,
-          Effect.flatMap((created) => verify(created, selected, input.location)),
+          Effect.flatMap((created) => verify(created, selected, input.location, input.executionManaged)),
         )
       }),
       get: Effect.fn("V2Session.get")(function* (sessionID) {
@@ -442,6 +469,63 @@ const layer = Layer.effect(
           }),
         ),
       ),
+      input: Effect.fn("V2Session.input")(function* (input) {
+        yield* result.get(input.sessionID)
+        return yield* SessionInput.query(db, { id: input.inputID, sessionID: input.sessionID })
+      }),
+      cancelInput: Effect.fn("V2Session.cancelInput")((input) =>
+        Effect.uninterruptible(
+          Effect.gen(function* () {
+            yield* result.get(input.sessionID)
+            return yield* SessionInput.cancel(db, events, {
+              id: input.inputID,
+              sessionID: input.sessionID,
+              origin: input.origin,
+              reason: input.reason,
+            }).pipe(
+              Effect.catchDefect((defect) =>
+                defect instanceof SessionInput.LifecycleConflict
+                  ? new PromptConflictError({ sessionID: input.sessionID, messageID: input.inputID })
+                  : Effect.die(defect),
+              ),
+            )
+          }),
+        ),
+      ),
+      executionGate: Effect.fn("V2Session.executionGate")(function* (sessionID) {
+        const session = yield* result.get(sessionID)
+        const row = yield* db
+          .select({ reason: SessionTable.execution_gate_reason })
+          .from(SessionTable)
+          .where(eq(SessionTable.id, sessionID))
+          .get()
+          .pipe(Effect.orDie)
+        return SessionSchema.ExecutionGate.make({
+          managed: session.execution.managed,
+          open: session.execution.gateOpen,
+          reason: row?.reason ?? "ordinary_session",
+        })
+      }),
+      setExecutionGate: Effect.fn("V2Session.setExecutionGate")((input) =>
+        Effect.uninterruptible(
+          Effect.gen(function* () {
+            const current = yield* result.executionGate(input.sessionID)
+            if (!current.managed) return current
+            const reason = input.reason.trim()
+            if (!reason) return yield* Effect.die("Execution gate reason must be non-empty")
+            if (current.open !== input.open) {
+              yield* events.publish(SessionEvent.ExecutionGateChanged, {
+                sessionID: input.sessionID,
+                timestamp: yield* DateTime.now,
+                open: input.open,
+                reason,
+              })
+            }
+            if (input.open) yield* execution.wake(input.sessionID)
+            return yield* result.executionGate(input.sessionID)
+          }),
+        ),
+      ),
       shell: Effect.fn("V2Session.shell")(function* () {
         return yield* new OperationUnavailableError({ operation: "shell" })
       }),
@@ -486,6 +570,17 @@ const layer = Layer.effect(
       interrupt: Effect.fn("V2Session.interrupt")((sessionID) =>
         Effect.uninterruptible(execution.interrupt(sessionID)),
       ),
+      interruptExact: Effect.fn("V2Session.interruptExact")(function* (input) {
+        const active = yield* db
+          .select({ turnID: SessionTable.active_turn_id })
+          .from(SessionTable)
+          .where(eq(SessionTable.id, input.sessionID))
+          .get()
+          .pipe(Effect.orDie)
+        if (active?.turnID !== input.turnID) return false
+        yield* Effect.uninterruptible(execution.interrupt(input.sessionID))
+        return true
+      }),
       revert: {
         stage: Effect.fn("V2Session.revert.stage")(function* (input) {
           const session = yield* result.get(input.sessionID)

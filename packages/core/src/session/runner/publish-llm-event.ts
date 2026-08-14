@@ -210,12 +210,9 @@ export const createLLMEventPublisher = (events: EventV2.Interface, input: Input)
     })
   })
 
-  const failUnsettledTools = Effect.fn("SessionRunner.failUnsettledTools")(function* (
-    message: string,
-    hostedOnly = false,
-  ) {
+  const failUnsettledTools = Effect.fn("SessionRunner.failUnsettledTools")(function* (message: string) {
     for (const [callID, tool] of tools) {
-      if (tool.settled || (hostedOnly && !tool.providerExecuted)) continue
+      if (tool.settled) continue
       tool.settled = true
       yield* events.publish(SessionEvent.Tool.Failed, {
         sessionID: input.sessionID,
