@@ -10,3 +10,6 @@ export type Info = Session.Info
 
 export const Title = Session.Title
 export type Title = Session.Title
+
+export const ExecutionGate = Session.ExecutionGate
+export type ExecutionGate = Session.ExecutionGate

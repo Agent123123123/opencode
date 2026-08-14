@@ -130,6 +130,31 @@ describe("SessionV2.prompt", () => {
     }),
   )
 
+  it.effect("interrupts only the exact durably active turn", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const events = yield* EventV2.Service
+      const turnID = SessionMessage.ID.create()
+      interruptCalls.length = 0
+      yield* events.publish(SessionEvent.Turn.Started, {
+        sessionID,
+        timestamp: yield* DateTime.now,
+        turnID,
+        turnStartedAt: yield* DateTime.now,
+        activityInputIDs: [],
+      })
+
+      expect(yield* session.interruptExact({
+        sessionID,
+        turnID: SessionMessage.ID.create(),
+      })).toBe(false)
+      expect(interruptCalls).toEqual([])
+      expect(yield* session.interruptExact({ sessionID, turnID })).toBe(true)
+      expect(interruptCalls).toEqual([sessionID])
+    }),
+  )
+
   it.effect("delegates interruption without requiring a recorded Session", () =>
     Effect.gen(function* () {
       const session = yield* SessionV2.Service
@@ -380,6 +405,149 @@ describe("SessionV2.prompt", () => {
       expect(yield* session.messages({ sessionID })).toMatchObject([
         { id: messageID, type: "user", text: "Promote once" },
       ])
+    }),
+  )
+
+  it.effect("holds managed inputs behind the durable execution gate until Sidecar reconciliation opens it", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const { db } = yield* Database.Service
+      const session = yield* SessionV2.Service
+      const events = yield* EventV2.Service
+      yield* db
+        .update(SessionTable)
+        .set({
+          execution_managed: true,
+          execution_gate_open: false,
+          execution_gate_reason: "host_process_started",
+        })
+        .where(eq(SessionTable.id, sessionID))
+        .run()
+        .pipe(Effect.orDie)
+      yield* session.prompt({
+        id: messageID,
+        sessionID,
+        prompt: Prompt.make({ text: "Wait for replay" }),
+        delivery: "queue",
+        resume: false,
+      })
+
+      expect(yield* SessionInput.hasPending(db, sessionID, "queue")).toBe(false)
+      expect(yield* SessionInput.promoteNextQueued(db, events, sessionID)).toBe(false)
+      expect(yield* session.executionGate(sessionID)).toEqual({
+        managed: true,
+        open: false,
+        reason: "host_process_started",
+      })
+
+      expect(yield* session.setExecutionGate({
+        sessionID,
+        open: true,
+        reason: "motryx_sidecar_reconciled",
+      })).toEqual({ managed: true, open: true, reason: "motryx_sidecar_reconciled" })
+      expect(wakeCalls).toContain(sessionID)
+      expect(yield* SessionInput.hasPending(db, sessionID, "queue")).toBe(true)
+      expect(yield* SessionInput.promoteNextQueued(db, events, sessionID)).toBe(true)
+    }),
+  )
+
+  it.effect("tracks a promoted input until durable Turn.Started owns it", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const { db } = yield* Database.Service
+      const session = yield* SessionV2.Service
+      const events = yield* EventV2.Service
+      yield* session.prompt({ id: messageID, sessionID, prompt: Prompt.make({ text: "Recover promotion" }), resume: false })
+      yield* SessionInput.promoteSteers(db, events, sessionID, Number.MAX_SAFE_INTEGER)
+      expect(yield* SessionInput.hasOrphanedPromoted(db, sessionID)).toBe(true)
+
+      const turnID = SessionMessage.ID.create()
+      const now = yield* DateTime.now
+      yield* events.publish(SessionEvent.Turn.Started, {
+        sessionID,
+        timestamp: now,
+        turnID,
+        turnStartedAt: now,
+        activityInputIDs: [messageID],
+      })
+      expect(yield* SessionInput.hasOrphanedPromoted(db, sessionID)).toBe(false)
+    }),
+  )
+
+  it.effect("persists an exact cancellation tombstone that prevents later promotion", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const { db } = yield* Database.Service
+      const session = yield* SessionV2.Service
+      const events = yield* EventV2.Service
+      yield* session.prompt({ id: messageID, sessionID, prompt: Prompt.make({ text: "Cancel me" }), resume: false })
+
+      const canceled = yield* session.cancelInput({
+        sessionID,
+        inputID: messageID,
+        origin: "stale",
+        reason: "superseded Run",
+      })
+
+      expect(canceled).toMatchObject({
+        outcome: "canceled",
+        status: {
+          state: "canceled",
+          id: messageID,
+          origin: "stale",
+          reason: "superseded Run",
+          inputVisibility: "admitted_unpromoted",
+        },
+      })
+      expect(yield* SessionInput.promoteSteers(db, events, sessionID, Number.MAX_SAFE_INTEGER)).toBe(0)
+      expect(yield* SessionInput.hasPending(db, sessionID, "steer")).toBe(false)
+      expect(yield* session.input({ sessionID, inputID: messageID })).toEqual(canceled.status)
+      expect(yield* eventCount(EventV2.versionedType(SessionEvent.PromptCanceled.type, 1))).toBe(1)
+    }),
+  )
+
+  it.effect("lets a cancellation tombstone win when it arrives before delayed admission", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const canceled = yield* session.cancelInput({
+        sessionID,
+        inputID: messageID,
+        origin: "user",
+        reason: "user canceled before admission",
+      })
+      expect(canceled).toMatchObject({
+        outcome: "canceled",
+        status: { state: "canceled", inputVisibility: "missing" },
+      })
+
+      const failure = yield* session.prompt({
+        id: messageID,
+        sessionID,
+        prompt: Prompt.make({ text: "Late submit" }),
+        resume: false,
+      }).pipe(Effect.flip)
+      expect(failure).toMatchObject({ _tag: "Session.PromptConflictError", messageID })
+    }),
+  )
+
+  it.effect("reports too_late without changing an already promoted input", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const { db } = yield* Database.Service
+      const session = yield* SessionV2.Service
+      const events = yield* EventV2.Service
+      yield* session.prompt({ id: messageID, sessionID, prompt: Prompt.make({ text: "Already running" }), resume: false })
+      yield* SessionInput.promoteSteers(db, events, sessionID, Number.MAX_SAFE_INTEGER)
+
+      const result = yield* session.cancelInput({
+        sessionID,
+        inputID: messageID,
+        origin: "user",
+        reason: "too late",
+      })
+      expect(result).toMatchObject({ outcome: "too_late", status: { state: "promoted" } })
+      expect(yield* session.input({ sessionID, inputID: messageID })).toMatchObject({ state: "promoted" })
     }),
   )
 

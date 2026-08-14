@@ -132,6 +132,7 @@ describe("SessionRunnerModel", () => {
         tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
         time: { created: DateTime.makeUnsafe(0), updated: DateTime.makeUnsafe(0) },
         location: { directory: AbsolutePath.make("/project") },
+        execution: { managed: false, gateOpen: true },
       })
 
       const resolved = yield* SessionRunnerModel.resolve(session, catalog)
@@ -168,6 +169,7 @@ describe("SessionRunnerModel", () => {
         tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
         time: { created: DateTime.makeUnsafe(0), updated: DateTime.makeUnsafe(0) },
         location: { directory: AbsolutePath.make("/project") },
+        execution: { managed: false, gateOpen: true },
       })
 
       const resolved = yield* SessionRunnerModel.resolve(session, catalog)
@@ -196,6 +198,7 @@ describe("SessionRunnerModel", () => {
         tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
         time: { created: DateTime.makeUnsafe(0), updated: DateTime.makeUnsafe(0) },
         location: { directory: AbsolutePath.make("/project") },
+        execution: { managed: false, gateOpen: true },
       })
 
       const failure = yield* SessionRunnerModel.resolve(session, catalog).pipe(Effect.flip)
@@ -228,6 +231,7 @@ describe("SessionRunnerModel", () => {
         tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
         time: { created: DateTime.makeUnsafe(0), updated: DateTime.makeUnsafe(0) },
         location: { directory: AbsolutePath.make("/project") },
+        execution: { managed: false, gateOpen: true },
       })
 
       const resolved = yield* SessionRunnerModel.resolve(session, catalog)

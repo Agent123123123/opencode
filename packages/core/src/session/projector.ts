@@ -1,6 +1,6 @@
 export * as SessionProjector from "./projector"
 
-import { and, desc, eq, gt, or, sql } from "drizzle-orm"
+import { and, desc, eq, gt, isNull, or, sql } from "drizzle-orm"
 import { DateTime, Effect, Layer, Schema } from "effect"
 import { Database } from "../database/database"
 import { EventV2 } from "../event"
@@ -13,7 +13,14 @@ import { SessionMessageUpdater } from "./message-updater"
 import { SessionInput } from "./input"
 import { WorkspaceV2 } from "../workspace"
 import { SessionContextEpoch } from "./context-epoch"
-import { MessageTable, PartTable, SessionInputTable, SessionMessageTable, SessionTable } from "./sql"
+import {
+  MessageTable,
+  PartTable,
+  SessionInputCancellationTable,
+  SessionInputTable,
+  SessionMessageTable,
+  SessionTable,
+} from "./sql"
 import type { DeepMutable } from "../schema"
 
 type DatabaseService = Database.Interface["db"]
@@ -72,6 +79,9 @@ function sessionRow(info: SessionV1.SessionInfo): typeof SessionTable.$inferInse
     time_updated: info.time.updated,
     time_compacting: info.time.compacting,
     time_archived: info.time.archived,
+    execution_managed: info.metadata?.executionManaged === true,
+    execution_gate_open: info.metadata?.executionManaged === true ? false : true,
+    execution_gate_reason: info.metadata?.executionManaged === true ? "managed_session_created" : "ordinary_session",
   }
 }
 
@@ -267,6 +277,18 @@ const layer = Layer.effectDiscard(
         yield* SessionContextEpoch.reset(db, event.data.sessionID)
       }),
     )
+    yield* events.project(SessionEvent.ExecutionGateChanged, (event) =>
+      db
+        .update(SessionTable)
+        .set({
+          execution_gate_open: event.data.open,
+          execution_gate_reason: event.data.reason,
+          time_updated: DateTime.toEpochMillis(event.data.timestamp),
+        })
+        .where(eq(SessionTable.id, event.data.sessionID))
+        .run()
+        .pipe(Effect.orDie),
+    )
     yield* events.project(SessionV1.Event.Deleted, (event) =>
       db.delete(SessionTable).where(eq(SessionTable.id, event.data.sessionID)).run().pipe(Effect.orDie),
     )
@@ -386,10 +408,96 @@ const layer = Layer.effectDiscard(
         })
       }),
     )
+    yield* events.project(SessionEvent.PromptCanceled, (event) =>
+      Effect.gen(function* () {
+        if (event.durable === undefined) return yield* Effect.die("Durable Session event is missing aggregate sequence")
+        yield* SessionInput.projectCanceled(db, {
+          cancelSeq: event.durable.seq,
+          id: event.data.messageID,
+          sessionID: event.data.sessionID,
+          origin: event.data.origin,
+          reason: event.data.reason,
+          inputVisibility: event.data.inputVisibility,
+          timeCanceled: event.data.timestamp,
+        })
+      }),
+    )
     yield* events.project(SessionEvent.ContextUpdated, (event) => run(db, event))
-    yield* events.project(SessionEvent.Turn.Started, () => Effect.void)
-    yield* events.project(SessionEvent.Turn.NotStarted, () => Effect.void)
-    yield* events.project(SessionEvent.Turn.Settled, () => Effect.void)
+    yield* events.project(SessionEvent.Turn.Started, (event) =>
+      Effect.gen(function* () {
+        yield* db
+          .update(SessionTable)
+          .set({
+            active_turn_id: event.data.turnID,
+            active_input_ids: [...event.data.activityInputIDs],
+          })
+          .where(eq(SessionTable.id, event.data.sessionID))
+          .run()
+          .pipe(Effect.orDie)
+        for (const inputID of event.data.activityInputIDs) {
+          yield* db
+            .update(SessionInputTable)
+            .set({ turn_id: event.data.turnID })
+            .where(and(
+              eq(SessionInputTable.id, inputID),
+              eq(SessionInputTable.session_id, event.data.sessionID),
+              isNull(SessionInputTable.turn_id),
+            ))
+            .run()
+            .pipe(Effect.orDie)
+        }
+      }),
+    )
+    yield* events.project(SessionEvent.Turn.NotStarted, (event) =>
+      Effect.gen(function* () {
+        yield* db
+          .update(SessionTable)
+          .set({ active_turn_id: null, active_input_ids: null })
+          .where(and(
+            eq(SessionTable.id, event.data.sessionID),
+            eq(SessionTable.active_turn_id, event.data.turnID),
+          ))
+          .run()
+          .pipe(Effect.orDie)
+        for (const inputID of event.data.activityInputIDs) {
+          yield* db
+            .update(SessionInputTable)
+            .set({ turn_id: event.data.turnID })
+            .where(and(
+              eq(SessionInputTable.id, inputID),
+              eq(SessionInputTable.session_id, event.data.sessionID),
+              isNull(SessionInputTable.turn_id),
+            ))
+            .run()
+            .pipe(Effect.orDie)
+        }
+      }),
+    )
+    yield* events.project(SessionEvent.Turn.Settled, (event) =>
+      Effect.gen(function* () {
+        for (const inputID of event.data.activityInputIDs) {
+          yield* db
+            .update(SessionInputTable)
+            .set({ turn_id: event.data.turnID })
+            .where(and(
+              eq(SessionInputTable.id, inputID),
+              eq(SessionInputTable.session_id, event.data.sessionID),
+              isNull(SessionInputTable.turn_id),
+            ))
+            .run()
+            .pipe(Effect.orDie)
+        }
+        yield* db
+          .update(SessionTable)
+          .set({ active_turn_id: null, active_input_ids: null })
+          .where(and(
+            eq(SessionTable.id, event.data.sessionID),
+            eq(SessionTable.active_turn_id, event.data.turnID),
+          ))
+          .run()
+          .pipe(Effect.orDie)
+      }),
+    )
     yield* events.project(SessionEvent.Synthetic, (event) => run(db, event))
     yield* events.project(SessionEvent.Shell.Started, (event) => run(db, event))
     yield* events.project(SessionEvent.Shell.Ended, (event) => run(db, event))
@@ -454,6 +562,16 @@ const layer = Layer.effectDiscard(
             and(
               eq(SessionInputTable.session_id, event.data.sessionID),
               or(gt(SessionInputTable.admitted_seq, boundary.seq), gt(SessionInputTable.promoted_seq, boundary.seq)),
+            ),
+          )
+          .run()
+          .pipe(Effect.orDie)
+        yield* db
+          .delete(SessionInputCancellationTable)
+          .where(
+            and(
+              eq(SessionInputCancellationTable.session_id, event.data.sessionID),
+              gt(SessionInputCancellationTable.cancel_seq, boundary.seq),
             ),
           )
           .run()

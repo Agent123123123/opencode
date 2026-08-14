@@ -132,6 +132,7 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
           agent: Agent.ID.pipe(Schema.optional),
           model: Model.Ref.pipe(Schema.optional),
           location: Location.Ref.pipe(Schema.optional),
+          executionManaged: Schema.Boolean.pipe(Schema.optional),
         }),
         success: Schema.Struct({ data: Session.Info }),
         error: [InvalidRequestError, ConflictError, ServiceUnavailableError],
@@ -219,6 +220,37 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
         ),
     )
     .add(
+      HttpApiEndpoint.get("session.executionGate", "/api/session/:sessionID/execution-gate", {
+        params: { sessionID: Session.ID },
+        success: Schema.Struct({ data: Session.ExecutionGate }),
+        error: SessionNotFoundError,
+      })
+        .middleware(sessionLocationMiddleware)
+        .annotateMerge(
+          OpenApi.annotations({
+            identifier: "v2.session.executionGate",
+            summary: "Inspect session execution gate",
+            description: "Read the durable promotion gate for a managed session.",
+          }),
+        ),
+    )
+    .add(
+      HttpApiEndpoint.post("session.executionGate.set", "/api/session/:sessionID/execution-gate", {
+        params: { sessionID: Session.ID },
+        payload: Schema.Struct({ open: Schema.Boolean, reason: Schema.String }),
+        success: Schema.Struct({ data: Session.ExecutionGate }),
+        error: SessionNotFoundError,
+      })
+        .middleware(sessionLocationMiddleware)
+        .annotateMerge(
+          OpenApi.annotations({
+            identifier: "v2.session.executionGate.set",
+            summary: "Set session execution gate",
+            description: "Durably open or close promotion for a managed session.",
+          }),
+        ),
+    )
+    .add(
       HttpApiEndpoint.post("session.prompt", "/api/session/:sessionID/prompt", {
         params: { sessionID: Session.ID },
         payload: Schema.Struct({
@@ -236,6 +268,37 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
             identifier: "v2.session.prompt",
             summary: "Send message",
             description: "Durably admit one session input and schedule agent-loop execution unless resume is false.",
+          }),
+        ),
+    )
+    .add(
+      HttpApiEndpoint.get("session.input", "/api/session/:sessionID/input/:inputID", {
+        params: { sessionID: Session.ID, inputID: SessionMessage.ID },
+        success: Schema.Struct({ data: SessionInput.Status }),
+        error: SessionNotFoundError,
+      })
+        .middleware(sessionLocationMiddleware)
+        .annotateMerge(
+          OpenApi.annotations({
+            identifier: "v2.session.input",
+            summary: "Inspect durable session input",
+            description: "Read exact admitted, promoted, canceled, or missing state for one stable input ID.",
+          }),
+        ),
+    )
+    .add(
+      HttpApiEndpoint.post("session.input.cancel", "/api/session/:sessionID/input/:inputID/cancel", {
+        params: { sessionID: Session.ID, inputID: SessionMessage.ID },
+        payload: Schema.Struct({ origin: SessionInput.CancelOrigin, reason: Schema.String }),
+        success: Schema.Struct({ data: SessionInput.CancelResult }),
+        error: [ConflictError, SessionNotFoundError],
+      })
+        .middleware(sessionLocationMiddleware)
+        .annotateMerge(
+          OpenApi.annotations({
+            identifier: "v2.session.input.cancel",
+            summary: "Cancel durable session input",
+            description: "Persist an idempotent tombstone before promotion or report too_late for an already promoted input.",
           }),
         ),
     )
@@ -361,15 +424,16 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
     .add(
       HttpApiEndpoint.post("session.interrupt", "/api/session/:sessionID/interrupt", {
         params: { sessionID: Session.ID },
+        payload: Schema.Struct({ turnID: SessionMessage.ID }),
         success: HttpApiSchema.NoContent,
-        error: SessionNotFoundError,
+        error: [ConflictError, SessionNotFoundError],
       })
         .middleware(sessionLocationMiddleware)
         .annotateMerge(
           OpenApi.annotations({
             identifier: "v2.session.interrupt",
             summary: "Interrupt session execution",
-            description: "Interrupt active execution owned by this OpenCode process. Idle interruption is a no-op.",
+            description: "Interrupt only the exact active turn; stale or idle identities are rejected.",
           }),
         ),
     )

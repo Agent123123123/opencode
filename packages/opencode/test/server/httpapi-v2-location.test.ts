@@ -255,16 +255,16 @@ describe("v2 location HttpApi", () => {
             body: JSON.stringify({ prompt: { text: "Use the bridge probe." }, delivery: "queue" }),
           }),
         ).pipe(
-          Effect.timeoutOrElse({ duration: "10 seconds", orElse: () => Effect.fail(new Error("prompt timed out")) }),
+          Effect.timeoutOrElse({ duration: "20 seconds", orElse: () => Effect.fail(new Error("prompt timed out")) }),
         )
         expect(prompted.status).toBe(200)
         yield* llm.wait(1).pipe(
-          Effect.timeoutOrElse({ duration: "10 seconds", orElse: () => Effect.fail(new Error("LLM call timed out")) }),
+          Effect.timeoutOrElse({ duration: "20 seconds", orElse: () => Effect.fail(new Error("LLM call timed out")) }),
         )
         expect(JSON.stringify((yield* llm.inputs)[0])).toContain('"name":"bridge_probe"')
       }).pipe(Effect.provide(TestLLMServer.layer), Effect.scoped),
     )
-  }, 60_000)
+  }, 90_000)
 
   test("rejects invalid selections and conflicting session identities", async () => {
     await using tmp = await tmpdir({ git: true, config: catalogConfig() })

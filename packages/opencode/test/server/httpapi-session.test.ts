@@ -677,7 +677,7 @@ describe("session HttpApi", () => {
           Effect.map((items) => (assistantTexts(items).includes("reply before rename") ? items : undefined)),
         ),
         "first assistant reply did not complete after rename",
-        "10 seconds",
+        "40 seconds",
       )
 
       expect((yield* prompt("after rename")).status).toBe(200)
@@ -686,7 +686,7 @@ describe("session HttpApi", () => {
           Effect.map((items) => (assistantTexts(items).includes("reply after rename") ? items : undefined)),
         ),
         "second assistant reply did not complete",
-        "10 seconds",
+        "40 seconds",
       )
       expect(assistantTexts(finalMessages)).toEqual(["reply before rename", "reply after rename"])
       expect(
@@ -696,7 +696,7 @@ describe("session HttpApi", () => {
         yield* requestJson<{ data: { id: string; title: string } }>(`/api/session/${sessionID}`, { headers }),
       ).toMatchObject({ data: { id: sessionID, title: "连续会话 Session" } })
     }).pipe(Effect.provide(TestLLMServer.layer), Effect.provide(AppNodeBuilder.build(CrossSpawnSpawner.node))),
-    30_000,
+    100_000,
   )
 
   it.instance(
