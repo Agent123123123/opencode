@@ -1,6 +1,6 @@
 import path from "node:path"
 
-export const MOTRYX_CONTROL_SCHEMA_VERSION = 3 as const
+export const MOTRYX_CONTROL_SCHEMA_VERSION = 5 as const
 
 export type MotryxControlConfig = {
   apiURL: string
@@ -92,8 +92,6 @@ export type MotryxLaneProjection = {
   pendingCheckSummary?: string
   reopenCount: number
   repairCycle: number
-  readyAt?: number
-  readyKind?: string
   dependsOnLaneIDs: string[]
   coordinatorSlotID?: string
   checkerSlotID?: string
@@ -101,6 +99,9 @@ export type MotryxLaneProjection = {
   checkerRuntimeReadiness: string
   coordinatorRuntime?: MotryxRuntimeTargetProjection
   checkerRuntime?: MotryxRuntimeTargetProjection
+  runPhase?: "EXECUTING" | "WAITING_RESPONSE" | "RESUME_QUEUED"
+  requestMessageID?: string
+  requestDeadlineAt?: number
   failure?: MotryxLaneFailureProjection
 }
 
@@ -134,7 +135,9 @@ export type MotryxRuntimeIncidentProjection = {
   retryable?: boolean
   retryExhausted?: boolean
   attemptCount?: number
-  recoveryID?: string
+  runID?: string
+  attemptID?: string
+  proofRef?: string
   occurrenceCount: number
   openedAt: number
   lastSeenAt: number
@@ -172,23 +175,108 @@ export type MotryxFunctionSlotProjection = {
   runtimeReadiness: string
 }
 
-export type MotryxInboxProjection = {
-  inboxItemID: string
-  targetKind: string
-  targetID: string
-  envelopeClass: string
-  sourceType: string
-  status: string
+export type MotryxRunProjection = {
+  runID: string
+  scopeKind: "LANE_PRIMARY" | "SLOT_INPUT" | "SESSION_INPUT"
+  runKind: "COORDINATOR" | "CHECKER" | "LANE_DECISION" | "ORCHESTRATOR_TURN" | "ANALYST_ADVISORY" | "A2A_RESPONDER" | "NOTIFICATION"
+  status: "OPEN" | "WAITING" | "SUCCEEDED" | "FAILED" | "CANCELED"
   laneID?: string
+  relatedLaneID?: string
+  logicalOwnerKind: "FUNCTION_SLOT" | "CONTROL_ROLE"
+  logicalOwnerID: string
+  waitingKind?: "a2a_request" | "attention" | "runtime_repair" | "reconciliation" | "user_paused" | "runtime_restart"
+  waitingRef?: string
+  sourceKind: string
+  sourceID: string
+  revision: number
+  errorRetryCount: number
+  maxErrorRetries: number
+  protocolCorrectionCount: number
+  maxProtocolCorrections: number
+  retryNotBefore?: number
+  retryDisposition?: "ALLOWED_AFTER_REPAIR" | "RECONCILIATION_REQUIRED" | "FORBIDDEN"
+  resultRef?: string
+  failureRef?: string
+  createdAt: number
+  terminalAt?: number
+  currentAttemptID?: string
 }
 
-export type MotryxDeliveryFenceProjection = {
-  fenceID: string
+export type MotryxAttemptProjection = {
+  attemptID: string
+  runID: string
+  attemptNo: number
+  reason: "INITIAL" | "ERROR_RETRY" | "PROTOCOL_CORRECTION" | "WAIT_RESUME"
   instanceID: string
-  inboxItemID: string
-  state: string
-  fenceGeneration: number
-  expectedSessionID?: string
+  sessionID: string
+  stableInputID: string
+  state: "PENDING" | "RUNNING" | "OUTCOME_UNKNOWN" | "TERMINAL"
+  submitCount: number
+  createdAt: number
+  dispatchNotBefore?: number
+  lastSubmitError?: string
+  turnID?: string
+  startedAt?: number
+  terminalKind?: "NOT_STARTED" | "COMPLETED" | "FAILED" | "INTERRUPTED" | "PROCESS_LOST" | "CANCELED_BEFORE_START"
+  terminalProofRef?: string
+  terminalAt?: number
+  inputVisibility?: "NOT_ADMITTED" | "ADMITTED_UNPROMOTED" | "PROMOTED_TRANSCRIPT_VISIBLE"
+  failureKind?: string
+  failureSafeSummary?: string
+  providerID?: string
+  modelID?: string
+  httpStatus?: number
+  transportKind?: string
+  transportCode?: string
+  hostRetryable?: boolean
+  hostRetryExhausted?: boolean
+  hostAttemptCount?: number
+  cancelOrigin?: "USER" | "FRAMEWORK" | "SHUTDOWN" | "STALE" | "BUSINESS"
+  cancelReason?: string
+  cancelRequestedAt?: number
+}
+
+export type MotryxAttentionKind =
+  | "PROVIDER_RETRY"
+  | "RUN_RETRY_SCHEDULED"
+  | "RUN_RETRY_RUNNING"
+  | "PROTOCOL_CORRECTION"
+  | "DELIVERY_RETRY"
+  | "OUTCOME_UNKNOWN"
+  | "WAITING_ATTENTION"
+  | "WAITING_RUNTIME_REPAIR"
+  | "WAITING_RECONCILIATION"
+  | "USER_PAUSED"
+  | "RUNTIME_RESTART"
+  | "FINAL_FAILURE"
+
+export type MotryxAttentionItemProjection = {
+  attentionID: string
+  kind: MotryxAttentionKind
+  severity: "INFO" | "WARNING" | "ERROR"
+  scopeKind: "LANE" | "SESSION"
+  role: string
+  laneID?: string
+  runID?: string
+  attemptID?: string
+  incidentID?: string
+  summary: string
+  reasonCode?: string
+  nextAction?: string
+  dismissible: boolean
+  presentationState: "VISIBLE" | "DISMISSED"
+  createdAt: number
+  actionRequired: boolean
+  retryLayer?: "PROVIDER" | "DELIVERY" | "RUN" | "PROTOCOL"
+  retryAttempt?: number
+  retryLimit?: number
+  retryNotBefore?: number
+  failureKind?: string
+  httpStatus?: number
+  transportKind?: string
+  transportCode?: string
+  providerID?: string
+  modelID?: string
 }
 
 export type MotryxControlSnapshot = {
@@ -204,13 +292,17 @@ export type MotryxControlSnapshot = {
   artifacts: MotryxArtifactProjection[]
   resourceBlocks: Record<string, unknown>[]
   incidents: MotryxRuntimeIncidentProjection[]
+  attentionItems: MotryxAttentionItemProjection[]
   attention: {
     visibleOpenIncidentCount: number
     failedLaneCount: number
+    activeAttentionCount: number
+    userActionRequiredCount: number
+    retryingCount: number
   }
   functionSlots: MotryxFunctionSlotProjection[]
-  inboxItems: MotryxInboxProjection[]
-  deliveryFences: MotryxDeliveryFenceProjection[]
+  runs: MotryxRunProjection[]
+  attempts: MotryxAttemptProjection[]
   diagnostics: Record<string, unknown>[]
 }
 
@@ -338,7 +430,7 @@ async function parseSessionListResponse(response: Response, config: MotryxContro
 
 export function parseMotryxSessionList(value: unknown, expected: MotryxControlConfig): MotryxSessionList {
   const root = requiredRecord(value, "sessions")
-  if (root.schemaVersion !== MOTRYX_CONTROL_SCHEMA_VERSION) fail("sessions.schemaVersion must be 3")
+  if (root.schemaVersion !== MOTRYX_CONTROL_SCHEMA_VERSION) fail("sessions.schemaVersion must be 5")
   const projectID = exactProject(root.projectID, expected.projectID, "sessions.projectID")
   if (root.status !== "ROUTABLE" && root.status !== "SWITCHING" && root.status !== "UNAVAILABLE") {
     fail("sessions.status is invalid")
@@ -469,7 +561,7 @@ export async function dismissMotryxIncident(
     throw new MotryxControlHttpError(response.status, `Motryx incident dismissal returned HTTP ${response.status}${detail}`)
   }
   const result = requiredRecord(value, "incident dismissal")
-  if (result.schemaVersion !== MOTRYX_CONTROL_SCHEMA_VERSION) fail("incident dismissal schemaVersion must be 3")
+  if (result.schemaVersion !== MOTRYX_CONTROL_SCHEMA_VERSION) fail("incident dismissal schemaVersion must be 5")
   if (result.incidentID !== input.incidentID) fail("incident dismissal returned a different incident")
   if (result.presentationState !== "DISMISSED") fail("incident dismissal did not persist DISMISSED")
   return {
@@ -482,7 +574,7 @@ export async function dismissMotryxIncident(
 
 export function parseMotryxControlSnapshot(value: unknown, expected: MotryxControlConfig): MotryxControlSnapshot {
   const root = requiredRecord(value, "snapshot")
-  if (root.schemaVersion !== MOTRYX_CONTROL_SCHEMA_VERSION) fail("snapshot.schemaVersion must be 3")
+  if (root.schemaVersion !== MOTRYX_CONTROL_SCHEMA_VERSION) fail("snapshot.schemaVersion must be 5")
   const projectID = exactProject(root.projectID, expected.projectID, "snapshot.projectID")
   const orchestratorSessionID = exactString(
     root.orchestratorSessionID,
@@ -517,10 +609,11 @@ export function parseMotryxControlSnapshot(value: unknown, expected: MotryxContr
       requiredRecord(item, label),
     ),
     incidents: requiredArray(root.incidents, "snapshot.incidents", parseRuntimeIncident),
+    attentionItems: requiredArray(root.attentionItems, "snapshot.attentionItems", parseAttentionItem),
     attention: parseAttention(root.attention),
     functionSlots: requiredArray(root.functionSlots, "snapshot.functionSlots", parseFunctionSlot),
-    inboxItems: requiredArray(root.inboxItems, "snapshot.inboxItems", parseInboxItem),
-    deliveryFences: requiredArray(root.deliveryFences, "snapshot.deliveryFences", parseDeliveryFence),
+    runs: requiredArray(root.runs, "snapshot.runs", parseRun),
+    attempts: requiredArray(root.attempts, "snapshot.attempts", parseAttempt),
     diagnostics: requiredArray(root.diagnostics, "snapshot.diagnostics", (item, label) => requiredRecord(item, label)),
   }
 }
@@ -603,8 +696,6 @@ function parseLane(value: unknown, label: string): MotryxLaneProjection {
     pendingCheckSummary: optionalString(item.pendingCheckSummary, `${label}.pendingCheckSummary`),
     reopenCount: nonNegativeInteger(item.reopenCount, `${label}.reopenCount`),
     repairCycle: nonNegativeInteger(item.repairCycle, `${label}.repairCycle`),
-    readyAt: optionalFiniteNumber(item.readyAt, `${label}.readyAt`),
-    readyKind: optionalString(item.readyKind, `${label}.readyKind`),
     dependsOnLaneIDs: stringArray(item.dependsOnLaneIDs, `${label}.dependsOnLaneIDs`),
     coordinatorSlotID: optionalString(item.coordinatorSlotID, `${label}.coordinatorSlotID`),
     checkerSlotID: optionalString(item.checkerSlotID, `${label}.checkerSlotID`),
@@ -615,6 +706,9 @@ function parseLane(value: unknown, label: string): MotryxLaneProjection {
     checkerRuntimeReadiness: requiredString(item.checkerRuntimeReadiness, `${label}.checkerRuntimeReadiness`),
     coordinatorRuntime: parseRuntimeTarget(item.coordinatorRuntime, `${label}.coordinatorRuntime`),
     checkerRuntime: parseRuntimeTarget(item.checkerRuntime, `${label}.checkerRuntime`),
+    runPhase: parseRunPhase(item.runPhase, `${label}.runPhase`),
+    requestMessageID: optionalString(item.requestMessageID, `${label}.requestMessageID`),
+    requestDeadlineAt: optionalFiniteNumber(item.requestDeadlineAt, `${label}.requestDeadlineAt`),
     failure: item.failure === undefined ? undefined : parseLaneFailure(item.failure, `${label}.failure`),
   })
 }
@@ -663,7 +757,9 @@ function parseRuntimeIncident(value: unknown, label: string): MotryxRuntimeIncid
     retryable: optionalBoolean(item.retryable, `${label}.retryable`),
     retryExhausted: optionalBoolean(item.retryExhausted, `${label}.retryExhausted`),
     attemptCount: optionalFiniteNumber(item.attemptCount, `${label}.attemptCount`),
-    recoveryID: optionalString(item.recoveryID, `${label}.recoveryID`),
+    runID: optionalString(item.runID, `${label}.runID`),
+    attemptID: optionalString(item.attemptID, `${label}.attemptID`),
+    proofRef: optionalString(item.proofRef, `${label}.proofRef`),
     occurrenceCount: positiveInteger(item.occurrenceCount, `${label}.occurrenceCount`),
     openedAt: finiteNumber(item.openedAt, `${label}.openedAt`),
     lastSeenAt: finiteNumber(item.lastSeenAt, `${label}.lastSeenAt`),
@@ -679,7 +775,71 @@ function parseAttention(value: unknown): MotryxControlSnapshot["attention"] {
       "snapshot.attention.visibleOpenIncidentCount",
     ),
     failedLaneCount: nonNegativeInteger(item.failedLaneCount, "snapshot.attention.failedLaneCount"),
+    activeAttentionCount: nonNegativeInteger(item.activeAttentionCount, "snapshot.attention.activeAttentionCount"),
+    userActionRequiredCount: nonNegativeInteger(
+      item.userActionRequiredCount,
+      "snapshot.attention.userActionRequiredCount",
+    ),
+    retryingCount: nonNegativeInteger(item.retryingCount, "snapshot.attention.retryingCount"),
   }
+}
+
+const ATTENTION_KINDS = new Set<MotryxAttentionKind>([
+  "PROVIDER_RETRY",
+  "RUN_RETRY_SCHEDULED",
+  "RUN_RETRY_RUNNING",
+  "PROTOCOL_CORRECTION",
+  "DELIVERY_RETRY",
+  "OUTCOME_UNKNOWN",
+  "WAITING_ATTENTION",
+  "WAITING_RUNTIME_REPAIR",
+  "WAITING_RECONCILIATION",
+  "USER_PAUSED",
+  "RUNTIME_RESTART",
+  "FINAL_FAILURE",
+])
+
+function parseAttentionItem(value: unknown, label: string): MotryxAttentionItemProjection {
+  const item = requiredRecord(value, label)
+  const kind = exactEnum(item.kind, ATTENTION_KINDS, `${label}.kind`)
+  const severity = exactEnum(item.severity, new Set(["INFO", "WARNING", "ERROR"] as const), `${label}.severity`)
+  const scopeKind = exactEnum(item.scopeKind, new Set(["LANE", "SESSION"] as const), `${label}.scopeKind`)
+  const presentationState = exactEnum(
+    item.presentationState,
+    new Set(["VISIBLE", "DISMISSED"] as const),
+    `${label}.presentationState`,
+  )
+  const retryLayer = item.retryLayer === undefined
+    ? undefined
+    : exactEnum(item.retryLayer, new Set(["PROVIDER", "DELIVERY", "RUN", "PROTOCOL"] as const), `${label}.retryLayer`)
+  return compact({
+    attentionID: requiredString(item.attentionID, `${label}.attentionID`),
+    kind,
+    severity,
+    scopeKind,
+    role: requiredString(item.role, `${label}.role`),
+    laneID: optionalString(item.laneID, `${label}.laneID`),
+    runID: optionalString(item.runID, `${label}.runID`),
+    attemptID: optionalString(item.attemptID, `${label}.attemptID`),
+    incidentID: optionalString(item.incidentID, `${label}.incidentID`),
+    summary: requiredString(item.summary, `${label}.summary`),
+    reasonCode: optionalString(item.reasonCode, `${label}.reasonCode`),
+    nextAction: optionalString(item.nextAction, `${label}.nextAction`),
+    dismissible: requiredBoolean(item.dismissible, `${label}.dismissible`),
+    presentationState,
+    createdAt: finiteNumber(item.createdAt, `${label}.createdAt`),
+    actionRequired: requiredBoolean(item.actionRequired, `${label}.actionRequired`),
+    retryLayer,
+    retryAttempt: optionalNonNegativeInteger(item.retryAttempt, `${label}.retryAttempt`),
+    retryLimit: optionalNonNegativeInteger(item.retryLimit, `${label}.retryLimit`),
+    retryNotBefore: optionalFiniteNumber(item.retryNotBefore, `${label}.retryNotBefore`),
+    failureKind: optionalString(item.failureKind, `${label}.failureKind`),
+    httpStatus: optionalFiniteNumber(item.httpStatus, `${label}.httpStatus`),
+    transportKind: optionalString(item.transportKind, `${label}.transportKind`),
+    transportCode: optionalString(item.transportCode, `${label}.transportCode`),
+    providerID: optionalString(item.providerID, `${label}.providerID`),
+    modelID: optionalString(item.modelID, `${label}.modelID`),
+  }) as MotryxAttentionItemProjection
 }
 
 function parseRuntimeTarget(value: unknown, label: string): MotryxRuntimeTargetProjection | undefined {
@@ -732,29 +892,111 @@ function parseFunctionSlot(value: unknown, label: string): MotryxFunctionSlotPro
   })
 }
 
-function parseInboxItem(value: unknown, label: string): MotryxInboxProjection {
+function parseRun(value: unknown, label: string): MotryxRunProjection {
   const item = requiredRecord(value, label)
   return compact({
-    inboxItemID: requiredString(item.inboxItemID, `${label}.inboxItemID`),
-    targetKind: requiredString(item.targetKind, `${label}.targetKind`),
-    targetID: requiredString(item.targetID, `${label}.targetID`),
-    envelopeClass: requiredString(item.envelopeClass, `${label}.envelopeClass`, true),
-    sourceType: requiredString(item.sourceType, `${label}.sourceType`, true),
-    status: requiredString(item.status, `${label}.status`),
+    runID: requiredString(item.runID, `${label}.runID`),
+    scopeKind: exactEnum(item.scopeKind, new Set(["LANE_PRIMARY", "SLOT_INPUT", "SESSION_INPUT"] as const), `${label}.scopeKind`),
+    runKind: exactEnum(item.runKind, new Set([
+      "COORDINATOR", "CHECKER", "LANE_DECISION", "ORCHESTRATOR_TURN", "ANALYST_ADVISORY", "A2A_RESPONDER",
+      "NOTIFICATION",
+    ] as const), `${label}.runKind`),
+    status: exactEnum(item.status, new Set(["OPEN", "WAITING", "SUCCEEDED", "FAILED", "CANCELED"] as const), `${label}.status`),
     laneID: optionalString(item.laneID, `${label}.laneID`),
+    relatedLaneID: optionalString(item.relatedLaneID, `${label}.relatedLaneID`),
+    logicalOwnerKind: exactEnum(
+      item.logicalOwnerKind,
+      new Set(["FUNCTION_SLOT", "CONTROL_ROLE"] as const),
+      `${label}.logicalOwnerKind`,
+    ),
+    logicalOwnerID: requiredString(item.logicalOwnerID, `${label}.logicalOwnerID`),
+    waitingKind: optionalEnum(item.waitingKind, new Set([
+      "a2a_request", "attention", "runtime_repair", "reconciliation", "user_paused", "runtime_restart",
+    ] as const), `${label}.waitingKind`),
+    waitingRef: optionalString(item.waitingRef, `${label}.waitingRef`),
+    sourceKind: requiredString(item.sourceKind, `${label}.sourceKind`),
+    sourceID: requiredString(item.sourceID, `${label}.sourceID`),
+    revision: nonNegativeInteger(item.revision, `${label}.revision`),
+    errorRetryCount: nonNegativeInteger(item.errorRetryCount, `${label}.errorRetryCount`),
+    maxErrorRetries: nonNegativeInteger(item.maxErrorRetries, `${label}.maxErrorRetries`),
+    protocolCorrectionCount: nonNegativeInteger(
+      item.protocolCorrectionCount,
+      `${label}.protocolCorrectionCount`,
+    ),
+    maxProtocolCorrections: nonNegativeInteger(item.maxProtocolCorrections, `${label}.maxProtocolCorrections`),
+    retryNotBefore: optionalFiniteNumber(item.retryNotBefore, `${label}.retryNotBefore`),
+    retryDisposition: optionalEnum(
+      item.retryDisposition,
+      new Set(["ALLOWED_AFTER_REPAIR", "RECONCILIATION_REQUIRED", "FORBIDDEN"] as const),
+      `${label}.retryDisposition`,
+    ),
+    resultRef: optionalString(item.resultRef, `${label}.resultRef`),
+    failureRef: optionalString(item.failureRef, `${label}.failureRef`),
+    createdAt: finiteNumber(item.createdAt, `${label}.createdAt`),
+    terminalAt: optionalFiniteNumber(item.terminalAt, `${label}.terminalAt`),
+    currentAttemptID: optionalString(item.currentAttemptID, `${label}.currentAttemptID`),
   })
 }
 
-function parseDeliveryFence(value: unknown, label: string): MotryxDeliveryFenceProjection {
+function parseAttempt(value: unknown, label: string): MotryxAttemptProjection {
   const item = requiredRecord(value, label)
   return compact({
-    fenceID: requiredString(item.fenceID, `${label}.fenceID`),
+    attemptID: requiredString(item.attemptID, `${label}.attemptID`),
+    runID: requiredString(item.runID, `${label}.runID`),
+    attemptNo: positiveInteger(item.attemptNo, `${label}.attemptNo`),
+    reason: exactEnum(
+      item.reason,
+      new Set(["INITIAL", "ERROR_RETRY", "PROTOCOL_CORRECTION", "WAIT_RESUME"] as const),
+      `${label}.reason`,
+    ),
     instanceID: requiredString(item.instanceID, `${label}.instanceID`),
-    inboxItemID: requiredString(item.inboxItemID, `${label}.inboxItemID`),
-    state: requiredString(item.state, `${label}.state`),
-    fenceGeneration: nonNegativeInteger(item.fenceGeneration, `${label}.fenceGeneration`),
-    expectedSessionID: optionalString(item.expectedSessionID, `${label}.expectedSessionID`),
+    sessionID: requiredString(item.sessionID, `${label}.sessionID`),
+    stableInputID: requiredString(item.stableInputID, `${label}.stableInputID`),
+    state: exactEnum(
+      item.state,
+      new Set(["PENDING", "RUNNING", "OUTCOME_UNKNOWN", "TERMINAL"] as const),
+      `${label}.state`,
+    ),
+    submitCount: nonNegativeInteger(item.submitCount, `${label}.submitCount`),
+    createdAt: finiteNumber(item.createdAt, `${label}.createdAt`),
+    dispatchNotBefore: optionalFiniteNumber(item.dispatchNotBefore, `${label}.dispatchNotBefore`),
+    lastSubmitError: optionalString(item.lastSubmitError, `${label}.lastSubmitError`),
+    turnID: optionalString(item.turnID, `${label}.turnID`),
+    startedAt: optionalFiniteNumber(item.startedAt, `${label}.startedAt`),
+    terminalKind: optionalEnum(item.terminalKind, new Set([
+      "NOT_STARTED", "COMPLETED", "FAILED", "INTERRUPTED", "PROCESS_LOST", "CANCELED_BEFORE_START",
+    ] as const), `${label}.terminalKind`),
+    terminalProofRef: optionalString(item.terminalProofRef, `${label}.terminalProofRef`),
+    terminalAt: optionalFiniteNumber(item.terminalAt, `${label}.terminalAt`),
+    inputVisibility: optionalEnum(item.inputVisibility, new Set([
+      "NOT_ADMITTED", "ADMITTED_UNPROMOTED", "PROMOTED_TRANSCRIPT_VISIBLE",
+    ] as const), `${label}.inputVisibility`),
+    failureKind: optionalString(item.failureKind, `${label}.failureKind`),
+    failureSafeSummary: optionalString(item.failureSafeSummary, `${label}.failureSafeSummary`),
+    providerID: optionalString(item.providerID, `${label}.providerID`),
+    modelID: optionalString(item.modelID, `${label}.modelID`),
+    httpStatus: optionalFiniteNumber(item.httpStatus, `${label}.httpStatus`),
+    transportKind: optionalString(item.transportKind, `${label}.transportKind`),
+    transportCode: optionalString(item.transportCode, `${label}.transportCode`),
+    hostRetryable: optionalBoolean(item.hostRetryable, `${label}.hostRetryable`),
+    hostRetryExhausted: optionalBoolean(item.hostRetryExhausted, `${label}.hostRetryExhausted`),
+    hostAttemptCount: optionalNonNegativeInteger(item.hostAttemptCount, `${label}.hostAttemptCount`),
+    cancelOrigin: optionalEnum(
+      item.cancelOrigin,
+      new Set(["USER", "FRAMEWORK", "SHUTDOWN", "STALE", "BUSINESS"] as const),
+      `${label}.cancelOrigin`,
+    ),
+    cancelReason: optionalString(item.cancelReason, `${label}.cancelReason`),
+    cancelRequestedAt: optionalFiniteNumber(item.cancelRequestedAt, `${label}.cancelRequestedAt`),
   })
+}
+
+function parseRunPhase(value: unknown, label: string): MotryxLaneProjection["runPhase"] {
+  if (value === undefined) return
+  if (value !== "EXECUTING" && value !== "WAITING_RESPONSE" && value !== "RESUME_QUEUED") {
+    fail(`${label} is invalid`)
+  }
+  return value
 }
 
 function requiredRecord(value: unknown, label: string): Record<string, unknown> {
@@ -810,9 +1052,33 @@ function optionalBoolean(value: unknown, label: string): boolean | undefined {
   return value
 }
 
+function requiredBoolean(value: unknown, label: string): boolean {
+  if (typeof value !== "boolean") fail(`${label} must be a boolean`)
+  return value
+}
+
 function nonNegativeInteger(value: unknown, label: string): number {
   if (!Number.isInteger(value) || (value as number) < 0) fail(`${label} must be a non-negative integer`)
   return value as number
+}
+
+function optionalNonNegativeInteger(value: unknown, label: string): number | undefined {
+  if (value === undefined) return
+  return nonNegativeInteger(value, label)
+}
+
+function exactEnum<const T extends string>(value: unknown, allowed: ReadonlySet<T>, label: string): T {
+  if (typeof value !== "string" || !allowed.has(value as T)) fail(`${label} is invalid`)
+  return value as T
+}
+
+function optionalEnum<const T extends string>(
+  value: unknown,
+  allowed: ReadonlySet<T>,
+  label: string,
+): T | undefined {
+  if (value === undefined) return
+  return exactEnum(value, allowed, label)
 }
 
 function positiveInteger(value: unknown, label: string): number {

@@ -73,7 +73,7 @@ describe("Motryx product TUI", () => {
 
   test("uses exact durable lane labels and marks future states as unknown", () => {
     expect(motryxLaneStatusLabel("AWAITING_CHECK")).toBe("AWAIT CHECK")
-    expect(motryxLaneStatusLabel("reopened")).toBe("REOPENED")
+    expect(motryxLaneStatusLabel("reopened")).toBe("UNKNOWN · REOPENED")
     expect(motryxLaneStatusLabel("future_state")).toBe("UNKNOWN · FUTURE STATE")
   })
 })
@@ -81,7 +81,7 @@ describe("Motryx product TUI", () => {
 function debugSnapshot(): MotryxControlSnapshot {
   const now = "2026-07-19T00:00:00.000Z"
   return {
-    schemaVersion: 3,
+    schemaVersion: 5,
     projectID: "/tmp/project",
     orchestratorSessionID: "ses_orch",
     projectionRevision: "server:revision",
@@ -139,9 +139,10 @@ function debugSnapshot(): MotryxControlSnapshot {
     resourceBlocks: [],
     incidents: [],
     functionSlots: [],
-    inboxItems: [],
-    deliveryFences: [],
-    attention: { visibleOpenIncidentCount: 0, failedLaneCount: 0 },
+    runs: [],
+    attempts: [],
+    attentionItems: [],
+    attention: { visibleOpenIncidentCount: 0, failedLaneCount: 0, activeAttentionCount: 0, userActionRequiredCount: 0, retryingCount: 0 },
     diagnostics: [],
   }
 }

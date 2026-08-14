@@ -4,7 +4,7 @@ import type { BuiltinTuiPlugin } from "../builtins"
 import { DialogProvider } from "../../component/dialog-provider"
 import { DialogModel, type DialogModelSelection } from "../../component/dialog-model"
 import { MotryxRoute, motryxDebugViewFromEnv, motryxRouteConfig, type MotryxRouteActions } from "./route"
-import { createMotryxPromptAdmissionHandler } from "./prompt-recovery"
+import { createMotryxPromptAdmissionHandler } from "./prompt-admission-reconcile"
 import {
   motryxModelSetCommandFromEnv,
   setMotryxModelTier,
@@ -27,12 +27,12 @@ const tui: TuiPlugin = async (api) => {
         onWaiting() {
           api.ui.toast({
             variant: "info",
-            title: "Motryx is recovering",
-            message: "Your prompt is preserved and will be retried when the exact route is available.",
+            title: "Motryx route is reconnecting",
+            message: "Your prompt is preserved and submission will resume when the exact route is available.",
           })
         },
-        onRecovered() {
-          api.ui.toast({ variant: "success", message: "Motryx recovered and the prompt was admitted." })
+        onReconciled() {
+          api.ui.toast({ variant: "success", message: "Motryx route reconciled and the prompt was admitted." })
         },
       }),
     )

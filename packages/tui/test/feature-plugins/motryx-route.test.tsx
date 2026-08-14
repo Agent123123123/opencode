@@ -28,7 +28,7 @@ test("Motryx plugin route composes the standard session surface with the Flow/In
   } as unknown as TuiPluginApi
   const now = "2026-07-19T00:00:00.000Z"
   const snapshot: MotryxControlSnapshot = {
-    schemaVersion: 3,
+    schemaVersion: 5,
     projectID,
     orchestratorSessionID: config.orchestratorSessionID,
     projectionRevision: "server-generation:ic:route",
@@ -70,9 +70,10 @@ test("Motryx plugin route composes the standard session surface with the Flow/In
     resourceBlocks: [],
     incidents: [],
     functionSlots: [],
-    inboxItems: [],
-    deliveryFences: [],
-    attention: { visibleOpenIncidentCount: 0, failedLaneCount: 0 },
+    runs: [],
+    attempts: [],
+    attentionItems: [],
+    attention: { visibleOpenIncidentCount: 0, failedLaneCount: 0, activeAttentionCount: 0, userActionRequiredCount: 0, retryingCount: 0 },
     diagnostics: [],
   }
   let currentSnapshot: MotryxControlSnapshot = snapshot
@@ -288,8 +289,32 @@ test("Motryx runtime error card can be dismissed without resolving the incident"
   }
   let snapshot = {
     ...debugRouteSnapshot(projectID, sessionID),
+    workflow: undefined,
+    lanes: [],
     incidents: [incident],
-    attention: { visibleOpenIncidentCount: 1, failedLaneCount: 0 },
+    attentionItems: [{
+      attentionID: `incident:${incident.incidentID}`,
+      kind: "FINAL_FAILURE" as const,
+      severity: "ERROR" as const,
+      scopeKind: "SESSION" as const,
+      role: "orchestrator",
+      runID: "run_orchestrator_failure",
+      attemptID: "attempt_orchestrator_failure",
+      incidentID: incident.incidentID,
+      summary: incident.safeSummary,
+      reasonCode: "retry_exhausted_transport",
+      nextAction: "repair_and_retry",
+      actionRequired: true,
+      dismissible: true,
+      presentationState: "VISIBLE" as const,
+      createdAt: incident.openedAt,
+      failureKind: "transport",
+      transportKind: incident.transportKind,
+      transportCode: incident.transportCode,
+      providerID: incident.providerID,
+      modelID: incident.modelID,
+    }],
+    attention: { visibleOpenIncidentCount: 1, failedLaneCount: 0, activeAttentionCount: 1, userActionRequiredCount: 1, retryingCount: 0 },
   } as MotryxControlSnapshot
   let dismissals = 0
   const events = new ReadableStream<Uint8Array>()
@@ -306,10 +331,11 @@ test("Motryx runtime error card can be dismissed without resolving the incident"
             snapshot = {
               ...snapshot,
               incidents: [{ ...incident, presentationState: "DISMISSED" }],
-              attention: { visibleOpenIncidentCount: 0, failedLaneCount: 0 },
+              attentionItems: snapshot.attentionItems.map((item) => ({ ...item, presentationState: "DISMISSED" as const })),
+              attention: { visibleOpenIncidentCount: 0, failedLaneCount: 0, activeAttentionCount: 0, userActionRequiredCount: 0, retryingCount: 0 },
             }
             return Response.json({
-              schemaVersion: 3,
+              schemaVersion: 5,
               incidentID: incident.incidentID,
               status: "OPEN",
               presentationState: "DISMISSED",
@@ -330,11 +356,251 @@ test("Motryx runtime error card can be dismissed without resolving the incident"
     expect(frame).toContain("transport UND_ERR_HEADERS_TIMEOUT")
     expect(frame).toContain("kind timeout")
     expect(frame).toContain("zai/glm-5.2")
+    expect(frame).toContain("No workflow yet.")
+    expect(frame).toContain("! 1")
+    expect(frame).not.toContain("Final failure · Orchestrator")
     await clickFrameText(app, frame, "[×]")
     frame = await renderUntil(app, (value) => !value.includes(incident.safeSummary))
     expect(frame).not.toContain("Runtime error · Orchestrator")
     expect(dismissals).toBe(1)
     expect(snapshot.incidents[0]).toMatchObject({ status: "OPEN", presentationState: "DISMISSED" })
+  } finally {
+    lifecycle.abort()
+    app.renderer.destroy()
+  }
+})
+
+test("Motryx v5 surfaces retry, unknown outcome, and reconciliation attention without a workflow", async () => {
+  const projectID = path.resolve("/tmp/motryx-route-attention-project")
+  const sessionID = "ses_route_attention"
+  const config: MotryxControlConfig = {
+    apiURL: "http://127.0.0.1:28999",
+    token: "control-token",
+    projectID,
+    orchestratorSessionID: sessionID,
+  }
+  const lifecycle = new AbortController()
+  const base = createTuiPluginApi()
+  const api = {
+    ...base,
+    lifecycle: { signal: lifecycle.signal, onDispose: () => () => {} },
+  } as unknown as TuiPluginApi
+  const attentionID = "attention_runtime_lifecycle"
+  const retryAt = Date.now() + 60_000
+  const retryAttention = {
+    attentionID,
+    kind: "RUN_RETRY_SCHEDULED" as const,
+    severity: "WARNING" as const,
+    scopeKind: "SESSION" as const,
+    role: "orchestrator",
+    runID: "run_session_retry",
+    attemptID: "attempt_session_retry_2",
+    summary: "The same Orchestrator task will continue after a retryable transport failure.",
+    reasonCode: "transport",
+    nextAction: "wait_for_retry",
+    actionRequired: false,
+    dismissible: true,
+    presentationState: "VISIBLE" as const,
+    createdAt: Date.now(),
+    retryLayer: "RUN" as const,
+    retryAttempt: 1,
+    retryLimit: 2,
+    retryNotBefore: retryAt,
+    failureKind: "transport",
+    transportKind: "network",
+    transportCode: "ECONNRESET",
+    providerID: "zai",
+    modelID: "glm-5.2",
+  }
+  let currentSnapshot = {
+    ...debugRouteSnapshot(projectID, sessionID),
+    projectionRevision: "server:attention-retry",
+    workflow: undefined,
+    lanes: [],
+    agents: [],
+    attentionItems: [retryAttention],
+    attention: {
+      visibleOpenIncidentCount: 0,
+      failedLaneCount: 0,
+      activeAttentionCount: 1,
+      userActionRequiredCount: 0,
+      retryingCount: 1,
+    },
+  } as MotryxControlSnapshot
+  let actions: MotryxRouteActions | undefined
+  const events = new ReadableStream<Uint8Array>()
+  const app = await testRender(
+    () => (
+      <MotryxRoute
+        api={api}
+        config={config}
+        fetcher={async (input) => {
+          const url = new URL(input instanceof Request ? input.url : input.toString())
+          if (url.pathname === "/ic/workflow") return Response.json(currentSnapshot)
+          return new Response(events, { headers: { "content-type": "text/event-stream" } })
+        }}
+        sessionSurface={() => <text>STANDARD OPENCODE SESSION</text>}
+        onActionsAvailable={(next) => (actions = next)}
+      />
+    ),
+    { width: 120, height: 32 },
+  )
+
+  try {
+    let frame = await renderUntil(app, (value) => value.includes("same Orchestrator task"))
+    expect(frame).toContain("Run retry scheduled · Orchestrator")
+    expect(frame).toContain("run retry 1/2")
+    expect(frame).toContain("next wait_for_retry")
+    expect(frame).toContain("No workflow yet.")
+
+    await clickFrameText(app, frame, "[×]")
+    frame = await renderUntil(app, (value) => !value.includes("same Orchestrator task"))
+    expect(frame).not.toContain("same Orchestrator task")
+    await actions!.refresh()
+    await app.renderOnce()
+    expect(app.captureCharFrame()).not.toContain("same Orchestrator task")
+
+    actions!.showIncidents()
+    frame = await renderUntil(app, (value) => value.includes("locally"))
+    expect(frame).toContain("same Orchestrator task")
+    expect(frame).toContain("hidden")
+    expect(frame).toContain("locally")
+
+    currentSnapshot = {
+      ...currentSnapshot,
+      projectionRevision: "server:attention-cleared",
+      attentionItems: [],
+      attention: {
+        visibleOpenIncidentCount: 0,
+        failedLaneCount: 0,
+        activeAttentionCount: 0,
+        userActionRequiredCount: 0,
+        retryingCount: 0,
+      },
+    }
+    await actions!.refresh()
+    frame = await renderUntil(app, (value) => value.includes("No active runtime attention."))
+    expect(frame).not.toContain("locally")
+
+    const unknownAttention = {
+      ...retryAttention,
+      kind: "OUTCOME_UNKNOWN" as const,
+      severity: "ERROR" as const,
+      summary: "The previous input may have been admitted; its outcome must be reconciled before retry.",
+      reasonCode: "delivery_ambiguous_after_5_submissions",
+      nextAction: "reconcile_outcome",
+      actionRequired: true,
+      retryLayer: undefined,
+      retryAttempt: undefined,
+      retryLimit: undefined,
+      retryNotBefore: undefined,
+      httpStatus: 503,
+      transportKind: "http-sse",
+      transportCode: "UND_ERR_HEADERS_TIMEOUT",
+    }
+    currentSnapshot = {
+      ...currentSnapshot,
+      projectionRevision: "server:attention-unknown",
+      attentionItems: [unknownAttention],
+      attention: {
+        visibleOpenIncidentCount: 0,
+        failedLaneCount: 0,
+        activeAttentionCount: 1,
+        userActionRequiredCount: 1,
+        retryingCount: 0,
+      },
+    }
+    actions!.showFlow()
+    await actions!.refresh()
+    frame = await renderUntil(app, (value) => value.includes("previous input may have been admitted"))
+    expect(frame).toContain("Outcome unknown · Orchestrator")
+    expect(frame).toContain("HTTP 503")
+    expect(frame).toContain("transport UND_ERR_HEADERS_TIMEOUT")
+    expect(frame).toContain("next reconcile_outcome")
+
+    const laneSnapshot = debugRouteSnapshot(projectID, sessionID)
+    const waitingAttention = {
+      ...unknownAttention,
+      attentionID: "attention_waiting_reconciliation",
+      kind: "WAITING_RECONCILIATION" as const,
+      scopeKind: "LANE" as const,
+      role: "coordinator",
+      laneID: "lane_debug",
+      runID: "run_lane_reconciliation",
+      attemptID: "attempt_lane_reconciliation",
+      summary: "Lane decision is waiting for authoritative effect reconciliation.",
+      reasonCode: "effect_unknown",
+    }
+    currentSnapshot = {
+      ...laneSnapshot,
+      projectionRevision: "server:attention-reconciliation",
+      lanes: laneSnapshot.lanes.map((lane) => ({ ...lane, status: "PENDING" })),
+      runs: [{
+        runID: "run_lane_reconciliation",
+        scopeKind: "LANE_PRIMARY",
+        runKind: "LANE_DECISION",
+        status: "WAITING",
+        laneID: "lane_debug",
+        logicalOwnerKind: "CONTROL_ROLE",
+        logicalOwnerID: "owner_orchestrator",
+        waitingKind: "reconciliation",
+        waitingRef: "effect_unknown",
+        sourceKind: "lane_decision",
+        sourceID: "lane_debug:decision",
+        revision: 2,
+        errorRetryCount: 1,
+        maxErrorRetries: 2,
+        protocolCorrectionCount: 0,
+        maxProtocolCorrections: 1,
+        retryDisposition: "RECONCILIATION_REQUIRED",
+        createdAt: Date.now() - 5_000,
+      }],
+      attempts: [{
+        attemptID: "attempt_lane_reconciliation",
+        runID: "run_lane_reconciliation",
+        attemptNo: 2,
+        reason: "ERROR_RETRY",
+        instanceID: "inst_coordinator",
+        sessionID: "ses_coordinator",
+        stableInputID: "msg_lane_reconciliation",
+        state: "TERMINAL",
+        submitCount: 1,
+        terminalKind: "FAILED",
+        failureKind: "provider_internal",
+        failureSafeSummary: "Provider returned an ambiguous response after the tool effect.",
+        providerID: "zai",
+        modelID: "glm-5.2",
+        httpStatus: 503,
+        transportKind: "http-sse",
+        transportCode: "UND_ERR_HEADERS_TIMEOUT",
+        hostRetryable: true,
+        hostRetryExhausted: true,
+        hostAttemptCount: 3,
+        createdAt: Date.now() - 4_000,
+        terminalAt: Date.now() - 1_000,
+      }],
+      attentionItems: [waitingAttention],
+      attention: {
+        visibleOpenIncidentCount: 0,
+        failedLaneCount: 0,
+        activeAttentionCount: 1,
+        userActionRequiredCount: 1,
+        retryingCount: 0,
+      },
+    } as MotryxControlSnapshot
+    await actions!.refresh()
+    app.resize(160, 60)
+    actions!.showInspect()
+    frame = await renderUntil(app, (value) => value.includes("Waiting for reconciliation"))
+    expect(frame).toContain("next action")
+    expect(frame).toContain("reconcile_outcome")
+    expect(frame).toContain("reconciliation (effect_unknown)")
+    expect(frame).toContain("effect_unknown")
+    expect(frame).toContain("retry 1/2")
+    expect(frame).toContain("Attempt #2 ERROR_RETRY:TERMINAL")
+    expect(frame).toContain("provider attempt")
+    expect(frame).toContain("HTTP 503")
+    expect(frame).not.toContain("repair runtime/provider, then retry_failed_lane")
   } finally {
     lifecycle.abort()
     app.renderer.destroy()
@@ -426,7 +692,7 @@ test("/sessions switches the exact Motryx Orchestrator and rebinds conversation 
   } as unknown as TuiPluginApi
   const now = "2026-07-19T00:00:00.000Z"
   const routeSnapshot = (sessionID: string, bindingGeneration: number): MotryxControlSnapshot => ({
-    schemaVersion: 3,
+    schemaVersion: 5,
     projectID,
     orchestratorSessionID: sessionID,
     projectionRevision: `server-generation:ic:${sessionID}`,
@@ -457,13 +723,14 @@ test("/sessions switches the exact Motryx Orchestrator and rebinds conversation 
     resourceBlocks: [],
     incidents: [],
     functionSlots: [],
-    inboxItems: [],
-    deliveryFences: [],
-    attention: { visibleOpenIncidentCount: 0, failedLaneCount: 0 },
+    runs: [],
+    attempts: [],
+    attentionItems: [],
+    attention: { visibleOpenIncidentCount: 0, failedLaneCount: 0, activeAttentionCount: 0, userActionRequiredCount: 0, retryingCount: 0 },
     diagnostics: [],
   })
   const sessionList = (currentID: string, bindingGeneration: number) => ({
-    schemaVersion: 3,
+    schemaVersion: 5,
     projectID,
     status: "ROUTABLE",
     current: {
@@ -895,7 +1162,7 @@ async function clickFrameText(app: Awaited<ReturnType<typeof testRender>>, frame
 function debugRouteSnapshot(projectID: string, orchestratorSessionID: string, generation = 7, server = "server") {
   const now = "2026-07-19T00:00:00.000Z"
   return {
-    schemaVersion: 3,
+    schemaVersion: 5,
     projectID,
     orchestratorSessionID,
     projectionRevision: `${server}:revision`,
@@ -953,9 +1220,10 @@ function debugRouteSnapshot(projectID: string, orchestratorSessionID: string, ge
     resourceBlocks: [],
     incidents: [],
     functionSlots: [],
-    inboxItems: [],
-    deliveryFences: [],
-    attention: { visibleOpenIncidentCount: 0, failedLaneCount: 0 },
+    runs: [],
+    attempts: [],
+    attentionItems: [],
+    attention: { visibleOpenIncidentCount: 0, failedLaneCount: 0, activeAttentionCount: 0, userActionRequiredCount: 0, retryingCount: 0 },
     diagnostics: [],
   }
 }

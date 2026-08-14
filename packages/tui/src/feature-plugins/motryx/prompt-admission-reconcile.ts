@@ -1,8 +1,8 @@
 import type { TuiPromptAdmissionHandler } from "@opencode-ai/plugin/tui"
 import { fetchMotryxSessions, type MotryxControlConfig, type MotryxFetcher, type MotryxSessionRoute } from "./control"
 
-const DEFAULT_RECOVERY_TIMEOUT_MS = 60_000
-const DEFAULT_RECOVERY_POLL_MS = 250
+const DEFAULT_RECONCILE_TIMEOUT_MS = 60_000
+const DEFAULT_RECONCILE_POLL_MS = 250
 
 type Options = {
   signal?: AbortSignal
@@ -12,7 +12,7 @@ type Options = {
   now?: () => number
   sleep?: (ms: number) => Promise<void>
   onWaiting?: () => void
-  onRecovered?: () => void
+  onReconciled?: () => void
 }
 
 export function createMotryxPromptAdmissionHandler(
@@ -21,7 +21,7 @@ export function createMotryxPromptAdmissionHandler(
 ): TuiPromptAdmissionHandler {
   return async (input, next) => {
     const now = options.now ?? Date.now
-    const deadline = now() + (options.timeoutMs ?? DEFAULT_RECOVERY_TIMEOUT_MS)
+    const deadline = now() + (options.timeoutMs ?? DEFAULT_RECONCILE_TIMEOUT_MS)
     let waiting = false
     let transportError: unknown
     const markWaiting = () => {
@@ -35,7 +35,7 @@ export function createMotryxPromptAdmissionHandler(
       assertActive(options.signal)
       try {
         await next()
-        if (waiting) options.onRecovered?.()
+        if (waiting) options.onReconciled?.()
         return
       } catch (error) {
         if (!isPromptTransportError(error)) throw error
@@ -43,8 +43,8 @@ export function createMotryxPromptAdmissionHandler(
         markWaiting()
       }
 
-      if (now() >= deadline) throw recoveryTimeout(deadline, transportError)
-      await pause(options.pollMs ?? DEFAULT_RECOVERY_POLL_MS, options)
+      if (now() >= deadline) throw reconcileTimeout(deadline, transportError)
+      await pause(options.pollMs ?? DEFAULT_RECONCILE_POLL_MS, options)
       await waitForExactRoute(config, input.sessionID, expected, deadline, markWaiting, options, transportError)
     }
   }
@@ -69,14 +69,14 @@ async function waitForExactRoute(
         throw new Error(`Motryx is ROUTABLE for a different session than ${sessionID}`)
       }
       if (expected && !sameRoute(current, expected)) {
-        throw new Error("Motryx route proof changed while prompt admission was recovering")
+        throw new Error("Motryx route proof changed while prompt admission was reconciling")
       }
       return current
     }
 
     markWaiting()
-    if (now() >= deadline) throw recoveryTimeout(deadline, cause)
-    await pause(options.pollMs ?? DEFAULT_RECOVERY_POLL_MS, options)
+    if (now() >= deadline) throw reconcileTimeout(deadline, cause)
+    await pause(options.pollMs ?? DEFAULT_RECONCILE_POLL_MS, options)
   }
 }
 
@@ -124,13 +124,13 @@ function transportCause(value: unknown): boolean {
   return "cause" in value && transportCause(value.cause)
 }
 
-function recoveryTimeout(deadline: number, cause?: unknown) {
+function reconcileTimeout(deadline: number, cause?: unknown) {
   return new Error(`Motryx did not return to the exact ROUTABLE prompt route before deadline ${deadline}`, { cause })
 }
 
 function assertActive(signal?: AbortSignal) {
   if (!signal?.aborted) return
-  throw signal.reason ?? new DOMException("Prompt admission recovery was aborted", "AbortError")
+  throw signal.reason ?? new DOMException("Prompt admission reconciliation was aborted", "AbortError")
 }
 
 async function pause(ms: number, options: Options) {
@@ -147,7 +147,7 @@ async function pause(ms: number, options: Options) {
     }
     const abort = () => {
       clearTimeout(timer)
-      reject(options.signal?.reason ?? new DOMException("Prompt admission recovery was aborted", "AbortError"))
+      reject(options.signal?.reason ?? new DOMException("Prompt admission reconciliation was aborted", "AbortError"))
     }
     const timer = setTimeout(done, ms)
     options.signal?.addEventListener("abort", abort, { once: true })

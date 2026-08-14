@@ -92,12 +92,6 @@ test("keeps Motryx control inputs durable but synthetic in the conversation surf
         text: '<ic_agent_wakeup>\n{"wake_id":"wake-1"}\n</ic_agent_wakeup>',
         time: { created: 2 },
       },
-      {
-        id: "msg_inbox",
-        type: "user",
-        text: '<active-inbox-item>\n{"inbox_item_id":"inbox-1"}\n</active-inbox-item>\n\nHandle the item.',
-        time: { created: 3 },
-      },
     ],
     {
       agent: "orchestrator",
@@ -106,10 +100,9 @@ test("keeps Motryx control inputs durable but synthetic in the conversation surf
     },
   )
 
-  expect(result.messages.map((message) => message.id)).toEqual(["msg_user", "msg_wake", "msg_inbox"])
+  expect(result.messages.map((message) => message.id)).toEqual(["msg_user", "msg_wake"])
   expect(result.parts.msg_user).toMatchObject([{ type: "text", synthetic: false }])
   expect(result.parts.msg_wake).toMatchObject([{ type: "text", synthetic: true }])
-  expect(result.parts.msg_inbox).toMatchObject([{ type: "text", synthetic: true }])
 })
 
 test("projects V2 session and interactive requests without deriving new state", () => {
