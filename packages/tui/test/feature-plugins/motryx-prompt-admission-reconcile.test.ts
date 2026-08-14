@@ -1,12 +1,12 @@
 import { describe, expect, test } from "bun:test"
 import path from "node:path"
 import type { MotryxControlConfig } from "../../src/feature-plugins/motryx/control"
-import { createMotryxPromptAdmissionHandler } from "../../src/feature-plugins/motryx/prompt-recovery"
+import { createMotryxPromptAdmissionHandler } from "../../src/feature-plugins/motryx/prompt-admission-reconcile"
 
 const config: MotryxControlConfig = {
   apiURL: "http://127.0.0.1:19000",
   token: "control-token",
-  projectID: path.resolve("/tmp/motryx-prompt-recovery"),
+  projectID: path.resolve("/tmp/motryx-prompt-admission-reconcile"),
   orchestratorSessionID: "ses_orchestrator",
 }
 
@@ -20,7 +20,7 @@ const route = {
 function routable(overrides: Record<string, unknown> = {}) {
   const current = { ...route, ...overrides }
   return {
-    schemaVersion: 3,
+    schemaVersion: 5,
     projectID: config.projectID,
     status: "ROUTABLE",
     current,
@@ -38,7 +38,7 @@ function routable(overrides: Record<string, unknown> = {}) {
 
 function unavailable() {
   return {
-    schemaVersion: 3,
+    schemaVersion: 5,
     projectID: config.projectID,
     status: "UNAVAILABLE",
     current: null,
@@ -52,16 +52,16 @@ function fetchSequence(states: unknown[]) {
   return async () => Response.json(states[Math.min(index++, states.length - 1)])
 }
 
-describe("Motryx prompt admission recovery", () => {
+describe("Motryx prompt admission reconciliation", () => {
   test("retries a transport failure only after the exact route becomes ROUTABLE", async () => {
     let attempts = 0
     let waiting = 0
-    let recovered = 0
+    let reconciled = 0
     const handler = createMotryxPromptAdmissionHandler(config, {
       fetcher: fetchSequence([routable(), unavailable(), routable()]),
       sleep: async () => {},
       onWaiting: () => waiting++,
-      onRecovered: () => recovered++,
+      onReconciled: () => reconciled++,
     })
 
     await handler({ sessionID: config.orchestratorSessionID, inputID: "msg_retry" }, async () => {
@@ -71,7 +71,7 @@ describe("Motryx prompt admission recovery", () => {
 
     expect(attempts).toBe(2)
     expect(waiting).toBe(1)
-    expect(recovered).toBe(1)
+    expect(reconciled).toBe(1)
   })
 
   test("recognizes Bun connection errors as transport failures", async () => {

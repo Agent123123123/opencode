@@ -24,7 +24,7 @@ const config: MotryxControlConfig = {
 function snapshot(overrides: Record<string, unknown> = {}) {
   const now = "2026-07-19T00:00:00.000Z"
   return {
-    schemaVersion: 3,
+    schemaVersion: 5,
     projectID,
     orchestratorSessionID: config.orchestratorSessionID,
     projectionRevision: "server-generation:ic:revision",
@@ -62,10 +62,11 @@ function snapshot(overrides: Record<string, unknown> = {}) {
     artifacts: [],
     resourceBlocks: [],
     incidents: [],
-    attention: { visibleOpenIncidentCount: 0, failedLaneCount: 0 },
+    attentionItems: [],
+    attention: { visibleOpenIncidentCount: 0, failedLaneCount: 0, activeAttentionCount: 0, userActionRequiredCount: 0, retryingCount: 0 },
     functionSlots: [],
-    inboxItems: [],
-    deliveryFences: [],
+    runs: [],
+    attempts: [],
     diagnostics: [],
     ...overrides,
   }
@@ -92,9 +93,9 @@ describe("Motryx typed control snapshot", () => {
     ).toEqual({ ok: false, error: "Motryx control API must use http or https" })
   })
 
-  test("accepts an exact schema-v3 ROUTABLE/binding/reconcile proof", () => {
+  test("accepts an exact schema-v5 ROUTABLE/binding/reconcile proof", () => {
     expect(parseMotryxControlSnapshot(snapshot(), config)).toMatchObject({
-      schemaVersion: 3,
+      schemaVersion: 5,
       projectID,
       orchestratorSessionID: config.orchestratorSessionID,
       projectionRevision: "server-generation:ic:revision",
@@ -108,7 +109,7 @@ describe("Motryx typed control snapshot", () => {
     })
   })
 
-  test("accepts the slot-runtime workflow projection wire shape", () => {
+  test("accepts the slot-runtime Run/Attempt workflow projection wire shape", () => {
     const value = parseMotryxControlSnapshot(
       snapshot({
         lanes: [
@@ -138,15 +139,38 @@ describe("Motryx typed control snapshot", () => {
             runtimeReadiness: "ready",
           },
         ],
-        inboxItems: [
+        runs: [
           {
-            inboxItemID: "inbox_1",
-            targetKind: "slot",
-            targetID: "slot_coordinator",
-            envelopeClass: "command",
-            sourceType: "lane_command",
-            status: "ACTIVE",
+            runID: "run_1",
+            scopeKind: "LANE_PRIMARY",
+            runKind: "COORDINATOR",
+            status: "OPEN",
             laneID: "lane_1",
+            logicalOwnerKind: "FUNCTION_SLOT",
+            logicalOwnerID: "slot_coordinator",
+            sourceKind: "lane_command",
+            sourceID: "lane_1:1",
+            revision: 0,
+            errorRetryCount: 0,
+            maxErrorRetries: 2,
+            protocolCorrectionCount: 0,
+            maxProtocolCorrections: 1,
+            createdAt: 1_786_510_000_000,
+            currentAttemptID: "attempt_1",
+          },
+        ],
+        attempts: [
+          {
+            attemptID: "attempt_1",
+            runID: "run_1",
+            attemptNo: 1,
+            reason: "INITIAL",
+            instanceID: "inst_coordinator",
+            sessionID: "ses_coordinator",
+            stableInputID: "input_1",
+            state: "RUNNING",
+            submitCount: 1,
+            createdAt: 1_786_510_000_000,
           },
         ],
       }),
@@ -164,7 +188,56 @@ describe("Motryx typed control snapshot", () => {
       },
     })
     expect(value.functionSlots[0]).toMatchObject({ runtimeReadiness: "ready" })
-    expect(value.inboxItems[0]).toMatchObject({ targetKind: "slot", targetID: "slot_coordinator" })
+    expect(value.runs[0]).toMatchObject({ runKind: "COORDINATOR", logicalOwnerID: "slot_coordinator" })
+    expect(value.attempts[0]).toMatchObject({ runID: "run_1", state: "RUNNING" })
+  })
+
+  test("strictly parses v5 runtime attention and retry diagnostics", () => {
+    const value = parseMotryxControlSnapshot(snapshot({
+      attentionItems: [{
+        attentionID: "attention_provider_retry",
+        kind: "PROVIDER_RETRY",
+        severity: "WARNING",
+        scopeKind: "SESSION",
+        role: "orchestrator",
+        runID: "run_control",
+        attemptID: "attempt_control",
+        summary: "Provider request failed with HTTP 503 and will retry.",
+        reasonCode: "provider_internal",
+        nextAction: "wait_for_provider_retry",
+        actionRequired: false,
+        dismissible: true,
+        presentationState: "VISIBLE",
+        createdAt: 1_786_510_000_000,
+        retryLayer: "PROVIDER",
+        retryAttempt: 2,
+        retryLimit: 3,
+        retryNotBefore: 1_786_510_002_000,
+        failureKind: "provider_internal",
+        httpStatus: 503,
+        transportKind: "http-sse",
+        transportCode: "UND_ERR_HEADERS_TIMEOUT",
+        providerID: "zai",
+        modelID: "glm-5.2",
+      }],
+      attention: {
+        visibleOpenIncidentCount: 0,
+        failedLaneCount: 0,
+        activeAttentionCount: 1,
+        userActionRequiredCount: 0,
+        retryingCount: 1,
+      },
+    }), config)
+
+    expect(value.attentionItems[0]).toMatchObject({
+      kind: "PROVIDER_RETRY",
+      retryLayer: "PROVIDER",
+      retryAttempt: 2,
+      httpStatus: 503,
+      providerID: "zai",
+    })
+    expect(() => parseMotryxControlSnapshot(snapshot({ attentionItems: [{ kind: "RETRY_SOMETIME" }] }), config))
+      .toThrow("snapshot.attentionItems[0].kind is invalid")
   })
 
   test("fails closed on schema, identity, generation, and reconcile mismatches", () => {
@@ -217,7 +290,7 @@ describe("Motryx typed control snapshot", () => {
       fetcher: async (input, init) => {
         request = new Request(input, init)
         return Response.json({
-          schemaVersion: 3,
+          schemaVersion: 5,
           incidentID: "incident_1",
           status: "OPEN",
           presentationState: "DISMISSED",
@@ -240,7 +313,7 @@ describe("Motryx typed control snapshot", () => {
 
 describe("Motryx typed Orchestrator sessions", () => {
   const sessions = () => ({
-    schemaVersion: 3,
+    schemaVersion: 5,
     projectID,
     status: "ROUTABLE",
     current: {

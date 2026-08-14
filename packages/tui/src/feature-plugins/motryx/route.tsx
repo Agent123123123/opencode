@@ -14,6 +14,7 @@ import {
   type MotryxControlConfig,
   type MotryxControlSnapshot,
   type MotryxFetcher,
+  type MotryxAttentionItemProjection,
   type MotryxLaneProjection,
   type MotryxSessionList,
 } from "./control"
@@ -84,6 +85,7 @@ export function MotryxRoute(props: {
   const [targetError, setTargetError] = createSignal<string>()
   const [switching, setSwitching] = createSignal(false)
   const [dismissingIncidentID, setDismissingIncidentID] = createSignal<string>()
+  const [locallyDismissedAttentionIDs, setLocallyDismissedAttentionIDs] = createSignal<ReadonlySet<string>>(new Set())
   const layout = createMemo(() => motryxProductLayout(dimensions()))
   const selectedLane = createMemo(() => {
     const value = snapshot()
@@ -99,6 +101,11 @@ export function MotryxRoute(props: {
     layout().direction === "row" ? (layout().sidecarWidth ?? 46) : "100%",
   )
   const sidecarHeight = createMemo(() => layout().sidecarHeight)
+  const visibleAttentionItems = createMemo(() => {
+    const dismissed = locallyDismissedAttentionIDs()
+    return (snapshot()?.attentionItems ?? []).filter((item) =>
+      item.kind !== "FINAL_FAILURE" && item.presentationState === "VISIBLE" && !dismissed.has(item.attentionID))
+  })
   const conversationWidth = createMemo(() => {
     if (layout().direction === "column") return Math.max(20, dimensions().width - 2)
     return Math.max(20, dimensions().width - (layout().sidecarWidth ?? 46) - 3)
@@ -355,6 +362,10 @@ export function MotryxRoute(props: {
     props.api.ui.toast({ variant: "warning", message })
   }
 
+  function dismissAttentionLocally(attentionID: string) {
+    setLocallyDismissedAttentionIDs((current) => new Set([...current, attentionID]))
+  }
+
   async function dismissIncident(incidentID: string) {
     const current = activeConfig()
     const proof = snapshot()
@@ -402,6 +413,11 @@ export function MotryxRoute(props: {
   createEffect(() => {
     const value = snapshot()
     if (!value) return
+    const available = new Set(value.attentionItems.map((item) => item.attentionID))
+    setLocallyDismissedAttentionIDs((current) => {
+      const retained = new Set([...current].filter((attentionID) => available.has(attentionID)))
+      return retained.size === current.size ? current : retained
+    })
     const selected = selectedLaneID()
     if (!selected || !value.lanes.some((lane) => lane.id === selected)) {
       setSelectedLaneID(value.lanes[0]?.id)
@@ -479,6 +495,7 @@ export function MotryxRoute(props: {
         debugView={props.debugView === true}
         phase={connection().phase}
         status={status()}
+        visibleAttentionCount={visibleAttentionItems().length}
       />
 
       <Show
@@ -517,6 +534,11 @@ export function MotryxRoute(props: {
                 incident.status === "OPEN" && incident.presentationState === "VISIBLE")}
               busyIncidentID={dismissingIncidentID()}
               onDismiss={(incidentID) => void dismissIncident(incidentID)}
+            />
+            <RuntimeAttentionBanner
+              api={props.api}
+              items={visibleAttentionItems()}
+              onDismiss={dismissAttentionLocally}
             />
             <Show
               when={target()}
@@ -558,6 +580,8 @@ export function MotryxRoute(props: {
               onLane={selectLane}
               onConversation={(role, laneID) => void focusWorker(role, laneID)}
               onDismissIncident={(incidentID) => void dismissIncident(incidentID)}
+              locallyDismissedAttentionIDs={locallyDismissedAttentionIDs()}
+              onDismissAttention={dismissAttentionLocally}
             />
           </Show>
         </box>
@@ -655,6 +679,7 @@ function MotryxHeader(props: {
   debugView: boolean
   phase: MotryxProjectionPhase
   status?: string
+  visibleAttentionCount: number
 }) {
   const target = createMemo(() => {
     if (!props.target) return "No active conversation"
@@ -694,8 +719,10 @@ function MotryxHeader(props: {
       <Show when={props.status}>
         {(label) => <text fg={statusColor(props.api, props.phase)}>{label()}</text>}
       </Show>
-      <Show when={(props.snapshot?.attention.visibleOpenIncidentCount ?? 0) > 0}>
-        <text fg={props.api.theme.current.error}>! {props.snapshot?.attention.visibleOpenIncidentCount}</text>
+      <Show when={(props.snapshot?.attention.visibleOpenIncidentCount ?? 0) + props.visibleAttentionCount > 0}>
+        <text fg={props.api.theme.current.error}>
+          ! {(props.snapshot?.attention.visibleOpenIncidentCount ?? 0) + props.visibleAttentionCount}
+        </text>
       </Show>
     </box>
   )
@@ -739,6 +766,52 @@ function RuntimeIncidentCard(props: {
             {incident().safeSummary}
           </text>
           <Show when={runtimeIncidentDiagnostic(incident())}>
+            {(detail) => <text fg={props.api.theme.current.textMuted}>{detail()}</text>}
+          </Show>
+        </box>
+      )}
+    </Show>
+  )
+}
+
+function RuntimeAttentionBanner(props: {
+  api: TuiPluginApi
+  items: MotryxAttentionItemProjection[]
+  onDismiss: (attentionID: string) => void
+}) {
+  const ordered = createMemo(() => [...props.items].sort(compareRuntimeAttention))
+  const current = createMemo(() => ordered()[0])
+  return (
+    <Show when={current()}>
+      {(attention) => (
+        <box
+          flexShrink={0}
+          minHeight={3}
+          flexDirection="column"
+          border={["top", "bottom", "left", "right"]}
+          borderColor={runtimeAttentionColor(props.api, attention().severity)}
+          paddingLeft={1}
+          paddingRight={1}
+        >
+          <box flexDirection="row" gap={1}>
+            <text fg={runtimeAttentionColor(props.api, attention().severity)}>
+              {runtimeAttentionTitle(attention())} · {capitalize(attention().role)}
+            </text>
+            <box flexGrow={1} />
+            <Show when={ordered().length > 1}>
+              <text fg={props.api.theme.current.textMuted}>{ordered().length - 1} more</text>
+            </Show>
+            <box
+              onMouseUp={attention().dismissible ? () => props.onDismiss(attention().attentionID) : undefined}
+              backgroundColor={props.api.theme.current.backgroundElement}
+            >
+              <text fg={attention().dismissible ? props.api.theme.current.primary : props.api.theme.current.textMuted}>
+                {attention().dismissible ? " [×] " : ""}
+              </text>
+            </box>
+          </box>
+          <text fg={props.api.theme.current.text} wrapMode="word">{attention().summary}</text>
+          <Show when={runtimeAttentionDiagnostic(attention())}>
             {(detail) => <text fg={props.api.theme.current.textMuted}>{detail()}</text>}
           </Show>
         </box>
@@ -867,6 +940,8 @@ function SidecarPanel(props: {
   onLane: (lane: MotryxLaneProjection) => void
   onConversation: (role: "coordinator" | "checker", laneID: string) => void
   onDismissIncident: (incidentID: string) => void
+  locallyDismissedAttentionIDs: ReadonlySet<string>
+  onDismissAttention: (attentionID: string) => void
 }) {
   return (
     <Show
@@ -920,6 +995,8 @@ function SidecarPanel(props: {
                 <IncidentsPanel
                   api={props.api}
                   snapshot={value()}
+                  locallyDismissedAttentionIDs={props.locallyDismissedAttentionIDs}
+                  onDismissAttention={props.onDismissAttention}
                   onDismiss={props.onDismissIncident}
                 />
               </Show>
@@ -1105,8 +1182,13 @@ function LaneRow(props: {
 function IncidentsPanel(props: {
   api: TuiPluginApi
   snapshot: MotryxControlSnapshot
+  locallyDismissedAttentionIDs: ReadonlySet<string>
+  onDismissAttention: (attentionID: string) => void
   onDismiss: (incidentID: string) => void
 }) {
+  const activeAttention = createMemo(() => props.snapshot.attentionItems
+    .filter((item) => item.kind !== "FINAL_FAILURE" && item.presentationState === "VISIBLE")
+    .sort(compareRuntimeAttention))
   return (
     <scrollbox
       flexGrow={1}
@@ -1114,6 +1196,41 @@ function IncidentsPanel(props: {
       verticalScrollbarOptions={{ visible: true }}
       horizontalScrollbarOptions={{ visible: false }}
     >
+      <text fg={props.api.theme.current.text}>Active runtime attention</text>
+      <Show when={activeAttention().length > 0} fallback={
+        <text fg={props.api.theme.current.textMuted}>No active runtime attention.</text>
+      }>
+        <For each={activeAttention()}>
+          {(attention) => (
+            <box flexDirection="column" gap={1} paddingBottom={1}>
+              <box flexDirection="row" gap={1}>
+                <text fg={runtimeAttentionColor(props.api, attention.severity)}>
+                  {attention.severity} · {runtimeAttentionTitle(attention)} · {capitalize(attention.role)}
+                </text>
+                <box flexGrow={1} />
+                <Show when={attention.dismissible}>
+                  <Show
+                    when={!props.locallyDismissedAttentionIDs.has(attention.attentionID)}
+                    fallback={<text fg={props.api.theme.current.textMuted}>hidden locally</text>}
+                  >
+                    <box onMouseUp={() => props.onDismissAttention(attention.attentionID)}>
+                      <text fg={props.api.theme.current.primary}>[×]</text>
+                    </box>
+                  </Show>
+                </Show>
+              </box>
+              <text fg={props.api.theme.current.text} wrapMode="word">{attention.summary}</text>
+              <Show when={runtimeAttentionDiagnostic(attention)}>
+                {(detail) => <text fg={props.api.theme.current.textMuted}>{detail()}</text>}
+              </Show>
+              <text fg={props.api.theme.current.textMuted}>
+                {attention.attentionID}{attention.laneID ? ` · lane ${attention.laneID}` : ""}
+              </text>
+            </box>
+          )}
+        </For>
+      </Show>
+      <text fg={props.api.theme.current.text}>Runtime incidents</text>
       <Show
         when={props.snapshot.incidents.length > 0}
         fallback={<text fg={props.api.theme.current.textMuted}>No runtime incidents.</text>}
@@ -1160,6 +1277,91 @@ function runtimeIncidentDiagnostic(incident: MotryxControlSnapshot["incidents"][
   return values.length > 0 ? values.join(" · ") : undefined
 }
 
+function compareRuntimeAttention(left: MotryxAttentionItemProjection, right: MotryxAttentionItemProjection): number {
+  const severity = { ERROR: 3, WARNING: 2, INFO: 1 } as const
+  return severity[right.severity] - severity[left.severity] ||
+    Number(right.actionRequired) - Number(left.actionRequired) ||
+    right.createdAt - left.createdAt ||
+    left.attentionID.localeCompare(right.attentionID)
+}
+
+function runtimeAttentionTitle(attention: MotryxAttentionItemProjection): string {
+  const labels: Record<MotryxAttentionItemProjection["kind"], string> = {
+    PROVIDER_RETRY: "Provider retry",
+    RUN_RETRY_SCHEDULED: "Run retry scheduled",
+    RUN_RETRY_RUNNING: "Run retry running",
+    PROTOCOL_CORRECTION: "Protocol correction",
+    DELIVERY_RETRY: "Input delivery retry",
+    OUTCOME_UNKNOWN: "Outcome unknown",
+    WAITING_ATTENTION: "Waiting for attention",
+    WAITING_RUNTIME_REPAIR: "Waiting for runtime repair",
+    WAITING_RECONCILIATION: "Waiting for reconciliation",
+    USER_PAUSED: "Paused by user",
+    RUNTIME_RESTART: "Waiting for runtime restart",
+    FINAL_FAILURE: "Final failure",
+  }
+  return labels[attention.kind]
+}
+
+function runtimeAttentionDiagnostic(attention: MotryxAttentionItemProjection): string | undefined {
+  const retry = attention.retryLayer
+    ? `${attention.retryLayer.toLowerCase()} retry${attention.retryAttempt !== undefined
+      ? ` ${attention.retryAttempt}${attention.retryLimit !== undefined ? `/${attention.retryLimit}` : ""}`
+      : ""}`
+    : undefined
+  const values = [
+    retry,
+    attention.retryNotBefore !== undefined ? formatRetryTime(attention.retryNotBefore) : undefined,
+    attention.reasonCode ? `reason ${attention.reasonCode}` : undefined,
+    attention.failureKind ? `failure ${attention.failureKind}` : undefined,
+    attention.httpStatus !== undefined ? `HTTP ${attention.httpStatus}` : undefined,
+    attention.transportCode ? `transport ${attention.transportCode}` : undefined,
+    attention.transportKind ? `kind ${attention.transportKind}` : undefined,
+    attention.providerID && attention.modelID ? `${attention.providerID}/${attention.modelID}` : undefined,
+    attention.nextAction ? `next ${attention.nextAction}` : undefined,
+  ].filter((value): value is string => Boolean(value))
+  return values.length > 0 ? values.join(" · ") : undefined
+}
+
+function runtimeAttentionColor(api: TuiPluginApi, severity: MotryxAttentionItemProjection["severity"]) {
+  if (severity === "ERROR") return api.theme.current.error
+  if (severity === "WARNING") return api.theme.current.warning
+  return api.theme.current.info
+}
+
+function formatRetryTime(timestamp: number): string {
+  return `next retry at ${new Date(timestamp).toISOString()}`
+}
+
+function formatRunInspection(run: MotryxControlSnapshot["runs"][number]): string {
+  const values = [
+    `${run.runKind}:${run.status}`,
+    run.waitingKind ? `waiting ${run.waitingKind}${run.waitingRef ? ` (${run.waitingRef})` : ""}` : undefined,
+    `error retry ${run.errorRetryCount}/${run.maxErrorRetries}`,
+    `protocol correction ${run.protocolCorrectionCount}/${run.maxProtocolCorrections}`,
+    run.retryNotBefore !== undefined ? formatRetryTime(run.retryNotBefore) : undefined,
+    run.retryDisposition ? `disposition ${run.retryDisposition}` : undefined,
+  ].filter((value): value is string => Boolean(value))
+  return values.join(" · ")
+}
+
+function formatAttemptInspection(attempt: MotryxControlSnapshot["attempts"][number]): string {
+  const values = [
+    `Attempt #${attempt.attemptNo} ${attempt.reason}:${attempt.state}`,
+    attempt.submitCount > 0 ? `delivery submissions ${attempt.submitCount}` : undefined,
+    attempt.lastSubmitError ? `delivery ${attempt.lastSubmitError}` : undefined,
+    attempt.hostAttemptCount !== undefined ? `provider attempt ${attempt.hostAttemptCount}` : undefined,
+    attempt.failureSafeSummary,
+    attempt.failureKind ? `failure ${attempt.failureKind}` : undefined,
+    attempt.httpStatus !== undefined ? `HTTP ${attempt.httpStatus}` : undefined,
+    attempt.transportCode ? `transport ${attempt.transportCode}` : undefined,
+    attempt.transportKind ? `kind ${attempt.transportKind}` : undefined,
+    attempt.providerID && attempt.modelID ? `${attempt.providerID}/${attempt.modelID}` : undefined,
+    attempt.dispatchNotBefore !== undefined ? formatRetryTime(attempt.dispatchNotBefore) : undefined,
+  ].filter((value): value is string => Boolean(value))
+  return values.join(" · ")
+}
+
 function InspectPanel(props: {
   api: TuiPluginApi
   snapshot: MotryxControlSnapshot
@@ -1174,9 +1376,20 @@ function InspectPanel(props: {
   const artifacts = createMemo(() =>
     props.snapshot.artifacts.filter((artifact) => artifact.producedByLaneID === props.lane?.id),
   )
-  const instanceIDs = createMemo(() => new Set(agents().map((agent) => agent.instanceID)))
-  const inbox = createMemo(() => props.snapshot.inboxItems.filter((item) => item.laneID === props.lane?.id))
-  const fences = createMemo(() => props.snapshot.deliveryFences.filter((fence) => instanceIDs().has(fence.instanceID)))
+  const runs = createMemo(() => props.snapshot.runs.filter((run) =>
+    run.laneID === props.lane?.id || run.relatedLaneID === props.lane?.id,
+  ))
+  const runIDs = createMemo(() => new Set(runs().map((run) => run.runID)))
+  const attempts = createMemo(() => props.snapshot.attempts.filter((attempt) => runIDs().has(attempt.runID)))
+  const attentionItems = createMemo(() => props.snapshot.attentionItems
+    .filter((attention) => attention.laneID === props.lane?.id && attention.presentationState === "VISIBLE")
+    .sort(compareRuntimeAttention))
+  const primaryAttention = createMemo(() => attentionItems()[0])
+  const failureAttention = createMemo(() => {
+    const incidentID = props.lane?.failure?.incidentID
+    if (!incidentID) return undefined
+    return props.snapshot.attentionItems.find((attention) => attention.incidentID === incidentID)
+  })
   const slots = createMemo(() => {
     const lane = props.lane
     if (!lane) return []
@@ -1232,6 +1445,21 @@ function InspectPanel(props: {
             <Show when={lane().pendingCheckSummary}>
               {(summary) => <InspectValue api={props.api} label="now" value={summary()} />}
             </Show>
+            <Show when={primaryAttention()}>
+              {(attention) => (
+                <box flexDirection="column" gap={1}>
+                  <text fg={runtimeAttentionColor(props.api, attention().severity)}>Runtime attention</text>
+                  <InspectValue api={props.api} label="state" value={runtimeAttentionTitle(attention())} />
+                  <InspectValue api={props.api} label="summary" value={attention().summary} />
+                  <Show when={runtimeAttentionDiagnostic(attention())}>
+                    {(detail) => <InspectValue api={props.api} label="diagnostic" value={detail()} />}
+                  </Show>
+                  <Show when={attention().nextAction}>
+                    {(action) => <InspectValue api={props.api} label="next action" value={action()} />}
+                  </Show>
+                </box>
+              )}
+            </Show>
             <Show when={lane().failure}>
               {(failure) => (
                 <box flexDirection="column" gap={1}>
@@ -1240,7 +1468,9 @@ function InspectPanel(props: {
                   <InspectValue api={props.api} label="kind" value={failure().kind} />
                   <InspectValue api={props.api} label="summary" value={failure().safeSummary} />
                   <InspectValue api={props.api} label="incident" value={failure().incidentID} />
-                  <InspectValue api={props.api} label="next action" value="repair runtime/provider, then retry_failed_lane" />
+                  <Show when={failureAttention()?.nextAction}>
+                    {(action) => <InspectValue api={props.api} label="next action" value={action()} />}
+                  </Show>
                 </box>
               )}
             </Show>
@@ -1281,19 +1511,19 @@ function InspectPanel(props: {
             />
             <InspectValue
               api={props.api}
-              label="inbox"
+              label="runs"
               value={
-                inbox()
-                  .map((item) => `${item.envelopeClass}:${item.status}`)
+                runs()
+                  .map(formatRunInspection)
                   .join(", ") || "none"
               }
             />
             <InspectValue
               api={props.api}
-              label="fences"
+              label="attempts"
               value={
-                fences()
-                  .map((fence) => `${fence.state}@${fence.fenceGeneration}`)
+                attempts()
+                  .map(formatAttemptInspection)
                   .join(", ") || "none"
               }
             />
@@ -1403,8 +1633,6 @@ function laneColor(api: TuiPluginApi, status: string) {
 
 const MOTRYX_KNOWN_LANE_STATUSES = new Set([
   "OPEN",
-  "READY",
-  "REOPENED",
   "WORKING",
   "AWAITING_CHECK",
   "CHECKING",
