@@ -243,10 +243,14 @@ const layer = Layer.effect(
       activity.activityInputIDs = activityBeforePromotion
       const contextSource = loadSystemContext(session, agent, effectiveModel, activityBeforePromotion)
       const initialized = yield* SessionContextEpoch.initialize(db, contextSource, session.id)
-      const activityInputIDs = mergeInputIDs(
-        activityBeforePromotion,
-        currentActivityInputIDs(yield* getContext(session.id)),
-      )
+      // A physical turn is owned by the inputs promoted for this Activity.
+      // Earlier user messages remain in model context, but after a process-loss
+      // continuation they must not be reclassified as inputs of the successor
+      // Attempt. Fall back to transcript inference only for a forced/orphaned
+      // Activity that had no fresh promotion identity.
+      const activityInputIDs = activityBeforePromotion.length > 0
+        ? activityBeforePromotion
+        : currentActivityInputIDs(yield* getContext(session.id))
       activity.activityInputIDs = activityInputIDs
       const system = initialized ?? (yield* SessionContextEpoch.prepare(db, events, contextSource, session.id))
       const entries = yield* SessionHistory.entriesForRunner(db, session.id, system.baselineSeq)
