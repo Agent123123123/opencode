@@ -177,6 +177,7 @@ export type MotryxFunctionSlotProjection = {
 
 export type MotryxRunProjection = {
   runID: string
+  workflowID?: string
   scopeKind: "LANE_PRIMARY" | "SLOT_INPUT" | "SESSION_INPUT"
   runKind: "COORDINATOR" | "CHECKER" | "LANE_DECISION" | "ORCHESTRATOR_TURN" | "ANALYST_ADVISORY" | "A2A_RESPONDER" | "NOTIFICATION"
   status: "OPEN" | "WAITING" | "SUCCEEDED" | "FAILED" | "CANCELED"
@@ -896,6 +897,7 @@ function parseRun(value: unknown, label: string): MotryxRunProjection {
   const item = requiredRecord(value, label)
   return compact({
     runID: requiredString(item.runID, `${label}.runID`),
+    workflowID: optionalString(item.workflowID, `${label}.workflowID`),
     scopeKind: exactEnum(item.scopeKind, new Set(["LANE_PRIMARY", "SLOT_INPUT", "SESSION_INPUT"] as const), `${label}.scopeKind`),
     runKind: exactEnum(item.runKind, new Set([
       "COORDINATOR", "CHECKER", "LANE_DECISION", "ORCHESTRATOR_TURN", "ANALYST_ADVISORY", "A2A_RESPONDER",
