@@ -3,6 +3,12 @@ import { z } from "zod"
 export type ToolContext = {
   sessionID: string
   messageID: string
+  /** Exact managed tool invocation identity when provided by the V2 Host. */
+  toolCallID?: string
+  /** Exact physical turn identity when provided by the V2 Host. */
+  turnID?: string
+  /** Stable inputs coalesced into the exact physical turn. */
+  activityInputIDs?: readonly string[]
   agent: string
   /**
    * Current project directory for this session.

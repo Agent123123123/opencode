@@ -127,6 +127,9 @@ const execute = Effect.fn("V2StandardPluginBridge.execute")(function* (
       definition.execute(args as never, {
         sessionID: context.sessionID,
         messageID: context.assistantMessageID,
+        toolCallID: context.toolCallID,
+        turnID: context.turnID,
+        activityInputIDs: context.activityInputIDs,
         agent: context.agent,
         directory: location.directory,
         worktree: location.worktree,
