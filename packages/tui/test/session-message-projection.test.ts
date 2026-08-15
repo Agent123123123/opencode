@@ -116,6 +116,7 @@ test("projects V2 session and interactive requests without deriving new state", 
     time: { created: 10, updated: 20 },
     title: "Motryx",
     location: { directory: "/tmp/project", workspaceID: "workspace-1" },
+    execution: { managed: false, gateOpen: true },
     subpath: "lane-a",
   }
   const permission: PermissionV2Request = {

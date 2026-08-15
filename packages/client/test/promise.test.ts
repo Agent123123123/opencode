@@ -135,7 +135,7 @@ test("session methods use the public HTTP contract", async () => {
     : undefined
   const events = []
   for await (const event of client.sessions.events({ sessionID: "ses_test", after: 0 })) events.push(event)
-  await client.sessions.interrupt({ sessionID: "ses_test" })
+  await client.sessions.interrupt({ sessionID: "ses_test", turnID: "msg_turn" })
   const message = await client.sessions.message({ sessionID: "ses_test", messageID: "msg_model" })
 
   expect(page.cursor.next).toBe("next")
@@ -221,6 +221,7 @@ const session = {
     },
     title: "Test",
     location: { directory: "/tmp/project" },
+    execution: { managed: false, gateOpen: true },
   },
 }
 

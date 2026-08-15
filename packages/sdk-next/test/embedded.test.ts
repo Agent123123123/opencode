@@ -10,7 +10,8 @@ test("embedded client uses the real router and handlers", async () => {
   const directory = await mkdtemp(join(tmpdir(), "opencode-embedded-"))
   const database = Flag.OPENCODE_DB
   Flag.OPENCODE_DB = join(directory, "opencode.sqlite")
-  const { AbsolutePath, Agent, Location, Model, OpenCode, Prompt, Provider, Session, Tool } = await import("../src")
+  const { AbsolutePath, Agent, Location, Model, OpenCode, Prompt, Provider, Session, SessionMessage, Tool } =
+    await import("../src")
   const sessionID = Session.ID.make(`ses_embedded_${crypto.randomUUID()}`)
   const model = Model.Ref.make({ id: Model.ID.make("embedded"), providerID: Provider.ID.make("test") })
 
@@ -31,8 +32,8 @@ test("embedded client uses the real router and handlers", async () => {
         agent: Agent.ID.make("build"),
         location: Location.Ref.make({ directory: AbsolutePath.make(directory) }),
       })
-      yield* opencode.sessions.switchModel({ sessionID, model })
-      const selected = yield* opencode.sessions.get({ sessionID })
+      yield* opencode.sessions.switchAgent({ sessionID, agent: Agent.ID.make("plan") })
+      const unavailableModel = yield* opencode.sessions.switchModel({ sessionID, model }).pipe(Effect.flip)
       const page = yield* opencode.sessions.list({ directory: AbsolutePath.make(directory) })
       const active = yield* opencode.sessions.active()
       const admitted = yield* opencode.sessions.prompt({
@@ -41,25 +42,16 @@ test("embedded client uses the real router and handlers", async () => {
         resume: false,
       })
       const context = yield* opencode.sessions.context({ sessionID })
-      const wake = yield* opencode.sessions.prompt({
-        sessionID,
-        prompt: Prompt.make({ text: "Promote this input" }),
-      })
-      const prompted = yield* opencode.sessions.events({ sessionID }).pipe(
-        Stream.filter((event) => event.type === "session.next.prompted" && event.data.messageID === wake.id),
-        Stream.runHead,
-        Effect.timeout("10 seconds"),
-        Effect.map(Option.getOrThrow),
-      )
-      const wakeContext = yield* opencode.sessions.context({ sessionID })
       const event = yield* opencode.sessions
         .events({ sessionID })
         .pipe(Stream.take(1), Stream.runHead, Effect.map(Option.getOrUndefined))
-      const modelMessage = Option.fromNullishOr(context.find((message) => message.type === "model-switched")).pipe(
+      const agentMessage = Option.fromNullishOr(context.find((message) => message.type === "agent-switched")).pipe(
         Option.getOrThrow,
       )
-      const message = yield* opencode.sessions.message({ sessionID, messageID: modelMessage.id })
-      yield* opencode.sessions.interrupt({ sessionID })
+      const message = yield* opencode.sessions.message({ sessionID, messageID: agentMessage.id })
+      const staleInterrupt = yield* opencode.sessions
+        .interrupt({ sessionID, turnID: SessionMessage.ID.make("msg_stale_turn") })
+        .pipe(Effect.flip)
       const other = yield* opencode.sessions.create({
         location: Location.Ref.make({ directory: AbsolutePath.make(directory) }),
       })
@@ -67,29 +59,29 @@ test("embedded client uses the real router and handlers", async () => {
       const missing = yield* Effect.all(
         [
           opencode.sessions.events({ sessionID: missingSessionID }).pipe(Stream.runHead, Effect.flip),
-          opencode.sessions.interrupt({ sessionID: missingSessionID }).pipe(Effect.flip),
-          opencode.sessions.message({ sessionID: missingSessionID, messageID: modelMessage.id }).pipe(Effect.flip),
+          opencode.sessions
+            .interrupt({ sessionID: missingSessionID, turnID: SessionMessage.ID.make("msg_missing_turn") })
+            .pipe(Effect.flip),
+          opencode.sessions.message({ sessionID: missingSessionID, messageID: agentMessage.id }).pipe(Effect.flip),
         ],
         { concurrency: "unbounded" },
       )
       const missingMessage = yield* Effect.flip(
         opencode.sessions.message({
           sessionID: other.id,
-          messageID: modelMessage.id,
+          messageID: agentMessage.id,
         }),
       )
 
       expect(created.id).toBe(sessionID)
-      expect(selected.model?.id).toBe(model.id)
-      expect(selected.model?.providerID).toBe(model.providerID)
+      expect(unavailableModel._tag).toBe("InvalidRequestError")
       expect(page.data.some((session) => session.id === sessionID)).toBe(true)
       expect(active).toEqual({})
       expect(admitted.sessionID).toBe(sessionID)
-      expect(prompted.type).toBe("session.next.prompted")
-      expect(wakeContext).toContainEqual(expect.objectContaining({ id: wake.id, type: "user" }))
-      expect(context.some((message) => message.type === "model-switched")).toBe(true)
-      expect(event).toMatchObject({ type: "session.next.model.switched", durable: { seq: 1 } })
-      expect(message).toEqual(modelMessage)
+      expect(context.some((message) => message.type === "agent-switched")).toBe(true)
+      expect(event).toMatchObject({ type: "session.next.agent.switched", durable: { seq: 1 } })
+      expect(message).toEqual(agentMessage)
+      expect(staleInterrupt._tag).toBe("ConflictError")
       expect(missing.map((error) => error._tag)).toEqual([
         "SessionNotFoundError",
         "SessionNotFoundError",

@@ -23,6 +23,8 @@ export type Event =
   | EventSessionNextMoved
   | EventSessionNextPrompted
   | EventSessionNextPromptAdmitted
+  | EventSessionNextPromptCanceled
+  | EventSessionNextExecutionGateChanged
   | EventSessionNextContextUpdated
   | EventSessionTurnStarted
   | EventSessionTurnNotStarted
@@ -895,6 +897,28 @@ export type GlobalEvent = {
       }
     | {
         id: string
+        type: "session.next.prompt.canceled"
+        properties: {
+          timestamp: number
+          sessionID: string
+          messageID: string
+          origin: "user" | "framework" | "runtime_shutdown" | "stale" | "business"
+          reason: string
+          inputVisibility: "missing" | "admitted_unpromoted"
+        }
+      }
+    | {
+        id: string
+        type: "session.next.execution_gate.changed"
+        properties: {
+          timestamp: number
+          sessionID: string
+          open: boolean
+          reason: string
+        }
+      }
+    | {
+        id: string
         type: "session.next.context.updated"
         properties: {
           timestamp: number
@@ -1699,6 +1723,8 @@ export type GlobalEvent = {
     | SyncEventSessionNextMoved
     | SyncEventSessionNextPrompted
     | SyncEventSessionNextPromptAdmitted
+    | SyncEventSessionNextPromptCanceled
+    | SyncEventSessionNextExecutionGateChanged
     | SyncEventSessionNextContextUpdated
     | SyncEventSessionTurnStarted
     | SyncEventSessionTurnNotStarted
@@ -2833,6 +2859,8 @@ export type SessionDurableEvent =
   | SessionNextMoved
   | SessionNextPrompted
   | SessionNextPromptAdmitted
+  | SessionNextPromptCanceled
+  | SessionNextExecutionGateChanged
   | SessionNextContextUpdated
   | SessionTurnStarted
   | SessionTurnNotStarted
@@ -2965,6 +2993,8 @@ export type V2Event =
   | SessionNextMoved
   | SessionNextPrompted
   | SessionNextPromptAdmitted
+  | SessionNextPromptCanceled
+  | SessionNextExecutionGateChanged
   | SessionNextContextUpdated
   | SessionTurnStarted
   | SessionTurnNotStarted
@@ -3514,6 +3544,42 @@ export type SyncEventSessionNextPromptAdmitted = {
       messageID: string
       prompt: Prompt
       delivery: "steer" | "queue"
+    }
+  }
+}
+
+export type SyncEventSessionNextPromptCanceled = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "session.next.prompt.canceled.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      timestamp: number
+      sessionID: string
+      messageID: string
+      origin: "user" | "framework" | "runtime_shutdown" | "stale" | "business"
+      reason: string
+      inputVisibility: "missing" | "admitted_unpromoted"
+    }
+  }
+}
+
+export type SyncEventSessionNextExecutionGateChanged = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "session.next.execution_gate.changed.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      timestamp: number
+      sessionID: string
+      open: boolean
+      reason: string
     }
   }
 }
@@ -4142,6 +4208,16 @@ export type SessionV2Info = {
   location: LocationRef
   subpath?: string
   revert?: RevertState
+  execution: {
+    managed: boolean
+    gateOpen: boolean
+  }
+}
+
+export type SessionV2ExecutionGate = {
+  managed: boolean
+  open: boolean
+  reason: string
 }
 
 export type PromptInputFileAttachment = {
@@ -4160,6 +4236,39 @@ export type SessionInputAdmitted = {
   timeCreated: number
   promotedSeq?: number
 }
+
+export type SessionInputStatus =
+  | {
+      state: "missing"
+    }
+  | {
+      state: "admitted"
+      input: SessionInputAdmitted
+    }
+  | {
+      state: "promoted"
+      input: SessionInputAdmitted
+    }
+  | {
+      state: "canceled"
+      id: string
+      sessionID: string
+      cancelSeq: number
+      origin: "user" | "framework" | "runtime_shutdown" | "stale" | "business"
+      reason: string
+      timeCanceled: number
+      inputVisibility: "missing" | "admitted_unpromoted"
+    }
+
+export type SessionInputCancelResult =
+  | {
+      outcome: "canceled"
+      status: SessionInputStatus
+    }
+  | {
+      outcome: "too_late"
+      status: SessionInputStatus
+    }
 
 export type SessionMessageAgentSwitched = {
   id: string
@@ -4514,6 +4623,48 @@ export type SessionNextPromptAdmitted = {
     messageID: string
     prompt: Prompt
     delivery: "steer" | "queue"
+  }
+}
+
+export type SessionNextPromptCanceled = {
+  id: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  type: "session.next.prompt.canceled"
+  durable?: {
+    aggregateID: string
+    seq: number
+    version: number
+  }
+  location?: LocationRef
+  data: {
+    timestamp: number
+    sessionID: string
+    messageID: string
+    origin: "user" | "framework" | "runtime_shutdown" | "stale" | "business"
+    reason: string
+    inputVisibility: "missing" | "admitted_unpromoted"
+  }
+}
+
+export type SessionNextExecutionGateChanged = {
+  id: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  type: "session.next.execution_gate.changed"
+  durable?: {
+    aggregateID: string
+    seq: number
+    version: number
+  }
+  location?: LocationRef
+  data: {
+    timestamp: number
+    sessionID: string
+    open: boolean
+    reason: string
   }
 }
 
@@ -6712,6 +6863,30 @@ export type EventSessionNextPromptAdmitted = {
     messageID: string
     prompt: Prompt
     delivery: "steer" | "queue"
+  }
+}
+
+export type EventSessionNextPromptCanceled = {
+  id: string
+  type: "session.next.prompt.canceled"
+  properties: {
+    timestamp: number
+    sessionID: string
+    messageID: string
+    origin: "user" | "framework" | "runtime_shutdown" | "stale" | "business"
+    reason: string
+    inputVisibility: "missing" | "admitted_unpromoted"
+  }
+}
+
+export type EventSessionNextExecutionGateChanged = {
+  id: string
+  type: "session.next.execution_gate.changed"
+  properties: {
+    timestamp: number
+    sessionID: string
+    open: boolean
+    reason: string
   }
 }
 
@@ -11850,6 +12025,7 @@ export type V2SessionCreateData = {
     agent?: string
     model?: ModelRef
     location?: LocationRef
+    executionManaged?: boolean
   }
   path?: never
   query?: never
@@ -12075,6 +12251,84 @@ export type V2SessionSwitchModelResponses = {
 
 export type V2SessionSwitchModelResponse = V2SessionSwitchModelResponses[keyof V2SessionSwitchModelResponses]
 
+export type V2SessionExecutionGateData = {
+  body?: never
+  path: {
+    sessionID: string
+  }
+  query?: never
+  url: "/api/session/{sessionID}/execution-gate"
+}
+
+export type V2SessionExecutionGateErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * SessionNotFoundError
+   */
+  404: SessionNotFoundError
+}
+
+export type V2SessionExecutionGateError = V2SessionExecutionGateErrors[keyof V2SessionExecutionGateErrors]
+
+export type V2SessionExecutionGateResponses = {
+  /**
+   * Success
+   */
+  200: {
+    data: SessionV2ExecutionGate
+  }
+}
+
+export type V2SessionExecutionGateResponse = V2SessionExecutionGateResponses[keyof V2SessionExecutionGateResponses]
+
+export type V2SessionExecutionGateSetData = {
+  body: {
+    open: boolean
+    reason: string
+  }
+  path: {
+    sessionID: string
+  }
+  query?: never
+  url: "/api/session/{sessionID}/execution-gate"
+}
+
+export type V2SessionExecutionGateSetErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * SessionNotFoundError
+   */
+  404: SessionNotFoundError
+}
+
+export type V2SessionExecutionGateSetError = V2SessionExecutionGateSetErrors[keyof V2SessionExecutionGateSetErrors]
+
+export type V2SessionExecutionGateSetResponses = {
+  /**
+   * Success
+   */
+  200: {
+    data: SessionV2ExecutionGate
+  }
+}
+
+export type V2SessionExecutionGateSetResponse =
+  V2SessionExecutionGateSetResponses[keyof V2SessionExecutionGateSetResponses]
+
 export type V2SessionPromptData = {
   body: {
     id?: string
@@ -12120,6 +12374,89 @@ export type V2SessionPromptResponses = {
 }
 
 export type V2SessionPromptResponse = V2SessionPromptResponses[keyof V2SessionPromptResponses]
+
+export type V2SessionInputData = {
+  body?: never
+  path: {
+    sessionID: string
+    inputID: string
+  }
+  query?: never
+  url: "/api/session/{sessionID}/input/{inputID}"
+}
+
+export type V2SessionInputErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * SessionNotFoundError
+   */
+  404: SessionNotFoundError
+}
+
+export type V2SessionInputError = V2SessionInputErrors[keyof V2SessionInputErrors]
+
+export type V2SessionInputResponses = {
+  /**
+   * Success
+   */
+  200: {
+    data: SessionInputStatus
+  }
+}
+
+export type V2SessionInputResponse = V2SessionInputResponses[keyof V2SessionInputResponses]
+
+export type V2SessionInputCancelData = {
+  body: {
+    origin: "user" | "framework" | "runtime_shutdown" | "stale" | "business"
+    reason: string
+  }
+  path: {
+    sessionID: string
+    inputID: string
+  }
+  query?: never
+  url: "/api/session/{sessionID}/input/{inputID}/cancel"
+}
+
+export type V2SessionInputCancelErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * SessionNotFoundError
+   */
+  404: SessionNotFoundError
+  /**
+   * ConflictError
+   */
+  409: ConflictError
+}
+
+export type V2SessionInputCancelError = V2SessionInputCancelErrors[keyof V2SessionInputCancelErrors]
+
+export type V2SessionInputCancelResponses = {
+  /**
+   * Success
+   */
+  200: {
+    data: SessionInputCancelResult
+  }
+}
+
+export type V2SessionInputCancelResponse = V2SessionInputCancelResponses[keyof V2SessionInputCancelResponses]
 
 export type V2SessionCompactData = {
   body?: never
@@ -12438,7 +12775,9 @@ export type V2SessionEventsResponses = {
 export type V2SessionEventsResponse = V2SessionEventsResponses[keyof V2SessionEventsResponses]
 
 export type V2SessionInterruptData = {
-  body?: never
+  body: {
+    turnID: string
+  }
   path: {
     sessionID: string
   }
@@ -12459,6 +12798,10 @@ export type V2SessionInterruptErrors = {
    * SessionNotFoundError
    */
   404: SessionNotFoundError
+  /**
+   * ConflictError
+   */
+  409: ConflictError
 }
 
 export type V2SessionInterruptError = V2SessionInterruptErrors[keyof V2SessionInterruptErrors]

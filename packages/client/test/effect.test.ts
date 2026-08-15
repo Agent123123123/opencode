@@ -145,7 +145,10 @@ test("session methods retain decoded Effect inputs and outputs", async () => {
     const events = yield* client.sessions
       .events({ sessionID: Session.ID.make("ses_test"), after: 0 })
       .pipe(Stream.runCollect)
-    yield* client.sessions.interrupt({ sessionID: Session.ID.make("ses_test") })
+    yield* client.sessions.interrupt({
+      sessionID: Session.ID.make("ses_test"),
+      turnID: SessionMessage.ID.make("msg_turn"),
+    })
     const message = yield* client.sessions.message({
       sessionID: Session.ID.make("ses_test"),
       messageID: SessionMessage.ID.make("msg_model"),
@@ -212,6 +215,7 @@ const session = {
     },
     title: "Test",
     location: { directory: "/tmp/project" },
+    execution: { managed: false, gateOpen: true },
   },
 }
 

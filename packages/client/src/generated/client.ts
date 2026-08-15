@@ -17,8 +17,16 @@ import type {
   SessionsSwitchAgentOutput,
   SessionsSwitchModelInput,
   SessionsSwitchModelOutput,
+  SessionsExecutionGateInput,
+  SessionsExecutionGateOutput,
+  SessionsSetInput,
+  SessionsSetOutput,
   SessionsPromptInput,
   SessionsPromptOutput,
+  SessionsInputInput,
+  SessionsInputOutput,
+  SessionsCancelInput,
+  SessionsCancelOutput,
   SessionsCompactInput,
   SessionsCompactOutput,
   SessionsWaitInput,
@@ -316,6 +324,7 @@ export function make(options: ClientOptions) {
               agent: input?.["agent"],
               model: input?.["model"],
               location: input?.["location"],
+              executionManaged: input?.["executionManaged"],
             },
             successStatus: 200,
             declaredStatuses: [400, 409, 503, 401],
@@ -381,12 +390,58 @@ export function make(options: ClientOptions) {
           },
           requestOptions,
         ),
+      executionGate: (input: SessionsExecutionGateInput, requestOptions?: RequestOptions) =>
+        request<{ readonly data: SessionsExecutionGateOutput }>(
+          {
+            method: "GET",
+            path: `/api/session/${encodeURIComponent(input.sessionID)}/execution-gate`,
+            successStatus: 200,
+            declaredStatuses: [404, 400, 401],
+            empty: false,
+          },
+          requestOptions,
+        ).then((value) => value.data),
+      set: (input: SessionsSetInput, requestOptions?: RequestOptions) =>
+        request<{ readonly data: SessionsSetOutput }>(
+          {
+            method: "POST",
+            path: `/api/session/${encodeURIComponent(input.sessionID)}/execution-gate`,
+            body: { open: input["open"], reason: input["reason"] },
+            successStatus: 200,
+            declaredStatuses: [404, 400, 401],
+            empty: false,
+          },
+          requestOptions,
+        ).then((value) => value.data),
       prompt: (input: SessionsPromptInput, requestOptions?: RequestOptions) =>
         request<{ readonly data: SessionsPromptOutput }>(
           {
             method: "POST",
             path: `/api/session/${encodeURIComponent(input.sessionID)}/prompt`,
             body: { id: input["id"], prompt: input["prompt"], delivery: input["delivery"], resume: input["resume"] },
+            successStatus: 200,
+            declaredStatuses: [409, 404, 400, 401],
+            empty: false,
+          },
+          requestOptions,
+        ).then((value) => value.data),
+      input: (input: SessionsInputInput, requestOptions?: RequestOptions) =>
+        request<{ readonly data: SessionsInputOutput }>(
+          {
+            method: "GET",
+            path: `/api/session/${encodeURIComponent(input.sessionID)}/input/${encodeURIComponent(input.inputID)}`,
+            successStatus: 200,
+            declaredStatuses: [404, 400, 401],
+            empty: false,
+          },
+          requestOptions,
+        ).then((value) => value.data),
+      cancel: (input: SessionsCancelInput, requestOptions?: RequestOptions) =>
+        request<{ readonly data: SessionsCancelOutput }>(
+          {
+            method: "POST",
+            path: `/api/session/${encodeURIComponent(input.sessionID)}/input/${encodeURIComponent(input.inputID)}/cancel`,
+            body: { origin: input["origin"], reason: input["reason"] },
             successStatus: 200,
             declaredStatuses: [409, 404, 400, 401],
             empty: false,
@@ -489,8 +544,9 @@ export function make(options: ClientOptions) {
           {
             method: "POST",
             path: `/api/session/${encodeURIComponent(input.sessionID)}/interrupt`,
+            body: { turnID: input["turnID"] },
             successStatus: 204,
-            declaredStatuses: [404, 400, 401],
+            declaredStatuses: [409, 404, 400, 401],
             empty: true,
           },
           requestOptions,

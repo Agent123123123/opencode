@@ -344,10 +344,18 @@ import type {
   V2SessionCreateResponses,
   V2SessionEventsErrors,
   V2SessionEventsResponses,
+  V2SessionExecutionGateErrors,
+  V2SessionExecutionGateResponses,
+  V2SessionExecutionGateSetErrors,
+  V2SessionExecutionGateSetResponses,
   V2SessionGetErrors,
   V2SessionGetResponses,
   V2SessionHistoryErrors,
   V2SessionHistoryResponses,
+  V2SessionInputCancelErrors,
+  V2SessionInputCancelResponses,
+  V2SessionInputErrors,
+  V2SessionInputResponses,
   V2SessionInterruptErrors,
   V2SessionInterruptResponses,
   V2SessionListErrors,
@@ -5086,6 +5094,94 @@ export class Agent extends HeyApiClient {
   }
 }
 
+export class ExecutionGate extends HeyApiClient {
+  /**
+   * Set session execution gate
+   *
+   * Durably open or close promotion for a managed session.
+   */
+  public set<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      open?: boolean
+      reason?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "body", key: "open" },
+            { in: "body", key: "reason" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      V2SessionExecutionGateSetResponses,
+      V2SessionExecutionGateSetErrors,
+      ThrowOnError
+    >({
+      url: "/api/session/{sessionID}/execution-gate",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+}
+
+export class Input extends HeyApiClient {
+  /**
+   * Cancel durable session input
+   *
+   * Persist an idempotent tombstone before promotion or report too_late for an already promoted input.
+   */
+  public cancel<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      inputID: string
+      origin?: "user" | "framework" | "runtime_shutdown" | "stale" | "business"
+      reason?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "path", key: "inputID" },
+            { in: "body", key: "origin" },
+            { in: "body", key: "reason" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      V2SessionInputCancelResponses,
+      V2SessionInputCancelErrors,
+      ThrowOnError
+    >({
+      url: "/api/session/{sessionID}/input/{inputID}/cancel",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+}
+
 export class Revert extends HeyApiClient {
   /**
    * Stage session revert
@@ -5480,6 +5576,7 @@ export class Session3 extends HeyApiClient {
       agent?: string
       model?: ModelRef
       location?: LocationRef
+      executionManaged?: boolean
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -5492,6 +5589,7 @@ export class Session3 extends HeyApiClient {
             { in: "body", key: "agent" },
             { in: "body", key: "model" },
             { in: "body", key: "location" },
+            { in: "body", key: "executionManaged" },
           ],
         },
       ],
@@ -5653,6 +5751,29 @@ export class Session3 extends HeyApiClient {
   }
 
   /**
+   * Inspect session execution gate
+   *
+   * Read the durable promotion gate for a managed session.
+   */
+  public executionGate<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ in: "path", key: "sessionID" }] }])
+    return (options?.client ?? this.client).get<
+      V2SessionExecutionGateResponses,
+      V2SessionExecutionGateErrors,
+      ThrowOnError
+    >({
+      url: "/api/session/{sessionID}/execution-gate",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
    * Send message
    *
    * Durably admit one session input and schedule agent-loop execution unless resume is false.
@@ -5690,6 +5811,36 @@ export class Session3 extends HeyApiClient {
         ...options?.headers,
         ...params.headers,
       },
+    })
+  }
+
+  /**
+   * Inspect durable session input
+   *
+   * Read exact admitted, promoted, canceled, or missing state for one stable input ID.
+   */
+  public input<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      inputID: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "path", key: "inputID" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<V2SessionInputResponses, V2SessionInputErrors, ThrowOnError>({
+      url: "/api/session/{sessionID}/input/{inputID}",
+      ...options,
+      ...params,
     })
   }
 
@@ -5815,19 +5966,35 @@ export class Session3 extends HeyApiClient {
   /**
    * Interrupt session execution
    *
-   * Interrupt active execution owned by this OpenCode process. Idle interruption is a no-op.
+   * Interrupt only the exact active turn; stale or idle identities are rejected.
    */
   public interrupt<ThrowOnError extends boolean = false>(
     parameters: {
       sessionID: string
+      turnID?: string
     },
     options?: Options<never, ThrowOnError>,
   ) {
-    const params = buildClientParams([parameters], [{ args: [{ in: "path", key: "sessionID" }] }])
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "body", key: "turnID" },
+          ],
+        },
+      ],
+    )
     return (options?.client ?? this.client).post<V2SessionInterruptResponses, V2SessionInterruptErrors, ThrowOnError>({
       url: "/api/session/{sessionID}/interrupt",
       ...options,
       ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
     })
   }
 
@@ -5893,6 +6060,16 @@ export class Session3 extends HeyApiClient {
       ...options,
       ...params,
     })
+  }
+
+  private _executionGate?: ExecutionGate
+  get executionGate2(): ExecutionGate {
+    return (this._executionGate ??= new ExecutionGate({ client: this.client }))
+  }
+
+  private _input?: Input
+  get input2(): Input {
+    return (this._input ??= new Input({ client: this.client }))
   }
 
   private _revert?: Revert

@@ -262,6 +262,7 @@ export type SessionsListOutput = {
         readonly patch: string
       }>
     }
+    readonly execution: { readonly managed: boolean; readonly gateOpen: boolean }
   }>
   readonly cursor: { readonly previous?: string | null; readonly next?: string | null }
 }
@@ -272,25 +273,36 @@ export type SessionsCreateInput = {
     readonly agent?: string | null
     readonly model?: { readonly id: string; readonly providerID: string; readonly variant?: string } | null
     readonly location?: { readonly directory: string; readonly workspaceID?: string } | null
+    readonly executionManaged?: boolean | null
   }["id"]
   readonly agent?: {
     readonly id?: string | null
     readonly agent?: string | null
     readonly model?: { readonly id: string; readonly providerID: string; readonly variant?: string } | null
     readonly location?: { readonly directory: string; readonly workspaceID?: string } | null
+    readonly executionManaged?: boolean | null
   }["agent"]
   readonly model?: {
     readonly id?: string | null
     readonly agent?: string | null
     readonly model?: { readonly id: string; readonly providerID: string; readonly variant?: string } | null
     readonly location?: { readonly directory: string; readonly workspaceID?: string } | null
+    readonly executionManaged?: boolean | null
   }["model"]
   readonly location?: {
     readonly id?: string | null
     readonly agent?: string | null
     readonly model?: { readonly id: string; readonly providerID: string; readonly variant?: string } | null
     readonly location?: { readonly directory: string; readonly workspaceID?: string } | null
+    readonly executionManaged?: boolean | null
   }["location"]
+  readonly executionManaged?: {
+    readonly id?: string | null
+    readonly agent?: string | null
+    readonly model?: { readonly id: string; readonly providerID: string; readonly variant?: string } | null
+    readonly location?: { readonly directory: string; readonly workspaceID?: string } | null
+    readonly executionManaged?: boolean | null
+  }["executionManaged"]
 }
 
 export type SessionsCreateOutput = {
@@ -324,6 +336,7 @@ export type SessionsCreateOutput = {
         readonly patch: string
       }>
     }
+    readonly execution: { readonly managed: boolean; readonly gateOpen: boolean }
   }
 }["data"]
 
@@ -362,6 +375,7 @@ export type SessionsGetOutput = {
         readonly patch: string
       }>
     }
+    readonly execution: { readonly managed: boolean; readonly gateOpen: boolean }
   }
 }["data"]
 
@@ -401,6 +415,7 @@ export type SessionsUpdateOutput = {
         readonly patch: string
       }>
     }
+    readonly execution: { readonly managed: boolean; readonly gateOpen: boolean }
   }
 }["data"]
 
@@ -419,6 +434,22 @@ export type SessionsSwitchModelInput = {
 }
 
 export type SessionsSwitchModelOutput = void
+
+export type SessionsExecutionGateInput = { readonly sessionID: { readonly sessionID: string }["sessionID"] }
+
+export type SessionsExecutionGateOutput = {
+  readonly data: { readonly managed: boolean; readonly open: boolean; readonly reason: string }
+}["data"]
+
+export type SessionsSetInput = {
+  readonly sessionID: { readonly sessionID: string }["sessionID"]
+  readonly open: { readonly open: boolean; readonly reason: string }["open"]
+  readonly reason: { readonly open: boolean; readonly reason: string }["reason"]
+}
+
+export type SessionsSetOutput = {
+  readonly data: { readonly managed: boolean; readonly open: boolean; readonly reason: string }
+}["data"]
 
 export type SessionsPromptInput = {
   readonly sessionID: { readonly sessionID: string }["sessionID"]
@@ -519,6 +550,223 @@ export type SessionsPromptOutput = {
     readonly timeCreated: number
     readonly promotedSeq?: number
   }
+}["data"]
+
+export type SessionsInputInput = {
+  readonly sessionID: { readonly sessionID: string; readonly inputID: string }["sessionID"]
+  readonly inputID: { readonly sessionID: string; readonly inputID: string }["inputID"]
+}
+
+export type SessionsInputOutput = {
+  readonly data:
+    | { readonly state: "missing" }
+    | {
+        readonly state: "admitted"
+        readonly input: {
+          readonly admittedSeq: number
+          readonly id: string
+          readonly sessionID: string
+          readonly prompt: {
+            readonly text: string
+            readonly files?: ReadonlyArray<{
+              readonly uri: string
+              readonly mime: string
+              readonly name?: string
+              readonly description?: string
+              readonly source?: { readonly start: number; readonly end: number; readonly text: string }
+            }>
+            readonly agents?: ReadonlyArray<{
+              readonly name: string
+              readonly source?: { readonly start: number; readonly end: number; readonly text: string }
+            }>
+          }
+          readonly delivery: "steer" | "queue"
+          readonly timeCreated: number
+          readonly promotedSeq?: number
+        }
+      }
+    | {
+        readonly state: "promoted"
+        readonly input: {
+          readonly admittedSeq: number
+          readonly id: string
+          readonly sessionID: string
+          readonly prompt: {
+            readonly text: string
+            readonly files?: ReadonlyArray<{
+              readonly uri: string
+              readonly mime: string
+              readonly name?: string
+              readonly description?: string
+              readonly source?: { readonly start: number; readonly end: number; readonly text: string }
+            }>
+            readonly agents?: ReadonlyArray<{
+              readonly name: string
+              readonly source?: { readonly start: number; readonly end: number; readonly text: string }
+            }>
+          }
+          readonly delivery: "steer" | "queue"
+          readonly timeCreated: number
+          readonly promotedSeq?: number
+        }
+      }
+    | {
+        readonly state: "canceled"
+        readonly id: string
+        readonly sessionID: string
+        readonly cancelSeq: number
+        readonly origin: "user" | "framework" | "runtime_shutdown" | "stale" | "business"
+        readonly reason: string
+        readonly timeCanceled: number
+        readonly inputVisibility: "missing" | "admitted_unpromoted"
+      }
+}["data"]
+
+export type SessionsCancelInput = {
+  readonly sessionID: { readonly sessionID: string; readonly inputID: string }["sessionID"]
+  readonly inputID: { readonly sessionID: string; readonly inputID: string }["inputID"]
+  readonly origin: {
+    readonly origin: "user" | "framework" | "runtime_shutdown" | "stale" | "business"
+    readonly reason: string
+  }["origin"]
+  readonly reason: {
+    readonly origin: "user" | "framework" | "runtime_shutdown" | "stale" | "business"
+    readonly reason: string
+  }["reason"]
+}
+
+export type SessionsCancelOutput = {
+  readonly data:
+    | {
+        readonly outcome: "canceled"
+        readonly status:
+          | { readonly state: "missing" }
+          | {
+              readonly state: "admitted"
+              readonly input: {
+                readonly admittedSeq: number
+                readonly id: string
+                readonly sessionID: string
+                readonly prompt: {
+                  readonly text: string
+                  readonly files?: ReadonlyArray<{
+                    readonly uri: string
+                    readonly mime: string
+                    readonly name?: string
+                    readonly description?: string
+                    readonly source?: { readonly start: number; readonly end: number; readonly text: string }
+                  }>
+                  readonly agents?: ReadonlyArray<{
+                    readonly name: string
+                    readonly source?: { readonly start: number; readonly end: number; readonly text: string }
+                  }>
+                }
+                readonly delivery: "steer" | "queue"
+                readonly timeCreated: number
+                readonly promotedSeq?: number
+              }
+            }
+          | {
+              readonly state: "promoted"
+              readonly input: {
+                readonly admittedSeq: number
+                readonly id: string
+                readonly sessionID: string
+                readonly prompt: {
+                  readonly text: string
+                  readonly files?: ReadonlyArray<{
+                    readonly uri: string
+                    readonly mime: string
+                    readonly name?: string
+                    readonly description?: string
+                    readonly source?: { readonly start: number; readonly end: number; readonly text: string }
+                  }>
+                  readonly agents?: ReadonlyArray<{
+                    readonly name: string
+                    readonly source?: { readonly start: number; readonly end: number; readonly text: string }
+                  }>
+                }
+                readonly delivery: "steer" | "queue"
+                readonly timeCreated: number
+                readonly promotedSeq?: number
+              }
+            }
+          | {
+              readonly state: "canceled"
+              readonly id: string
+              readonly sessionID: string
+              readonly cancelSeq: number
+              readonly origin: "user" | "framework" | "runtime_shutdown" | "stale" | "business"
+              readonly reason: string
+              readonly timeCanceled: number
+              readonly inputVisibility: "missing" | "admitted_unpromoted"
+            }
+      }
+    | {
+        readonly outcome: "too_late"
+        readonly status:
+          | { readonly state: "missing" }
+          | {
+              readonly state: "admitted"
+              readonly input: {
+                readonly admittedSeq: number
+                readonly id: string
+                readonly sessionID: string
+                readonly prompt: {
+                  readonly text: string
+                  readonly files?: ReadonlyArray<{
+                    readonly uri: string
+                    readonly mime: string
+                    readonly name?: string
+                    readonly description?: string
+                    readonly source?: { readonly start: number; readonly end: number; readonly text: string }
+                  }>
+                  readonly agents?: ReadonlyArray<{
+                    readonly name: string
+                    readonly source?: { readonly start: number; readonly end: number; readonly text: string }
+                  }>
+                }
+                readonly delivery: "steer" | "queue"
+                readonly timeCreated: number
+                readonly promotedSeq?: number
+              }
+            }
+          | {
+              readonly state: "promoted"
+              readonly input: {
+                readonly admittedSeq: number
+                readonly id: string
+                readonly sessionID: string
+                readonly prompt: {
+                  readonly text: string
+                  readonly files?: ReadonlyArray<{
+                    readonly uri: string
+                    readonly mime: string
+                    readonly name?: string
+                    readonly description?: string
+                    readonly source?: { readonly start: number; readonly end: number; readonly text: string }
+                  }>
+                  readonly agents?: ReadonlyArray<{
+                    readonly name: string
+                    readonly source?: { readonly start: number; readonly end: number; readonly text: string }
+                  }>
+                }
+                readonly delivery: "steer" | "queue"
+                readonly timeCreated: number
+                readonly promotedSeq?: number
+              }
+            }
+          | {
+              readonly state: "canceled"
+              readonly id: string
+              readonly sessionID: string
+              readonly cancelSeq: number
+              readonly origin: "user" | "framework" | "runtime_shutdown" | "stale" | "business"
+              readonly reason: string
+              readonly timeCanceled: number
+              readonly inputVisibility: "missing" | "admitted_unpromoted"
+            }
+      }
 }["data"]
 
 export type SessionsCompactInput = { readonly sessionID: { readonly sessionID: string }["sessionID"] }
@@ -834,6 +1082,34 @@ export type SessionsHistoryOutput = {
             }>
           }
           readonly delivery: "steer" | "queue"
+        }
+      }
+    | {
+        readonly id: string
+        readonly metadata?: { readonly [x: string]: JsonValue }
+        readonly type: "session.next.prompt.canceled"
+        readonly durable?: { readonly aggregateID: string; readonly seq: number; readonly version: number }
+        readonly location?: { readonly directory: string; readonly workspaceID?: string }
+        readonly data: {
+          readonly timestamp: number
+          readonly sessionID: string
+          readonly messageID: string
+          readonly origin: "user" | "framework" | "runtime_shutdown" | "stale" | "business"
+          readonly reason: string
+          readonly inputVisibility: "missing" | "admitted_unpromoted"
+        }
+      }
+    | {
+        readonly id: string
+        readonly metadata?: { readonly [x: string]: JsonValue }
+        readonly type: "session.next.execution_gate.changed"
+        readonly durable?: { readonly aggregateID: string; readonly seq: number; readonly version: number }
+        readonly location?: { readonly directory: string; readonly workspaceID?: string }
+        readonly data: {
+          readonly timestamp: number
+          readonly sessionID: string
+          readonly open: boolean
+          readonly reason: string
         }
       }
     | {
@@ -1387,6 +1663,34 @@ export type SessionsEventsOutput =
   | {
       readonly id: string
       readonly metadata?: { readonly [x: string]: unknown }
+      readonly type: "session.next.prompt.canceled"
+      readonly durable?: { readonly aggregateID: string; readonly seq: number; readonly version: number }
+      readonly location?: { readonly directory: string; readonly workspaceID?: string }
+      readonly data: {
+        readonly timestamp: number
+        readonly sessionID: string
+        readonly messageID: string
+        readonly origin: "user" | "framework" | "runtime_shutdown" | "stale" | "business"
+        readonly reason: string
+        readonly inputVisibility: "missing" | "admitted_unpromoted"
+      }
+    }
+  | {
+      readonly id: string
+      readonly metadata?: { readonly [x: string]: unknown }
+      readonly type: "session.next.execution_gate.changed"
+      readonly durable?: { readonly aggregateID: string; readonly seq: number; readonly version: number }
+      readonly location?: { readonly directory: string; readonly workspaceID?: string }
+      readonly data: {
+        readonly timestamp: number
+        readonly sessionID: string
+        readonly open: boolean
+        readonly reason: string
+      }
+    }
+  | {
+      readonly id: string
+      readonly metadata?: { readonly [x: string]: unknown }
       readonly type: "session.next.context.updated"
       readonly durable?: { readonly aggregateID: string; readonly seq: number; readonly version: number }
       readonly location?: { readonly directory: string; readonly workspaceID?: string }
@@ -1810,7 +2114,10 @@ export type SessionsEventsOutput =
       readonly data: { readonly timestamp: number; readonly sessionID: string; readonly messageID: string }
     }
 
-export type SessionsInterruptInput = { readonly sessionID: { readonly sessionID: string }["sessionID"] }
+export type SessionsInterruptInput = {
+  readonly sessionID: { readonly sessionID: string }["sessionID"]
+  readonly turnID: { readonly turnID: string }["turnID"]
+}
 
 export type SessionsInterruptOutput = void
 
