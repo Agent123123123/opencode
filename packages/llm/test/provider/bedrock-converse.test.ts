@@ -366,6 +366,7 @@ describe("Bedrock Converse route", () => {
       expect(response.events.find((event) => event.type === "provider-error")).toEqual({
         type: "provider-error",
         message: "Slow down",
+        kind: "rate_limit",
         retryable: true,
       })
     }),
@@ -382,6 +383,7 @@ describe("Bedrock Converse route", () => {
       expect(response.events.find((event) => event.type === "provider-error")).toEqual({
         type: "provider-error",
         message: "Input is too long for requested model",
+        kind: "invalid_request",
         classification: "context-overflow",
         retryable: false,
       })

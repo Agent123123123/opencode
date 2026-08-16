@@ -1,8 +1,11 @@
 import { Cause, Context, Effect, Layer, Queue, Stream } from "effect"
 import { Headers } from "effect/unstable/http"
-import { LLMError, TransportReason } from "../../schema"
+import { InvalidProviderOutputReason, InvalidRequestReason, LLMError, TransportReason } from "../../schema"
 import * as HttpTransport from "./http"
 import type { Transport } from "./index"
+
+const retryableKinds = new Set(["open", "message", "write"])
+const retryableCloseCodes = new Set([1001, 1006, 1011, 1012, 1013, 1014])
 
 export interface WebSocketRequest {
   readonly url: string
@@ -29,12 +32,41 @@ export class Service extends Context.Service<Service, Interface>()("@opencode/LL
 const transportError = (
   method: string,
   message: string,
-  input: { readonly url?: string; readonly kind?: string } = {},
-) =>
+  input: { readonly url?: string; readonly kind?: string; readonly canRetry?: boolean } = {},
+) => {
+  const canRetry = input.canRetry ?? (input.kind !== undefined && retryableKinds.has(input.kind))
+  return new LLMError({
+    module: "WebSocketExecutor",
+    method,
+    reason: new TransportReason({ message, url: input.url, kind: input.kind, canRetry }),
+    attemptCount: 1,
+    retryExhausted: canRetry,
+  })
+}
+
+const closeError = (method: string, message: string, input: { readonly url: string; readonly code: number }) =>
+  transportError(method, message, {
+    url: input.url,
+    kind: "close",
+    canRetry: retryableCloseCodes.has(input.code),
+  })
+
+const invalidRequestError = (method: string, message: string) =>
   new LLMError({
     module: "WebSocketExecutor",
     method,
-    reason: new TransportReason({ message, url: input.url, kind: input.kind }),
+    reason: new InvalidRequestReason({ message }),
+    attemptCount: 1,
+    retryExhausted: false,
+  })
+
+const invalidOutputError = (method: string, message: string) =>
+  new LLMError({
+    module: "WebSocketExecutor",
+    method,
+    reason: new InvalidProviderOutputReason({ message }),
+    attemptCount: 1,
+    retryExhausted: false,
   })
 
 const eventMessage = (event: Event) => {
@@ -87,9 +119,9 @@ const waitOpen = (ws: globalThis.WebSocket, input: WebSocketRequest) => {
       cleanup()
       resume(
         Effect.fail(
-          transportError("open", `WebSocket closed before opening with code ${event.code}`, {
+          closeError("open", `WebSocket closed before opening with code ${event.code}`, {
             url: input.url,
-            kind: "open",
+            code: event.code,
           }),
         ),
       )
@@ -115,11 +147,7 @@ const webSocketUrl = (value: string) =>
       }
       throw new Error(`Unsupported WebSocket URL protocol ${url.protocol}`)
     },
-    catch: (error) =>
-      transportError("prepare", error instanceof Error ? error.message : "Invalid WebSocket URL", {
-        url: value,
-        kind: "websocket",
-      }),
+    catch: (error) => invalidRequestError("prepare", error instanceof Error ? error.message : "Invalid WebSocket URL"),
   })
 
 export const open = (input: WebSocketRequest) =>
@@ -149,9 +177,7 @@ export const fromWebSocket = (
       if (binary) return Queue.offerUnsafe(messages, binary)
       Queue.failCauseUnsafe(
         messages,
-        Cause.fail(
-          transportError("message", "Unsupported WebSocket message payload", { url: input.url, kind: "message" }),
-        ),
+        Cause.fail(invalidOutputError("message", "Unsupported WebSocket message payload")),
       )
     }
     const onError = (event: Event) => {
@@ -167,7 +193,7 @@ export const fromWebSocket = (
       Queue.failCauseUnsafe(
         messages,
         Cause.fail(
-          transportError("message", `WebSocket closed with code ${event.code}`, { url: input.url, kind: "close" }),
+          closeError("message", `WebSocket closed with code ${event.code}`, { url: input.url, code: event.code }),
         ),
       )
     }
@@ -240,12 +266,7 @@ export const json = <Body, Message>(input: JsonInput<Body, Message>): JsonTransp
   frames: (prepared, _request, runtime) => {
     const webSocket = runtime.webSocket
     if (!webSocket) {
-      return Stream.fail(
-        transportError("json", "WebSocket JSON transport requires WebSocketExecutor.Service", {
-          url: prepared.url,
-          kind: "websocket",
-        }),
-      )
+      return Stream.fail(invalidRequestError("json", "WebSocket JSON transport requires WebSocketExecutor.Service"))
     }
     const decoder = new TextDecoder()
     return Stream.unwrap(

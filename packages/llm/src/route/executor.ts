@@ -22,7 +22,7 @@ import {
   TransportReason,
   UnknownProviderReason,
 } from "../schema"
-import { isContextOverflow } from "../provider-error"
+import { isContentPolicyViolation, isContextOverflow, isQuotaExceeded } from "../provider-error"
 
 export interface Interface {
   readonly execute: (
@@ -44,12 +44,7 @@ type TransportDiagnostic = {
   readonly message: string
 }
 
-const retryableTransportKinds = new Set<TransportDiagnostic["kind"]>([
-  "connection",
-  "dns",
-  "network",
-  "timeout",
-])
+const retryableTransportKinds = new Set<TransportDiagnostic["kind"]>(["connection", "dns", "network", "timeout"])
 
 // One source of truth for what counts as a sensitive name across headers,
 // URL query keys, and field names embedded inside request/response bodies.
@@ -101,7 +96,14 @@ const requestId = (headers: Record<string, string>) => {
   )
 }
 
-const retryableStatus = (status: number) => status === 429 || status === 503 || status === 504 || status === 529
+const retryableStatus = (status: number) => status === 408 || status === 409 || status === 429 || status >= 500
+
+const retryDirective = (headers: Record<string, string>) => {
+  const value = headers["x-should-retry"]?.trim().toLowerCase()
+  if (value === "true") return true
+  if (value === "false") return false
+  return undefined
+}
 
 const retryAfterMs = (headers: Record<string, string>) => {
   const millis = Number(headers["retry-after-ms"])
@@ -240,11 +242,15 @@ const statusReason = (input: {
   readonly message: string
   readonly retryAfterMs?: number | undefined
   readonly rateLimit?: HttpRateLimitDetails | undefined
+  readonly canRetry?: boolean | undefined
   readonly http: HttpContext
 }) => {
   const body = input.http.body ?? ""
-  if (/content[-_\s]?policy|content_filter|safety/i.test(body)) {
+  if (isContentPolicyViolation(body)) {
     return new ContentPolicyReason({ message: input.message, http: input.http })
+  }
+  if (isQuotaExceeded(body)) {
+    return new QuotaExceededReason({ message: input.message, http: input.http })
   }
   if (input.status === 401) {
     return new AuthenticationReason({ message: input.message, kind: "invalid", http: input.http })
@@ -252,36 +258,41 @@ const statusReason = (input: {
   if (input.status === 403) {
     return new AuthenticationReason({ message: input.message, kind: "insufficient-permissions", http: input.http })
   }
+  if (input.status === 402) {
+    return new QuotaExceededReason({ message: input.message, http: input.http })
+  }
   if (input.status === 429) {
-    if (/insufficient[-_\s]?quota|quota[-_\s]?exceeded/i.test(body)) {
-      return new QuotaExceededReason({ message: input.message, http: input.http })
-    }
     return new RateLimitReason({
       message: input.message,
       retryAfterMs: input.retryAfterMs,
       rateLimit: input.rateLimit,
       http: input.http,
+      canRetry: input.canRetry,
     })
   }
-  if (
-    input.status === 400 ||
-    input.status === 404 ||
-    input.status === 409 ||
-    input.status === 413 ||
-    input.status === 422
-  ) {
+  if (input.canRetry === true) {
+    return new ProviderInternalReason({
+      message: input.message,
+      status: input.status,
+      retryAfterMs: input.retryAfterMs,
+      http: input.http,
+      canRetry: true,
+    })
+  }
+  if (input.status === 400 || input.status === 404 || input.status === 413 || input.status === 422) {
     return new InvalidRequestReason({
       message: input.message,
       classification: isContextOverflow(body) ? "context-overflow" : undefined,
       http: input.http,
     })
   }
-  if (input.status >= 500 || retryableStatus(input.status)) {
+  if (retryableStatus(input.status)) {
     return new ProviderInternalReason({
       message: input.message,
       status: input.status,
       retryAfterMs: input.retryAfterMs,
       http: input.http,
+      canRetry: input.canRetry,
     })
   }
   return new UnknownProviderReason({ message: input.message, status: input.status, http: input.http })
@@ -305,6 +316,7 @@ const statusError =
           message: providerMessage(response.status, details),
           retryAfterMs: retryAfter,
           rateLimit,
+          canRetry: retryDirective(headers),
           http: responseHttp({
             request,
             response,
@@ -358,14 +370,20 @@ const toHttpError = (redactedNames: ReadonlyArray<string | RegExp>) => (error: u
   return transportError({
     message: `The HTTP client failed before a provider response was available (${error.reason._tag}).`,
     kind: "unknown",
-    code: `HTTP_CLIENT_${error.reason._tag.replace(/Error$/, "").replace(/([a-z])([A-Z])/g, "$1_$2").toUpperCase()}`,
+    code: `HTTP_CLIENT_${error.reason._tag
+      .replace(/Error$/, "")
+      .replace(/([a-z])([A-Z])/g, "$1_$2")
+      .toUpperCase()}`,
     request,
   })
 }
 
-const transportDiagnostic = (error: unknown): TransportDiagnostic => {
+const transportDiagnostic = (error: unknown, phase: "request" | "response-stream" = "request"): TransportDiagnostic => {
   const code = transportCode(error)
   if (!code) {
+    if (phase === "response-stream") {
+      return { kind: "network", message: "The provider response stream could not be read to completion." }
+    }
     return { kind: "unknown", message: "HTTP transport failed before a provider response was received." }
   }
   if (code === "UND_ERR_HEADERS_TIMEOUT") {
@@ -401,6 +419,37 @@ const transportDiagnostic = (error: unknown): TransportDiagnostic => {
     return { kind: "aborted", code, message: "The HTTP transport was aborted before the response completed." }
   }
   return { kind: "network", code, message: `HTTP transport failed with code ${code}.` }
+}
+
+export const responseStreamFailure = (input: {
+  readonly error: unknown
+  readonly request: HttpClientRequest.HttpClientRequest
+  readonly response: HttpClientResponse.HttpClientResponse
+  readonly redactedNames: ReadonlyArray<string | RegExp>
+}) => {
+  const diagnostic = transportDiagnostic(input.error, "response-stream")
+  const canRetry = retryableTransportKinds.has(diagnostic.kind)
+  const headers = normalizedHeaders(input.response.headers)
+  return new LLMError({
+    module: "RequestExecutor",
+    method: "stream",
+    reason: new TransportReason({
+      ...diagnostic,
+      url: redactUrl(input.request.url),
+      http: responseHttp({
+        request: input.request,
+        response: input.response,
+        redactedNames: input.redactedNames,
+        body: {},
+        requestId: requestId(headers),
+      }),
+      canRetry,
+    }),
+    attemptCount: 1,
+    // A response body has already started. The RequestExecutor cannot safely
+    // replay it in place, so the ordinary owning Attempt receives the retry.
+    retryExhausted: canRetry,
+  })
 }
 
 const transportCode = (value: unknown, seen = new Set<object>(), depth = 0): string | undefined => {
@@ -443,13 +492,15 @@ const retryStatusFailures = <A, R>(
 ): Effect.Effect<A, LLMError, R> =>
   Effect.catchTag(effect, "LLM.Error", (error): Effect.Effect<A, LLMError, R> => {
     if (!error.retryable || retries <= 0) {
-      return Effect.fail(new LLMError({
-        module: error.module,
-        method: error.method,
-        reason: error.reason,
-        attemptCount: attempt + 1,
-        retryExhausted: error.retryable && retries <= 0,
-      }))
+      return Effect.fail(
+        new LLMError({
+          module: error.module,
+          method: error.method,
+          reason: error.reason,
+          attemptCount: attempt + 1,
+          retryExhausted: error.retryable && retries <= 0,
+        }),
+      )
     }
     return retryDelay(error, attempt).pipe(
       Effect.flatMap((delay) => Effect.sleep(delay)),

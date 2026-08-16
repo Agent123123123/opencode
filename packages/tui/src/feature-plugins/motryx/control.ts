@@ -77,6 +77,15 @@ export type MotryxWorkflowProjection = {
   goal: string
 }
 
+export type MotryxCapacityProjection = {
+  maxConcurrentLanes: number
+  activeLaneIDs: string[]
+  activeCount: number
+  available: number | null
+  capacityReached: boolean
+  readyLaneIDs: string[]
+}
+
 export type MotryxRuntimeTargetProjection = {
   slotID: string
   instanceID: string
@@ -99,6 +108,7 @@ export type MotryxLaneProjection = {
   checkerRuntimeReadiness: string
   coordinatorRuntime?: MotryxRuntimeTargetProjection
   checkerRuntime?: MotryxRuntimeTargetProjection
+  schedulingPhase?: "READY" | "PREPARING"
   runPhase?: "EXECUTING" | "WAITING_RESPONSE" | "RESUME_QUEUED"
   requestMessageID?: string
   requestDeadlineAt?: number
@@ -288,6 +298,7 @@ export type MotryxControlSnapshot = {
   route: MotryxRouteProof
   binding: MotryxBindingProof
   workflow?: MotryxWorkflowProjection
+  capacity: MotryxCapacityProjection
   lanes: MotryxLaneProjection[]
   agents: MotryxAgentProjection[]
   artifacts: MotryxArtifactProjection[]
@@ -603,6 +614,7 @@ export function parseMotryxControlSnapshot(value: unknown, expected: MotryxContr
     route,
     binding,
     workflow: root.workflow === undefined ? undefined : parseWorkflow(root.workflow),
+    capacity: parseCapacity(root.capacity),
     lanes: requiredArray(root.lanes, "snapshot.lanes", parseLane),
     agents: requiredArray(root.agents, "snapshot.agents", parseAgent),
     artifacts: requiredArray(root.artifacts, "snapshot.artifacts", parseArtifact),
@@ -686,6 +698,29 @@ function parseWorkflow(value: unknown): MotryxWorkflowProjection {
   }
 }
 
+function parseCapacity(value: unknown): MotryxCapacityProjection {
+  const item = requiredRecord(value, "snapshot.capacity")
+  const maxConcurrentLanes = nonNegativeInteger(item.maxConcurrentLanes, "snapshot.capacity.maxConcurrentLanes")
+  const activeLaneIDs = stringArray(item.activeLaneIDs, "snapshot.capacity.activeLaneIDs")
+  const activeCount = nonNegativeInteger(item.activeCount, "snapshot.capacity.activeCount")
+  const available = item.available === null
+    ? null
+    : nonNegativeInteger(item.available, "snapshot.capacity.available")
+  const capacityReached = requiredBoolean(item.capacityReached, "snapshot.capacity.capacityReached")
+  const readyLaneIDs = stringArray(item.readyLaneIDs, "snapshot.capacity.readyLaneIDs")
+  if (activeCount !== activeLaneIDs.length) fail("snapshot.capacity activeCount does not match activeLaneIDs")
+  if (maxConcurrentLanes === 0 && (available !== null || capacityReached)) {
+    fail("snapshot.capacity unlimited mode is inconsistent")
+  }
+  if (maxConcurrentLanes > 0 && available !== Math.max(0, maxConcurrentLanes - activeCount)) {
+    fail("snapshot.capacity available does not match max and active count")
+  }
+  if (capacityReached !== (maxConcurrentLanes > 0 && activeCount >= maxConcurrentLanes)) {
+    fail("snapshot.capacity capacityReached is inconsistent")
+  }
+  return { maxConcurrentLanes, activeLaneIDs, activeCount, available, capacityReached, readyLaneIDs }
+}
+
 function parseLane(value: unknown, label: string): MotryxLaneProjection {
   const item = requiredRecord(value, label)
   return compact({
@@ -707,6 +742,11 @@ function parseLane(value: unknown, label: string): MotryxLaneProjection {
     checkerRuntimeReadiness: requiredString(item.checkerRuntimeReadiness, `${label}.checkerRuntimeReadiness`),
     coordinatorRuntime: parseRuntimeTarget(item.coordinatorRuntime, `${label}.coordinatorRuntime`),
     checkerRuntime: parseRuntimeTarget(item.checkerRuntime, `${label}.checkerRuntime`),
+    schedulingPhase: optionalEnum(
+      item.schedulingPhase,
+      new Set(["READY", "PREPARING"] as const),
+      `${label}.schedulingPhase`,
+    ),
     runPhase: parseRunPhase(item.runPhase, `${label}.runPhase`),
     requestMessageID: optionalString(item.requestMessageID, `${label}.requestMessageID`),
     requestDeadlineAt: optionalFiniteNumber(item.requestDeadlineAt, `${label}.requestDeadlineAt`),

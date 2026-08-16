@@ -2,7 +2,7 @@ import { Schema } from "effect"
 import { ContentBlockID, FinishReason, ProtocolID, ProviderMetadata, RouteID, ToolCallID } from "./ids"
 import { ModelSchema } from "./options"
 import { Message, ToolCallPart, ToolOutput, ToolResultPart, ToolResultValue, type ContentPart } from "./messages"
-import { ProviderFailureClassification } from "./errors"
+import { ProviderFailureClassification, ProviderFailureKind } from "./errors"
 
 /**
  * Token usage reported by an LLM provider.
@@ -200,11 +200,19 @@ export type Finish = Schema.Schema.Type<typeof Finish>
 export const ProviderErrorEvent = Schema.Struct({
   type: Schema.tag("provider-error"),
   message: Schema.String,
+  kind: ProviderFailureKind,
   classification: Schema.optional(ProviderFailureClassification),
-  retryable: Schema.optional(Schema.Boolean),
+  retryable: Schema.Boolean,
   providerMetadata: Schema.optional(ProviderMetadata),
 }).annotate({ identifier: "LLM.Event.ProviderError" })
 export type ProviderErrorEvent = Schema.Schema.Type<typeof ProviderErrorEvent>
+export type ProviderErrorInput = {
+  readonly message: string
+  readonly kind?: ProviderFailureKind
+  readonly classification?: ProviderFailureClassification
+  readonly retryable?: boolean
+  readonly providerMetadata?: ProviderMetadata
+}
 
 const llmEventTagged = Schema.Union([
   StepStart,
@@ -272,7 +280,12 @@ export const LLMEvent = Object.assign(llmEventTagged, {
       ...input,
       usage: input.usage === undefined ? undefined : Usage.from(input.usage),
     }),
-  providerError: ProviderErrorEvent.make,
+  providerError: (input: ProviderErrorInput) =>
+    ProviderErrorEvent.make({
+      ...input,
+      kind: input.kind ?? (input.classification === "context-overflow" ? "invalid_request" : "unknown"),
+      retryable: input.retryable ?? false,
+    }),
   is: {
     stepStart: llmEventTagged.guards["step-start"],
     textStart: llmEventTagged.guards["text-start"],

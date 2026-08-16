@@ -74,7 +74,8 @@ const transportFailureLayer = (cause: unknown) =>
             new HttpClientError.HttpClientError({
               reason: new HttpClientError.TransportError({ request, cause }),
             }),
-          )),
+          ),
+        ),
       ),
     ),
   )
@@ -110,9 +111,7 @@ describe("RequestExecutor", () => {
       })
     }).pipe(
       Effect.provide(
-        transportFailureLayer(
-          Object.assign(new Error("headers timed out"), { code: "UND_ERR_HEADERS_TIMEOUT" }),
-        ),
+        transportFailureLayer(Object.assign(new Error("headers timed out"), { code: "UND_ERR_HEADERS_TIMEOUT" })),
       ),
     ),
   )
@@ -378,7 +377,7 @@ describe("RequestExecutor", () => {
     ),
   )
 
-  it.effect("marks 504 and 529 status responses retryable", () =>
+  it.effect("marks standard transient HTTP status responses retryable", () =>
     Effect.gen(function* () {
       const failWith = (status: number) =>
         Effect.gen(function* () {
@@ -403,8 +402,88 @@ describe("RequestExecutor", () => {
           ),
         )
 
-      yield* failWith(504)
-      yield* failWith(529)
+      for (const status of [408, 409, 500, 504, 529]) yield* failWith(status)
+    }),
+  )
+
+  it.effect("does not retry exhausted subscription quota responses", () =>
+    Effect.gen(function* () {
+      const failWith = (status: number, body: string) =>
+        Effect.gen(function* () {
+          const attempts = yield* Ref.make(0)
+          return yield* Effect.gen(function* () {
+            const executor = yield* RequestExecutor.Service
+            const error = yield* executor.execute(request).pipe(Effect.flip)
+
+            expectLLMError(error)
+            expect(error.reason).toMatchObject({ _tag: "QuotaExceeded" })
+            expect(error.retryable).toBe(false)
+            expect(error.attemptCount).toBe(1)
+            expect(error.retryExhausted).toBe(false)
+            expect(yield* Ref.get(attempts)).toBe(1)
+          }).pipe(
+            Effect.provide(
+              countedResponsesLayer(attempts, [
+                new Response(body, { status, headers: { "retry-after-ms": "0" } }),
+                new Response("must not retry", { status: 200 }),
+              ]),
+            ),
+          )
+        })
+
+      yield* failWith(402, "payment required")
+      yield* failWith(400, '{"error":{"code":"insufficient_quota","message":"credit balance too low"}}')
+      yield* failWith(
+        429,
+        '{"error":{"code":"token_quota_exceeded","message":"Token Plan Person monthly quota limit exceeded","type":"quota_exceeded"}}',
+      )
+      yield* failWith(
+        429,
+        '{"type":"error","error":{"type":"rate_limit_error","message":"已达到 Token Plan 用量上限：请升级 Token Plan 套餐或购买积分补充用量。 (2056)"}}',
+      )
+    }),
+  )
+
+  it.effect("honors explicit provider retry directives", () =>
+    Effect.gen(function* () {
+      const noRetryAttempts = yield* Ref.make(0)
+      const noRetry = yield* Effect.gen(function* () {
+        const executor = yield* RequestExecutor.Service
+        return yield* executor.execute(request).pipe(Effect.flip)
+      }).pipe(
+        Effect.provide(
+          countedResponsesLayer(noRetryAttempts, [
+            new Response("do not retry", { status: 503, headers: { "x-should-retry": "false" } }),
+            new Response("must not retry", { status: 200 }),
+          ]),
+        ),
+      )
+      expectLLMError(noRetry)
+      expect(noRetry).toMatchObject({
+        reason: { _tag: "ProviderInternal", status: 503 },
+        retryable: false,
+        attemptCount: 1,
+        retryExhausted: false,
+      })
+      expect(yield* Ref.get(noRetryAttempts)).toBe(1)
+
+      const retryAttempts = yield* Ref.make(0)
+      const response = yield* Effect.gen(function* () {
+        const executor = yield* RequestExecutor.Service
+        return yield* executor.execute(request)
+      }).pipe(
+        Effect.provide(
+          countedResponsesLayer(retryAttempts, [
+            new Response("temporary bad request", {
+              status: 400,
+              headers: { "x-should-retry": "true", "retry-after-ms": "0" },
+            }),
+            new Response("ok", { status: 200 }),
+          ]),
+        ),
+      )
+      expect(response.status).toBe(200)
+      expect(yield* Ref.get(retryAttempts)).toBe(2)
     }),
   )
 

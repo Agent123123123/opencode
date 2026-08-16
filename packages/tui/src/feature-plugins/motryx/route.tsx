@@ -1113,6 +1113,14 @@ function FlowPanel(props: {
               {workflow().goal}
             </text>
           </box>
+          <text fg={props.snapshot.capacity.capacityReached ? props.api.theme.current.warning : props.api.theme.current.textMuted}>
+            worker lanes {props.snapshot.capacity.activeCount}/{props.snapshot.capacity.maxConcurrentLanes === 0
+              ? "unlimited"
+              : props.snapshot.capacity.maxConcurrentLanes}
+            {props.snapshot.capacity.readyLaneIDs.length > 0
+              ? ` · ready ${props.snapshot.capacity.readyLaneIDs.length}`
+              : ""}
+          </text>
           <scrollbox
             flexGrow={1}
             minHeight={0}
@@ -1149,7 +1157,7 @@ function LaneRow(props: {
   selected: boolean
   onPick: () => void
 }) {
-  const status = () => props.lane.status.toUpperCase()
+  const status = () => (props.lane.schedulingPhase ?? props.lane.status).toUpperCase()
   const attention = () => status() === "BLOCKED" || status() === "FAILED" || props.lane.pendingCheckSummary !== undefined
   return (
     <box
@@ -1626,7 +1634,10 @@ function statusColor(api: TuiPluginApi, phase: MotryxProjectionPhase) {
 function laneColor(api: TuiPluginApi, status: string) {
   if (status === "DONE") return api.theme.current.success
   if (status === "BLOCKED" || status === "FAILED") return api.theme.current.error
-  if (status === "PENDING" || status === "CHECKING" || status === "AWAITING_CHECK") return api.theme.current.warning
+  if (
+    status === "PENDING" || status === "CHECKING" || status === "AWAITING_CHECK" ||
+    status === "READY" || status === "PREPARING"
+  ) return api.theme.current.warning
   if (status === "WORKING") return api.theme.current.info
   return api.theme.current.textMuted
 }
@@ -1641,6 +1652,8 @@ const MOTRYX_KNOWN_LANE_STATUSES = new Set([
   "FAILED",
   "DONE",
   "WAIVED",
+  "READY",
+  "PREPARING",
 ])
 
 export function motryxLaneStatusLabel(status: string) {

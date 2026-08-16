@@ -6,6 +6,7 @@ import { Framing, type Framing as FramingDef } from "../framing"
 import type { Transport, TransportPrepareInput } from "./index"
 import * as ProviderShared from "../../protocols/shared"
 import { mergeJsonRecords, type LLMRequest } from "../../schema"
+import { responseStreamFailure } from "../executor"
 
 export type JsonRequestInput<Body> = TransportPrepareInput<Body>
 
@@ -127,25 +128,24 @@ export const httpJson = <Body, Frame>(input: HttpJsonInput<Body, Frame>): HttpJs
         framing: input.framing,
       })),
     ),
-  frames: (prepared, request, runtime) =>
+  frames: (prepared, _request, runtime) =>
     Stream.unwrap(
-      runtime.http
-        .execute(prepared.request)
-        .pipe(
-          Effect.map((response) =>
-            prepared.framing.frame(
-              response.stream.pipe(
-                Stream.mapError((error) =>
-                  ProviderShared.eventError(
-                    `${request.model.provider}/${request.model.route.id}`,
-                    `Failed to read ${request.model.provider}/${request.model.route.id} stream`,
-                    ProviderShared.errorText(error),
-                  ),
-                ),
-              ),
+      Effect.gen(function* () {
+        const response = yield* runtime.http.execute(prepared.request)
+        const redactedNames = yield* Headers.CurrentRedactedNames
+        return prepared.framing.frame(
+          response.stream.pipe(
+            Stream.mapError((error) =>
+              responseStreamFailure({
+                error,
+                request: prepared.request,
+                response,
+                redactedNames,
+              }),
             ),
           ),
-        ),
+        )
+      }),
     ),
 })
 

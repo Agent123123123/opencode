@@ -106,6 +106,14 @@ function debugSnapshot(): MotryxControlSnapshot {
       lastRoutedAt: null,
     },
     workflow: { id: "workflow", status: "ACTIVE", goal: "Goal" },
+    capacity: {
+      maxConcurrentLanes: 1,
+      activeLaneIDs: ["lane_1"],
+      activeCount: 1,
+      available: 0,
+      capacityReached: true,
+      readyLaneIDs: [],
+    },
     lanes: [
       {
         id: "lane_1",

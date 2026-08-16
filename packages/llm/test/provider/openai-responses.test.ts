@@ -1,5 +1,5 @@
 import { describe, expect } from "bun:test"
-import { ConfigProvider, Effect, Layer, Stream } from "effect"
+import { ConfigProvider, Effect, Fiber, Layer, Stream } from "effect"
 import { Headers, HttpClientRequest } from "effect/unstable/http"
 import { LLM, LLMError, Message, Model, ToolCallPart, Usage } from "../../src"
 import { Auth, LLMClient, RequestExecutor, WebSocketExecutor } from "../../src/route"
@@ -238,7 +238,65 @@ describe("OpenAI Responses route", () => {
         { url: "wss://api.openai.test/v1/responses", headers: Headers.empty },
       ).pipe(Effect.flip)
 
-      expect(error.message).toContain("closed before opening")
+      expect(error).toMatchObject({
+        reason: { _tag: "Transport", kind: "open" },
+        retryable: true,
+        retryExhausted: true,
+        attemptCount: 1,
+      })
+      expect(error.message).toContain("WebSocket closed before opening")
+    }),
+  )
+
+  it.effect("rejects invalid WebSocket URLs without retrying", () =>
+    Effect.gen(function* () {
+      const error = yield* LLMClient.prepare(
+        LLM.updateRequest(request, {
+          model: OpenAI.configure({ baseURL: "ftp://api.openai.test/v1/", apiKey: "test" }).responsesWebSocket(
+            "gpt-4.1-mini",
+          ),
+        }),
+      ).pipe(Effect.flip)
+
+      expect(error).toMatchObject({
+        reason: { _tag: "InvalidRequest" },
+        retryable: false,
+        retryExhausted: false,
+        attemptCount: 1,
+      })
+    }),
+  )
+
+  it.effect("retries only transient WebSocket close codes", () =>
+    Effect.gen(function* () {
+      const closeWith = (code: number) =>
+        Effect.gen(function* () {
+          const socket = Object.assign(new EventTarget(), {
+            readyState: globalThis.WebSocket.OPEN,
+            send: () => undefined,
+            close: () => undefined,
+          })
+          const connection = yield* WebSocketExecutor.fromWebSocket(
+            // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion -- the executor only uses this minimal WebSocket surface in this test.
+            socket as unknown as globalThis.WebSocket,
+            { url: "wss://api.openai.test/v1/responses", headers: Headers.empty },
+          )
+          const failure = yield* connection.messages.pipe(Stream.runDrain, Effect.flip, Effect.forkChild)
+          yield* Effect.yieldNow
+          socket.dispatchEvent(Object.assign(new Event("close"), { code }))
+          return yield* Fiber.join(failure)
+        })
+
+      expect(yield* closeWith(1008)).toMatchObject({
+        reason: { _tag: "Transport", kind: "close" },
+        retryable: false,
+        retryExhausted: false,
+      })
+      expect(yield* closeWith(1013)).toMatchObject({
+        reason: { _tag: "Transport", kind: "close" },
+        retryable: true,
+        retryExhausted: true,
+      })
     }),
   )
 
@@ -1339,7 +1397,14 @@ describe("OpenAI Responses route", () => {
       // sometimes-generic provider message. The bare message alone meant
       // production errors like rate limits were indistinguishable from
       // unrelated stream failures.
-      expect(response.events).toEqual([{ type: "provider-error", message: "rate_limit_exceeded: Slow down" }])
+      expect(response.events).toEqual([
+        {
+          type: "provider-error",
+          message: "rate_limit_exceeded: Slow down",
+          kind: "rate_limit",
+          retryable: true,
+        },
+      ])
     }),
   )
 
@@ -1349,7 +1414,9 @@ describe("OpenAI Responses route", () => {
         Effect.provide(fixedResponse(sseEvents({ type: "error", code: "internal_error" }))),
       )
 
-      expect(response.events).toEqual([{ type: "provider-error", message: "internal_error" }])
+      expect(response.events).toEqual([
+        { type: "provider-error", message: "internal_error", kind: "provider_internal", retryable: true },
+      ])
     }),
   )
 
@@ -1359,7 +1426,9 @@ describe("OpenAI Responses route", () => {
         Effect.provide(fixedResponse(sseEvents({ type: "error", code: "internal_error", message: "" }))),
       )
 
-      expect(response.events).toEqual([{ type: "provider-error", message: "internal_error" }])
+      expect(response.events).toEqual([
+        { type: "provider-error", message: "internal_error", kind: "provider_internal", retryable: true },
+      ])
     }),
   )
 
@@ -1383,7 +1452,14 @@ describe("OpenAI Responses route", () => {
         ),
       )
 
-      expect(response.events).toEqual([{ type: "provider-error", message: "server_error: Upstream model unavailable" }])
+      expect(response.events).toEqual([
+        {
+          type: "provider-error",
+          message: "server_error: Upstream model unavailable",
+          kind: "provider_internal",
+          retryable: true,
+        },
+      ])
     }),
   )
 
@@ -1400,7 +1476,9 @@ describe("OpenAI Responses route", () => {
         ),
       )
 
-      expect(response.events).toEqual([{ type: "provider-error", message: "invalid_prompt" }])
+      expect(response.events).toEqual([
+        { type: "provider-error", message: "invalid_prompt", kind: "invalid_request", retryable: false },
+      ])
     }),
   )
 
@@ -1426,7 +1504,9 @@ describe("OpenAI Responses route", () => {
         {
           type: "provider-error",
           message: "context_length_exceeded: prompt too long",
+          kind: "invalid_request",
           classification: "context-overflow",
+          retryable: false,
         },
       ])
     }),
@@ -1438,7 +1518,9 @@ describe("OpenAI Responses route", () => {
         Effect.provide(fixedResponse(sseEvents({ type: "error" }))),
       )
 
-      expect(response.events).toEqual([{ type: "provider-error", message: "OpenAI Responses stream error" }])
+      expect(response.events).toEqual([
+        { type: "provider-error", message: "OpenAI Responses stream error", kind: "unknown", retryable: false },
+      ])
     }),
   )
 
@@ -1448,7 +1530,9 @@ describe("OpenAI Responses route", () => {
         Effect.provide(fixedResponse(sseEvents({ type: "response.failed", response: { id: "resp_failed_3" } }))),
       )
 
-      expect(response.events).toEqual([{ type: "provider-error", message: "OpenAI Responses response failed" }])
+      expect(response.events).toEqual([
+        { type: "provider-error", message: "OpenAI Responses response failed", kind: "unknown", retryable: false },
+      ])
     }),
   )
 

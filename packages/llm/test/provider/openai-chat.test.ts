@@ -682,14 +682,44 @@ describe("OpenAI Chat route", () => {
     }),
   )
 
+  it.effect("classifies provider-declared stream errors", () =>
+    Effect.gen(function* () {
+      const response = yield* LLMClient.generate(request).pipe(
+        Effect.provide(
+          fixedResponse(
+            sseEvents({
+              error: { type: "rate_limit_error", code: "rate_limit_exceeded", message: "Slow down" },
+            }),
+          ),
+        ),
+      )
+
+      expect(response.events).toEqual([
+        { type: "provider-error", message: "Slow down", kind: "rate_limit", retryable: true },
+      ])
+    }),
+  )
+
   it.effect("surfaces transport errors that occur mid-stream", () =>
     Effect.gen(function* () {
-      const layer = truncatedStream([
-        `data: ${JSON.stringify(deltaChunk({ role: "assistant", content: "Hello" }))}\n\n`,
-      ])
+      const layer = truncatedStream(
+        [`data: ${JSON.stringify(deltaChunk({ role: "assistant", content: "Hello" }))}\n\n`],
+        Object.assign(new Error("connection reset with api-key-secret"), { code: "ECONNRESET" }),
+      )
       const error = yield* LLMClient.generate(request).pipe(Effect.provide(layer), Effect.flip)
 
-      expect(error.message).toContain("Failed to read openai/openai-chat stream")
+      expect(error).toMatchObject({
+        reason: {
+          _tag: "Transport",
+          kind: "connection",
+          code: "ECONNRESET",
+          message: "The provider connection closed before the response completed.",
+        },
+        retryable: true,
+        retryExhausted: true,
+        attemptCount: 1,
+      })
+      expect(error.message).not.toContain("api-key-secret")
     }),
   )
 

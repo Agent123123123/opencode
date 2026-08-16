@@ -19,7 +19,7 @@ import {
   type ToolResultPart,
 } from "../schema"
 import { JsonObject, optionalArray, optionalNull, ProviderShared } from "./shared"
-import { isContextOverflow } from "../provider-error"
+import { classifyProviderFailure } from "../provider-error"
 import * as Cache from "./utils/cache"
 import { Lifecycle } from "./utils/lifecycle"
 import { ToolSchemaProjection } from "./utils/tool-schema"
@@ -801,15 +801,18 @@ const providerErrorMessage = (event: AnthropicEvent): string => {
   return message || type || "Anthropic Messages stream error"
 }
 
-const onError = (state: ParserState, event: AnthropicEvent): StepResult => [
-  state,
-  [
-    LLMEvent.providerError({
-      message: providerErrorMessage(event),
-      classification: isContextOverflow(event.error?.message ?? "") ? "context-overflow" : undefined,
-    }),
-  ],
-]
+const onError = (state: ParserState, event: AnthropicEvent): StepResult => {
+  const message = providerErrorMessage(event)
+  return [
+    state,
+    [
+      LLMEvent.providerError({
+        message,
+        ...classifyProviderFailure({ type: event.error?.type, message }),
+      }),
+    ],
+  ]
+}
 
 const step = (state: ParserState, event: AnthropicEvent) => {
   if (event.type === "message_start") return Effect.succeed(onMessageStart(state, event))

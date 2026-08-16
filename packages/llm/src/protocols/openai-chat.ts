@@ -17,6 +17,7 @@ import {
   type ToolDefinition,
   type ToolContent,
 } from "../schema"
+import { classifyProviderFailure } from "../provider-error"
 import { isRecord, JsonObject, optionalArray, optionalNull, ProviderShared } from "./shared"
 import { OpenAIOptions } from "./utils/openai-options"
 import { Lifecycle } from "./utils/lifecycle"
@@ -153,10 +154,18 @@ const OpenAIChatChoice = Schema.Struct({
   finish_reason: optionalNull(Schema.String),
 })
 
-const OpenAIChatEvent = Schema.Struct({
+const OpenAIChatChunkEvent = Schema.Struct({
   choices: Schema.Array(OpenAIChatChoice),
   usage: optionalNull(OpenAIChatUsage),
 })
+const OpenAIChatErrorEvent = Schema.Struct({
+  error: Schema.Struct({
+    message: Schema.optional(Schema.String),
+    type: Schema.optional(Schema.String),
+    code: Schema.optional(Schema.String),
+  }),
+})
+const OpenAIChatEvent = Schema.Union([OpenAIChatChunkEvent, OpenAIChatErrorEvent])
 type OpenAIChatEvent = Schema.Schema.Type<typeof OpenAIChatEvent>
 type OpenAIChatRequestMessage = LLMRequest["messages"][number]
 
@@ -388,7 +397,7 @@ const mapFinishReason = (reason: string | null | undefined): FinishReason => {
 // a `reasoning_tokens` subset. We pass the inclusive totals through and
 // derive the non-cached breakdown so the `LLM.Usage` contract is
 // satisfied on both sides.
-const mapUsage = (usage: OpenAIChatEvent["usage"]): Usage | undefined => {
+const mapUsage = (usage: typeof OpenAIChatUsage.Type | null | undefined): Usage | undefined => {
   if (!usage) return undefined
   const cached = usage.prompt_tokens_details?.cached_tokens
   const reasoning = usage.completion_tokens_details?.reasoning_tokens
@@ -406,6 +415,18 @@ const mapUsage = (usage: OpenAIChatEvent["usage"]): Usage | undefined => {
 
 const step = (state: ParserState, event: OpenAIChatEvent) =>
   Effect.gen(function* () {
+    if ("error" in event) {
+      const message = event.error.message || event.error.code || event.error.type || "OpenAI Chat stream error"
+      return [
+        state,
+        [
+          LLMEvent.providerError({
+            message,
+            ...classifyProviderFailure({ type: event.error.type, code: event.error.code, message }),
+          }),
+        ],
+      ] as const
+    }
     const events: LLMEvent[] = []
     const usage = mapUsage(event.usage) ?? state.usage
     const choice = event.choices[0]

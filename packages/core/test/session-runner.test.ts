@@ -1457,7 +1457,7 @@ describe("SessionRunnerLLM", () => {
         overflow(),
       ]
       yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Continue" }), resume: false })
-      yield* session.resume(sessionID)
+      yield* session.resume(sessionID).pipe(Effect.flip)
 
       expect(requests).toHaveLength(3)
       expect(yield* session.context(sessionID)).toMatchObject([
@@ -1503,7 +1503,7 @@ describe("SessionRunnerLLM", () => {
         [LLMEvent.providerError({ message: "summary unavailable" })],
       ]
       yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Continue" }), resume: false })
-      yield* session.resume(sessionID)
+      yield* session.resume(sessionID).pipe(Effect.flip)
 
       expect(requests).toHaveLength(2)
       const context = yield* session.context(sessionID)
@@ -3440,15 +3440,36 @@ describe("SessionRunnerLLM", () => {
       responses = undefined
       streamGate = undefined
       streamStarted = undefined
-      response = [LLMEvent.stepStart({ index: 0 }), LLMEvent.providerError({ message: "Provider unavailable" })]
+      response = [
+        LLMEvent.stepStart({ index: 0 }),
+        LLMEvent.providerError({ message: "Provider unavailable", kind: "provider_internal", retryable: true }),
+      ]
 
-      yield* session.resume(sessionID)
+      const error = yield* session.resume(sessionID).pipe(Effect.flip)
 
       expect(requests).toHaveLength(1)
+      expect(error).toMatchObject({
+        reason: { _tag: "ProviderInternal", message: "Provider unavailable" },
+        retryable: true,
+        retryExhausted: true,
+        attemptCount: 1,
+      })
       expect(yield* session.context(sessionID)).toMatchObject([
         { type: "user", text: "Fail durably" },
         { type: "assistant", finish: "error", error: { type: "unknown", message: "Provider unavailable" } },
       ])
+      const settled = (yield* session.history({ sessionID, limit: 100 })).events.findLast(
+        (event) => event.type === "session.turn.settled",
+      )
+      expect(settled?.data).toMatchObject({
+        outcome: "error",
+        failure: {
+          kind: "provider_internal",
+          retryable: true,
+          retryExhausted: true,
+          attemptCount: 1,
+        },
+      })
     }),
   )
 
@@ -3461,7 +3482,7 @@ describe("SessionRunnerLLM", () => {
       requests.length = 0
       response = [LLMEvent.providerError({ message: "Provider unavailable" })]
 
-      yield* session.resume(sessionID)
+      yield* session.resume(sessionID).pipe(Effect.flip)
 
       expect(requests).toHaveLength(1)
       expect(yield* session.context(sessionID)).toMatchObject([
@@ -3485,7 +3506,7 @@ describe("SessionRunnerLLM", () => {
         LLMEvent.textEnd({ id: "text-partial" }),
         LLMEvent.providerError({ message: "prompt too long", classification: "context-overflow" }),
       ]
-      yield* session.resume(sessionID)
+      yield* session.resume(sessionID).pipe(Effect.flip)
 
       expect(requests).toHaveLength(1)
       expect(yield* session.context(sessionID)).toMatchObject([
@@ -3602,10 +3623,10 @@ describe("SessionRunnerLLM", () => {
         LLMEvent.providerError({ message: "Provider unavailable" }),
       ]
 
-      const resumed = yield* session.resume(sessionID).pipe(Effect.forkChild)
+      const resumed = yield* session.resume(sessionID).pipe(Effect.exit, Effect.forkChild)
       yield* Deferred.await(toolExecutionsStarted)
       yield* Deferred.succeed(toolExecutionGate, undefined)
-      yield* Fiber.join(resumed)
+      expect(Exit.isFailure(yield* Fiber.join(resumed))).toBe(true)
 
       expect(requests).toHaveLength(1)
       expect(executions.slice(executionCount)).toEqual(["settled"])
@@ -3642,7 +3663,7 @@ describe("SessionRunnerLLM", () => {
         LLMEvent.providerError({ message: "Provider unavailable" }),
       ]
 
-      yield* session.resume(sessionID)
+      yield* session.resume(sessionID).pipe(Effect.flip)
 
       expect(requests).toHaveLength(1)
       expect(yield* session.context(sessionID)).toMatchObject([

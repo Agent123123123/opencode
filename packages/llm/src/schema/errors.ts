@@ -4,6 +4,18 @@ import { ModelID, ProviderID, ProviderMetadata, RouteID } from "./ids"
 export const ProviderFailureClassification = Schema.Literal("context-overflow")
 export type ProviderFailureClassification = typeof ProviderFailureClassification.Type
 
+export const ProviderFailureKind = Schema.Literals([
+  "authentication",
+  "quota",
+  "rate_limit",
+  "provider_internal",
+  "transport",
+  "invalid_request",
+  "content_policy",
+  "unknown",
+])
+export type ProviderFailureKind = typeof ProviderFailureKind.Type
+
 export class HttpRequestDetails extends Schema.Class<HttpRequestDetails>("LLM.HttpRequestDetails")({
   method: Schema.String,
   url: Schema.String,
@@ -78,9 +90,10 @@ export class RateLimitReason extends Schema.Class<RateLimitReason>("LLM.Error.Ra
   rateLimit: Schema.optional(HttpRateLimitDetails),
   providerMetadata: Schema.optional(ProviderMetadata),
   http: Schema.optional(HttpContext),
+  canRetry: Schema.optional(Schema.Boolean),
 }) {
   get retryable() {
-    return true
+    return this.canRetry ?? true
   }
 }
 
@@ -109,13 +122,14 @@ export class ContentPolicyReason extends Schema.Class<ContentPolicyReason>("LLM.
 export class ProviderInternalReason extends Schema.Class<ProviderInternalReason>("LLM.Error.ProviderInternal")({
   _tag: Schema.tag("ProviderInternal"),
   message: Schema.String,
-  status: Schema.Number,
+  status: Schema.optional(Schema.Number),
   retryAfterMs: Schema.optional(Schema.Number),
   providerMetadata: Schema.optional(ProviderMetadata),
   http: Schema.optional(HttpContext),
+  canRetry: Schema.optional(Schema.Boolean),
 }) {
   get retryable() {
-    return true
+    return this.canRetry ?? true
   }
 }
 
@@ -179,7 +193,7 @@ export class LLMError extends Schema.TaggedErrorClass<LLMError>()("LLM.Error", {
   reason: LLMErrorReason,
   /** Physical provider request count retained by the bounded executor. */
   attemptCount: Schema.optional(Schema.Number),
-  /** True only when a retryable error consumed the executor's complete budget. */
+  /** True when the Host will not retry this provider request again. */
   retryExhausted: Schema.optional(Schema.Boolean),
 }) {
   override readonly cause = this.reason
