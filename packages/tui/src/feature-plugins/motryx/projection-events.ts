@@ -2,11 +2,14 @@ import {
   MOTRYX_CONTROL_SCHEMA_VERSION,
   MotryxControlHttpError,
   MotryxControlSchemaError,
+  fetchMotryxControlHealth,
   fetchMotryxControlSnapshot,
   motryxControlURL,
+  parseMotryxRuntimeHealthWarnings,
   type MotryxControlConfig,
   type MotryxControlSnapshot,
   type MotryxFetcher,
+  type MotryxRuntimeHealthWarning,
 } from "./control"
 
 const DEFAULT_MAX_FRAME_BYTES = 64 * 1024
@@ -59,6 +62,7 @@ export type MotryxProjectionControllerOptions = {
   now?: () => number
   delay?: (milliseconds: number, signal: AbortSignal) => Promise<void>
   onSnapshot: (snapshot: MotryxControlSnapshot) => void
+  onRuntimeWarnings?: (warnings: MotryxRuntimeHealthWarning[]) => void
   onState: (state: MotryxProjectionState) => void
   onInvalidated?: (reason: string) => void
 }
@@ -163,6 +167,7 @@ export function createMotryxProjectionController(options: MotryxProjectionContro
       })
       if (stopped) return "terminal"
       snapshot = next
+      options.onRuntimeWarnings?.(next.runtimeWarnings)
       proofCanBecomeLive = true
       const at = now()
       options.onSnapshot(next)
@@ -173,6 +178,12 @@ export function createMotryxProjectionController(options: MotryxProjectionContro
       })
       return "ok"
     } catch (error) {
+      if (error instanceof MotryxControlHttpError && error.status === 503) {
+        await fetchMotryxControlHealth(options.config, {
+          fetcher,
+          signal: controller.signal,
+        }).then((health) => options.onRuntimeWarnings?.(health.runtimeWarnings)).catch(() => undefined)
+      }
       return handleError(error)
     }
   }
@@ -300,6 +311,10 @@ export function createMotryxProjectionController(options: MotryxProjectionContro
                 break
               }
             }
+            continue
+          }
+          if (frame.event === "runtime.warning.changed") {
+            options.onRuntimeWarnings?.(runtimeWarnings(frame.data, options.config))
             continue
           }
           if (frame.event === "route.invalidated") {
@@ -466,6 +481,26 @@ function invalidationReason(data: string) {
     throw new MotryxControlSchemaError("Control SSE route.invalidated envelope is invalid")
   }
   return item.reason
+}
+
+function runtimeWarnings(data: string, config: MotryxControlConfig) {
+  let value: unknown
+  try {
+    value = JSON.parse(data)
+  } catch {
+    throw new MotryxControlSchemaError("Control SSE runtime.warning.changed contains invalid JSON")
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new MotryxControlSchemaError("Control SSE runtime.warning.changed data must be an object")
+  }
+  const item = value as Record<string, unknown>
+  if (
+    item.schemaVersion !== MOTRYX_CONTROL_SCHEMA_VERSION ||
+    typeof item.projectID !== "string" ||
+    normalizeProject(item.projectID) !== normalizeProject(config.projectID) ||
+    item.orchestratorSessionID !== config.orchestratorSessionID
+  ) throw new MotryxControlSchemaError("Control SSE runtime.warning.changed envelope is invalid")
+  return parseMotryxRuntimeHealthWarnings(item.runtimeWarnings, "runtime.warning.changed.runtimeWarnings")
 }
 
 function normalizeProject(value: string) {

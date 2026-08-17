@@ -1,6 +1,6 @@
 import path from "node:path"
 
-export const MOTRYX_CONTROL_SCHEMA_VERSION = 5 as const
+export const MOTRYX_CONTROL_SCHEMA_VERSION = 6 as const
 
 export type MotryxControlConfig = {
   apiURL: string
@@ -10,6 +10,28 @@ export type MotryxControlConfig = {
 }
 
 export type MotryxFetcher = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
+
+export type MotryxRuntimeHealthWarning = {
+  warningID: string
+  kind: "ROUTE_HEALTH_UNCONFIRMED"
+  scope: "SESSION"
+  components: Array<"OPEN_CODE" | "SIDECAR">
+  firstObservedAt: string
+  lastObservedAt: string
+  safeSummary: string
+  httpStatus?: number
+  transportCode?: string
+  dismissible: true
+}
+
+export type MotryxControlHealth = {
+  schemaVersion: typeof MOTRYX_CONTROL_SCHEMA_VERSION
+  status: "ok" | "switching" | "starting"
+  projectID: string
+  serverGeneration: string
+  orchestratorSessionID: string
+  runtimeWarnings: MotryxRuntimeHealthWarning[]
+}
 
 export type MotryxSessionRoute = {
   sessionID: string
@@ -316,6 +338,7 @@ export type MotryxControlSnapshot = {
   runs: MotryxRunProjection[]
   attempts: MotryxAttemptProjection[]
   diagnostics: Record<string, unknown>[]
+  runtimeWarnings: MotryxRuntimeHealthWarning[]
 }
 
 export class MotryxControlHttpError extends Error {
@@ -365,10 +388,49 @@ export function motryxControlConfigFromEnv(
   }
 }
 
-export function motryxControlURL(config: MotryxControlConfig, endpoint: "workflow" | "events") {
-  const url = new URL(endpoint === "workflow" ? "/ic/workflow" : "/ic/events", config.apiURL)
-  url.searchParams.set("orchestrator_session_id", config.orchestratorSessionID)
+export function motryxControlURL(config: MotryxControlConfig, endpoint: "workflow" | "events" | "health") {
+  const url = new URL(
+    endpoint === "workflow" ? "/ic/workflow" : endpoint === "events" ? "/ic/events" : "/ic/health",
+    config.apiURL,
+  )
+  if (endpoint !== "health") url.searchParams.set("orchestrator_session_id", config.orchestratorSessionID)
   return url
+}
+
+export async function fetchMotryxControlHealth(
+  config: MotryxControlConfig,
+  options: { signal?: AbortSignal; fetcher?: MotryxFetcher } = {},
+): Promise<MotryxControlHealth> {
+  const response = await (options.fetcher ?? fetch)(motryxControlURL(config, "health"), {
+    signal: options.signal,
+    headers: {
+      accept: "application/json",
+      authorization: `Bearer ${config.token}`,
+    },
+  })
+  if (!response.ok) {
+    throw new MotryxControlHttpError(response.status, `Motryx control health returned HTTP ${response.status}`)
+  }
+  if (!response.headers.get("content-type")?.toLowerCase().includes("application/json")) {
+    throw new MotryxControlSchemaError("Motryx control health did not return JSON")
+  }
+  const root = requiredRecord(await response.json(), "health")
+  if (root.schemaVersion !== MOTRYX_CONTROL_SCHEMA_VERSION) fail("health.schemaVersion must be 6")
+  if (root.status !== "ok" && root.status !== "switching" && root.status !== "starting") {
+    fail("health.status is invalid")
+  }
+  return {
+    schemaVersion: MOTRYX_CONTROL_SCHEMA_VERSION,
+    status: root.status,
+    projectID: exactProject(root.projectID, config.projectID, "health.projectID"),
+    serverGeneration: requiredString(root.serverGeneration, "health.serverGeneration"),
+    orchestratorSessionID: exactString(
+      root.orchestratorSessionID,
+      config.orchestratorSessionID,
+      "health.orchestratorSessionID",
+    ),
+    runtimeWarnings: parseMotryxRuntimeHealthWarnings(root.runtimeWarnings, "health.runtimeWarnings"),
+  }
 }
 
 export function motryxSessionsURL(config: MotryxControlConfig, endpoint: "list" | "switch" = "list") {
@@ -442,7 +504,7 @@ async function parseSessionListResponse(response: Response, config: MotryxContro
 
 export function parseMotryxSessionList(value: unknown, expected: MotryxControlConfig): MotryxSessionList {
   const root = requiredRecord(value, "sessions")
-  if (root.schemaVersion !== MOTRYX_CONTROL_SCHEMA_VERSION) fail("sessions.schemaVersion must be 5")
+  if (root.schemaVersion !== MOTRYX_CONTROL_SCHEMA_VERSION) fail("sessions.schemaVersion must be 6")
   const projectID = exactProject(root.projectID, expected.projectID, "sessions.projectID")
   if (root.status !== "ROUTABLE" && root.status !== "SWITCHING" && root.status !== "UNAVAILABLE") {
     fail("sessions.status is invalid")
@@ -573,7 +635,7 @@ export async function dismissMotryxIncident(
     throw new MotryxControlHttpError(response.status, `Motryx incident dismissal returned HTTP ${response.status}${detail}`)
   }
   const result = requiredRecord(value, "incident dismissal")
-  if (result.schemaVersion !== MOTRYX_CONTROL_SCHEMA_VERSION) fail("incident dismissal schemaVersion must be 5")
+  if (result.schemaVersion !== MOTRYX_CONTROL_SCHEMA_VERSION) fail("incident dismissal schemaVersion must be 6")
   if (result.incidentID !== input.incidentID) fail("incident dismissal returned a different incident")
   if (result.presentationState !== "DISMISSED") fail("incident dismissal did not persist DISMISSED")
   return {
@@ -586,7 +648,7 @@ export async function dismissMotryxIncident(
 
 export function parseMotryxControlSnapshot(value: unknown, expected: MotryxControlConfig): MotryxControlSnapshot {
   const root = requiredRecord(value, "snapshot")
-  if (root.schemaVersion !== MOTRYX_CONTROL_SCHEMA_VERSION) fail("snapshot.schemaVersion must be 5")
+  if (root.schemaVersion !== MOTRYX_CONTROL_SCHEMA_VERSION) fail("snapshot.schemaVersion must be 6")
   const projectID = exactProject(root.projectID, expected.projectID, "snapshot.projectID")
   const orchestratorSessionID = exactString(
     root.orchestratorSessionID,
@@ -628,7 +690,39 @@ export function parseMotryxControlSnapshot(value: unknown, expected: MotryxContr
     runs: requiredArray(root.runs, "snapshot.runs", parseRun),
     attempts: requiredArray(root.attempts, "snapshot.attempts", parseAttempt),
     diagnostics: requiredArray(root.diagnostics, "snapshot.diagnostics", (item, label) => requiredRecord(item, label)),
+    runtimeWarnings: parseMotryxRuntimeHealthWarnings(root.runtimeWarnings, "snapshot.runtimeWarnings"),
   }
+}
+
+export function parseMotryxRuntimeHealthWarnings(value: unknown, label = "runtimeWarnings") {
+  return requiredArray(value, label, parseRuntimeHealthWarning)
+}
+
+function parseRuntimeHealthWarning(value: unknown, label: string): MotryxRuntimeHealthWarning {
+  const item = requiredRecord(value, label)
+  if (item.kind !== "ROUTE_HEALTH_UNCONFIRMED") fail(`${label}.kind is invalid`)
+  if (item.scope !== "SESSION") fail(`${label}.scope is invalid`)
+  if (item.dismissible !== true) fail(`${label}.dismissible must be true`)
+  const components = stringArray(item.components, `${label}.components`)
+  if (components.some((component) => component !== "OPEN_CODE" && component !== "SIDECAR")) {
+    fail(`${label}.components contains an invalid component`)
+  }
+  const httpStatus = item.httpStatus
+  if (httpStatus !== undefined && (!Number.isInteger(httpStatus) || (httpStatus as number) < 100)) {
+    fail(`${label}.httpStatus is invalid`)
+  }
+  return compact({
+    warningID: requiredString(item.warningID, `${label}.warningID`),
+    kind: "ROUTE_HEALTH_UNCONFIRMED",
+    scope: "SESSION",
+    components: components as Array<"OPEN_CODE" | "SIDECAR">,
+    firstObservedAt: timestamp(item.firstObservedAt, `${label}.firstObservedAt`),
+    lastObservedAt: timestamp(item.lastObservedAt, `${label}.lastObservedAt`),
+    safeSummary: requiredString(item.safeSummary, `${label}.safeSummary`),
+    httpStatus: httpStatus as number | undefined,
+    transportCode: optionalString(item.transportCode, `${label}.transportCode`),
+    dismissible: true,
+  })
 }
 
 function parseRoute(value: unknown, expected: MotryxControlConfig): MotryxRouteProof {

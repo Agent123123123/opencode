@@ -19,7 +19,7 @@ const config: MotryxControlConfig = {
 function validSnapshot(revision = "server-generation:ic:one") {
   const now = "2026-07-19T00:00:00.000Z"
   return {
-    schemaVersion: 5,
+    schemaVersion: 6,
     projectID,
     orchestratorSessionID: config.orchestratorSessionID,
     projectionRevision: revision,
@@ -58,6 +58,7 @@ function validSnapshot(revision = "server-generation:ic:one") {
     resourceBlocks: [],
     incidents: [],
     attentionItems: [],
+    runtimeWarnings: [],
     attention: { visibleOpenIncidentCount: 0, failedLaneCount: 0, activeAttentionCount: 0, userActionRequiredCount: 0, retryingCount: 0 },
     functionSlots: [],
     runs: [],
@@ -77,7 +78,7 @@ function streamFrom(chunks: Uint8Array[]) {
 
 function eventData(revision: string, generation = 3) {
   return JSON.stringify({
-    schemaVersion: 5,
+    schemaVersion: 6,
     projectID,
     orchestratorSessionID: config.orchestratorSessionID,
     bindingGeneration: generation,
@@ -161,6 +162,7 @@ describe("Motryx projection controller", () => {
     let workflowCalls = 0
     let eventCalls = 0
     const snapshots: string[] = []
+    const runtimeWarnings: string[][] = []
     const states: MotryxProjectionState[] = []
     const controller = createMotryxProjectionController({
       config,
@@ -175,6 +177,7 @@ describe("Motryx projection controller", () => {
         return new Response(events.body, { headers: { "content-type": "text/event-stream; charset=utf-8" } })
       },
       onSnapshot: (value) => snapshots.push(value.projectionRevision),
+      onRuntimeWarnings: (value) => runtimeWarnings.push(value.map((warning) => warning.warningID)),
       onState: (value) => states.push(value),
     })
     void controller.start()
@@ -186,6 +189,26 @@ describe("Motryx projection controller", () => {
 
     events.controller().enqueue(encoder.encode(": heartbeat\n\n"))
     await eventually(() => expect(states.some((state) => state.lastEventAt !== undefined)).toBe(true))
+    expect(workflowCalls).toBe(1)
+
+    events.controller().enqueue(encoder.encode(
+      `event: runtime.warning.changed\ndata: ${JSON.stringify({
+        schemaVersion: 6,
+        projectID,
+        orchestratorSessionID: config.orchestratorSessionID,
+        runtimeWarnings: [{
+          warningID: "runtime_health_warning_sse",
+          kind: "ROUTE_HEALTH_UNCONFIRMED",
+          scope: "SESSION",
+          components: ["OPEN_CODE"],
+          firstObservedAt: "2026-08-17T00:00:00.000Z",
+          lastObservedAt: "2026-08-17T00:00:30.000Z",
+          safeSummary: "OpenCode health could not be confirmed.",
+          dismissible: true,
+        }],
+      })}\n\n`,
+    ))
+    await eventually(() => expect(runtimeWarnings.at(-1)).toEqual(["runtime_health_warning_sse"]))
     expect(workflowCalls).toBe(1)
 
     revision = "server-generation:ic:two"
@@ -276,7 +299,7 @@ describe("Motryx projection controller", () => {
       .controller()
       .enqueue(
         encoder.encode(
-          `event: route.invalidated\ndata: ${JSON.stringify({ schemaVersion: 5, reason: "binding_generation_changed" })}\n\n`,
+          `event: route.invalidated\ndata: ${JSON.stringify({ schemaVersion: 6, reason: "binding_generation_changed" })}\n\n`,
         ),
       )
     await eventually(() => {

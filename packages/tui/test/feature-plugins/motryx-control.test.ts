@@ -8,6 +8,7 @@ import {
   fetchMotryxSessions,
   motryxControlConfigFromEnv,
   parseMotryxControlSnapshot,
+  parseMotryxRuntimeHealthWarnings,
   parseMotryxSessionList,
   switchMotryxSession,
   type MotryxControlConfig,
@@ -24,7 +25,7 @@ const config: MotryxControlConfig = {
 function snapshot(overrides: Record<string, unknown> = {}) {
   const now = "2026-07-19T00:00:00.000Z"
   return {
-    schemaVersion: 5,
+    schemaVersion: 6,
     projectID,
     orchestratorSessionID: config.orchestratorSessionID,
     projectionRevision: "server-generation:ic:revision",
@@ -71,6 +72,7 @@ function snapshot(overrides: Record<string, unknown> = {}) {
     resourceBlocks: [],
     incidents: [],
     attentionItems: [],
+    runtimeWarnings: [],
     attention: { visibleOpenIncidentCount: 0, failedLaneCount: 0, activeAttentionCount: 0, userActionRequiredCount: 0, retryingCount: 0 },
     functionSlots: [],
     runs: [],
@@ -101,9 +103,9 @@ describe("Motryx typed control snapshot", () => {
     ).toEqual({ ok: false, error: "Motryx control API must use http or https" })
   })
 
-  test("accepts an exact schema-v5 ROUTABLE/binding/reconcile proof", () => {
+  test("accepts an exact schema-v6 ROUTABLE/binding/reconcile proof", () => {
     expect(parseMotryxControlSnapshot(snapshot(), config)).toMatchObject({
-      schemaVersion: 5,
+      schemaVersion: 6,
       projectID,
       orchestratorSessionID: config.orchestratorSessionID,
       projectionRevision: "server-generation:ic:revision",
@@ -200,7 +202,7 @@ describe("Motryx typed control snapshot", () => {
     expect(value.attempts[0]).toMatchObject({ runID: "run_1", state: "RUNNING" })
   })
 
-  test("strictly parses v5 runtime attention and retry diagnostics", () => {
+  test("strictly parses v6 runtime attention and retry diagnostics", () => {
     const value = parseMotryxControlSnapshot(snapshot({
       attentionItems: [{
         attentionID: "attention_provider_retry",
@@ -246,6 +248,34 @@ describe("Motryx typed control snapshot", () => {
     })
     expect(() => parseMotryxControlSnapshot(snapshot({ attentionItems: [{ kind: "RETRY_SOMETIME" }] }), config))
       .toThrow("snapshot.attentionItems[0].kind is invalid")
+  })
+
+  test("parses session-scoped runtime health warnings without changing workflow truth", () => {
+    expect(parseMotryxRuntimeHealthWarnings([{
+      warningID: "runtime_health_warning_1",
+      kind: "ROUTE_HEALTH_UNCONFIRMED",
+      scope: "SESSION",
+      components: ["OPEN_CODE", "SIDECAR"],
+      firstObservedAt: "2026-08-17T00:00:00.000Z",
+      lastObservedAt: "2026-08-17T00:00:30.000Z",
+      safeSummary: "Runtime health could not be confirmed.",
+      httpStatus: 503,
+      dismissible: true,
+    }])).toEqual([expect.objectContaining({
+      warningID: "runtime_health_warning_1",
+      components: ["OPEN_CODE", "SIDECAR"],
+      httpStatus: 503,
+    })])
+    expect(() => parseMotryxRuntimeHealthWarnings([{
+      warningID: "bad",
+      kind: "ROUTE_HEALTH_UNCONFIRMED",
+      scope: "SESSION",
+      components: ["UNKNOWN"],
+      firstObservedAt: "2026-08-17T00:00:00.000Z",
+      lastObservedAt: "2026-08-17T00:00:30.000Z",
+      safeSummary: "bad",
+      dismissible: true,
+    }])).toThrow("runtimeWarnings[0].components contains an invalid component")
   })
 
   test("fails closed on schema, identity, generation, and reconcile mismatches", () => {
@@ -298,7 +328,7 @@ describe("Motryx typed control snapshot", () => {
       fetcher: async (input, init) => {
         request = new Request(input, init)
         return Response.json({
-          schemaVersion: 5,
+          schemaVersion: 6,
           incidentID: "incident_1",
           status: "OPEN",
           presentationState: "DISMISSED",
@@ -321,7 +351,7 @@ describe("Motryx typed control snapshot", () => {
 
 describe("Motryx typed Orchestrator sessions", () => {
   const sessions = () => ({
-    schemaVersion: 5,
+    schemaVersion: 6,
     projectID,
     status: "ROUTABLE",
     current: {

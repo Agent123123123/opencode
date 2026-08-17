@@ -16,6 +16,7 @@ import {
   type MotryxFetcher,
   type MotryxAttentionItemProjection,
   type MotryxLaneProjection,
+  type MotryxRuntimeHealthWarning,
   type MotryxSessionList,
 } from "./control"
 import {
@@ -86,6 +87,10 @@ export function MotryxRoute(props: {
   const [switching, setSwitching] = createSignal(false)
   const [dismissingIncidentID, setDismissingIncidentID] = createSignal<string>()
   const [locallyDismissedAttentionIDs, setLocallyDismissedAttentionIDs] = createSignal<ReadonlySet<string>>(new Set())
+  const [runtimeWarnings, setRuntimeWarnings] = createSignal<MotryxRuntimeHealthWarning[]>([])
+  const [locallyDismissedRuntimeWarningIDs, setLocallyDismissedRuntimeWarningIDs] = createSignal<ReadonlySet<string>>(
+    new Set(),
+  )
   const layout = createMemo(() => motryxProductLayout(dimensions()))
   const selectedLane = createMemo(() => {
     const value = snapshot()
@@ -105,6 +110,10 @@ export function MotryxRoute(props: {
     const dismissed = locallyDismissedAttentionIDs()
     return (snapshot()?.attentionItems ?? []).filter((item) =>
       item.kind !== "FINAL_FAILURE" && item.presentationState === "VISIBLE" && !dismissed.has(item.attentionID))
+  })
+  const visibleRuntimeWarnings = createMemo(() => {
+    const dismissed = locallyDismissedRuntimeWarningIDs()
+    return runtimeWarnings().filter((warning) => !dismissed.has(warning.warningID))
   })
   const conversationWidth = createMemo(() => {
     if (layout().direction === "column") return Math.max(20, dimensions().width - 2)
@@ -129,6 +138,8 @@ export function MotryxRoute(props: {
     const nextConfig = { ...config, orchestratorSessionID: sessionID }
     setActiveConfig(nextConfig)
     setSnapshot(undefined)
+    setRuntimeWarnings([])
+    setLocallyDismissedRuntimeWarningIDs(new Set<string>())
     setConnection({ phase: "connecting" })
     generation = undefined
     focusOrchestrator()
@@ -136,7 +147,11 @@ export function MotryxRoute(props: {
       config: nextConfig,
       fetcher: props.fetcher,
       signal: props.api.lifecycle.signal,
-      onSnapshot: setSnapshot,
+      onSnapshot: (value) => {
+        setSnapshot(value)
+        setRuntimeWarnings(value.runtimeWarnings)
+      },
+      onRuntimeWarnings: setRuntimeWarnings,
       onState: setConnection,
       onInvalidated: () => {
         if (!switching()) void discoverCurrentRoute()
@@ -366,6 +381,10 @@ export function MotryxRoute(props: {
     setLocallyDismissedAttentionIDs((current) => new Set([...current, attentionID]))
   }
 
+  function dismissRuntimeWarningLocally(warningID: string) {
+    setLocallyDismissedRuntimeWarningIDs((current) => new Set([...current, warningID]))
+  }
+
   async function dismissIncident(incidentID: string) {
     const current = activeConfig()
     const proof = snapshot()
@@ -495,7 +514,13 @@ export function MotryxRoute(props: {
         debugView={props.debugView === true}
         phase={connection().phase}
         status={status()}
-        visibleAttentionCount={visibleAttentionItems().length}
+        visibleAttentionCount={visibleAttentionItems().length + visibleRuntimeWarnings().length}
+      />
+
+      <RuntimeHealthWarningBanner
+        api={props.api}
+        warnings={visibleRuntimeWarnings()}
+        onDismiss={dismissRuntimeWarningLocally}
       />
 
       <Show
@@ -768,6 +793,47 @@ function RuntimeIncidentCard(props: {
           <Show when={runtimeIncidentDiagnostic(incident())}>
             {(detail) => <text fg={props.api.theme.current.textMuted}>{detail()}</text>}
           </Show>
+        </box>
+      )}
+    </Show>
+  )
+}
+
+function RuntimeHealthWarningBanner(props: {
+  api: TuiPluginApi
+  warnings: MotryxRuntimeHealthWarning[]
+  onDismiss: (warningID: string) => void
+}) {
+  const current = createMemo(() => props.warnings[0])
+  return (
+    <Show when={current()}>
+      {(warning) => (
+        <box
+          flexShrink={0}
+          minHeight={4}
+          flexDirection="column"
+          border={["top", "bottom", "left", "right"]}
+          borderColor={props.api.theme.current.warning}
+          paddingLeft={1}
+          paddingRight={1}
+        >
+          <box flexDirection="row" gap={1}>
+            <text fg={props.api.theme.current.warning}>Runtime health could not be confirmed</text>
+            <box flexGrow={1} />
+            <box
+              onMouseUp={() => props.onDismiss(warning().warningID)}
+              backgroundColor={props.api.theme.current.backgroundElement}
+            >
+              <text fg={props.api.theme.current.primary}> [×] </text>
+            </box>
+          </box>
+          <text fg={props.api.theme.current.text} wrapMode="word">{warning().safeSummary}</text>
+          <text fg={props.api.theme.current.textMuted} wrapMode="word">
+            Existing work was not interrupted. A new request can still fail independently.
+          </text>
+          <text fg={props.api.theme.current.textMuted}>
+            First observed {new Date(warning().firstObservedAt).toLocaleString()}
+          </text>
         </box>
       )}
     </Show>

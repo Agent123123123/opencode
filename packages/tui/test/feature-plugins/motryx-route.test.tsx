@@ -28,7 +28,7 @@ test("Motryx plugin route composes the standard session surface with the Flow/In
   } as unknown as TuiPluginApi
   const now = "2026-07-19T00:00:00.000Z"
   const snapshot: MotryxControlSnapshot = {
-    schemaVersion: 5,
+    schemaVersion: 6,
     projectID,
     orchestratorSessionID: config.orchestratorSessionID,
     projectionRevision: "server-generation:ic:route",
@@ -81,6 +81,16 @@ test("Motryx plugin route composes the standard session surface with the Flow/In
     runs: [],
     attempts: [],
     attentionItems: [],
+    runtimeWarnings: [{
+      warningID: "runtime_health_warning_route",
+      kind: "ROUTE_HEALTH_UNCONFIRMED",
+      scope: "SESSION",
+      components: ["OPEN_CODE"],
+      firstObservedAt: "2026-08-17T00:00:00.000Z",
+      lastObservedAt: "2026-08-17T00:00:30.000Z",
+      safeSummary: "OpenCode health could not be confirmed.",
+      dismissible: true,
+    }],
     attention: { visibleOpenIncidentCount: 0, failedLaneCount: 0, activeAttentionCount: 0, userActionRequiredCount: 0, retryingCount: 0 },
     diagnostics: [],
   }
@@ -139,6 +149,10 @@ test("Motryx plugin route composes the standard session surface with the Flow/In
     expect(frame).not.toContain("CONVERSATION")
     expect(frame).not.toContain("ROUTABLE")
     expect(frame).toContain("Ship the v1.18.3 migration")
+    expect(frame).toContain("Runtime health could not be confirmed")
+    expect(frame).toContain("Existing work was not interrupted")
+    await clickFrameText(app, frame, "[×]")
+    frame = await renderUntil(app, (value) => !value.includes("Runtime health could not be confirmed"))
     expect(frame).toContain("TUI migration")
     expect(frame).toContain("DONE")
     expect(frame).not.toContain("CHECKER_DETAIL_INSPECT_ONLY")
@@ -343,7 +357,7 @@ test("Motryx runtime error card can be dismissed without resolving the incident"
               attention: { visibleOpenIncidentCount: 0, failedLaneCount: 0, activeAttentionCount: 0, userActionRequiredCount: 0, retryingCount: 0 },
             }
             return Response.json({
-              schemaVersion: 5,
+              schemaVersion: 6,
               incidentID: incident.incidentID,
               status: "OPEN",
               presentationState: "DISMISSED",
@@ -378,7 +392,7 @@ test("Motryx runtime error card can be dismissed without resolving the incident"
   }
 })
 
-test("Motryx v5 surfaces retry, unknown outcome, and reconciliation attention without a workflow", async () => {
+test("Motryx v6 surfaces retry, unknown outcome, and reconciliation attention without a workflow", async () => {
   const projectID = path.resolve("/tmp/motryx-route-attention-project")
   const sessionID = "ses_route_attention"
   const config: MotryxControlConfig = {
@@ -700,7 +714,7 @@ test("/sessions switches the exact Motryx Orchestrator and rebinds conversation 
   } as unknown as TuiPluginApi
   const now = "2026-07-19T00:00:00.000Z"
   const routeSnapshot = (sessionID: string, bindingGeneration: number): MotryxControlSnapshot => ({
-    schemaVersion: 5,
+    schemaVersion: 6,
     projectID,
     orchestratorSessionID: sessionID,
     projectionRevision: `server-generation:ic:${sessionID}`,
@@ -742,11 +756,12 @@ test("/sessions switches the exact Motryx Orchestrator and rebinds conversation 
     runs: [],
     attempts: [],
     attentionItems: [],
+    runtimeWarnings: [],
     attention: { visibleOpenIncidentCount: 0, failedLaneCount: 0, activeAttentionCount: 0, userActionRequiredCount: 0, retryingCount: 0 },
     diagnostics: [],
   })
   const sessionList = (currentID: string, bindingGeneration: number) => ({
-    schemaVersion: 5,
+    schemaVersion: 6,
     projectID,
     status: "ROUTABLE",
     current: {
@@ -1178,7 +1193,7 @@ async function clickFrameText(app: Awaited<ReturnType<typeof testRender>>, frame
 function debugRouteSnapshot(projectID: string, orchestratorSessionID: string, generation = 7, server = "server") {
   const now = "2026-07-19T00:00:00.000Z"
   return {
-    schemaVersion: 5,
+    schemaVersion: 6,
     projectID,
     orchestratorSessionID,
     projectionRevision: `${server}:revision`,
@@ -1247,6 +1262,7 @@ function debugRouteSnapshot(projectID: string, orchestratorSessionID: string, ge
     runs: [],
     attempts: [],
     attentionItems: [],
+    runtimeWarnings: [],
     attention: { visibleOpenIncidentCount: 0, failedLaneCount: 0, activeAttentionCount: 0, userActionRequiredCount: 0, retryingCount: 0 },
     diagnostics: [],
   }
