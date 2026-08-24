@@ -15,6 +15,7 @@ import { V2StandardPluginBridge } from "@/plugin/v2-standard-bridge"
 import { SystemContextRegistry } from "@opencode-ai/core/system-context/registry"
 import { ToolExecution } from "@opencode-ai/core/tool/execution"
 import { Tools } from "@opencode-ai/core/tool/tools"
+import { SkillV2 } from "@opencode-ai/core/skill"
 
 export const instanceHandlers = HttpApiBuilder.group(InstanceHttpApi, "instance", (handlers) =>
   Effect.gen(function* () {
@@ -87,6 +88,7 @@ export const instanceHandlers = HttpApiBuilder.group(InstanceHttpApi, "instance"
         tools: yield* Tools.Service,
         execution: yield* ToolExecution.Service,
         contexts: yield* SystemContextRegistry.Service,
+        skills: yield* SkillV2.Service,
       })
       return yield* agent.list()
     })

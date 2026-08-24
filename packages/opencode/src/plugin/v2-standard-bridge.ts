@@ -4,6 +4,7 @@ import { SystemContextRegistry } from "@opencode-ai/core/system-context/registry
 import { Tool } from "@opencode-ai/core/tool/tool"
 import { ToolExecution } from "@opencode-ai/core/tool/execution"
 import { Tools } from "@opencode-ai/core/tool/tools"
+import { SkillV2 } from "@opencode-ai/core/skill"
 import type { ToolOutput } from "@opencode-ai/llm"
 import type { Hooks, ToolContext, ToolDefinition, ToolResult } from "@opencode-ai/plugin"
 import { Context, Effect, Layer, Schema } from "effect"
@@ -23,6 +24,7 @@ export interface RegistrationServices {
   readonly tools: Tools.Interface
   readonly execution: ToolExecution.Interface
   readonly contexts: SystemContextRegistry.Interface
+  readonly skills: SkillV2.Interface
 }
 
 const systemContextKey = SystemContext.Key.make("plugin/v1-system-context")
@@ -46,14 +48,17 @@ export const layer = Layer.effect(
           const tools = yield* Tools.Service
           const execution = yield* ToolExecution.Service
           const contexts = yield* SystemContextRegistry.Service
+          const skills = yield* SkillV2.Service
           const definitions = yield* compatibleTools(hooks, instance).pipe(Effect.orDie)
           yield* registerExecutionHooks(execution, hooks, new Set(Object.keys(definitions)))
           yield* registerSystemContext(contexts, hooks)
+          yield* registerSkills(skills, hooks)
           if (Object.keys(definitions).length > 0) yield* tools.register(definitions).pipe(Effect.orDie)
         }).pipe(
           Effect.provideService(Tools.Service, services.tools),
           Effect.provideService(ToolExecution.Service, services.execution),
           Effect.provideService(SystemContextRegistry.Service, services.contexts),
+          Effect.provideService(SkillV2.Service, services.skills),
         )
       }),
     )
@@ -66,6 +71,17 @@ export const layer = Layer.effect(
     })
   }),
 )
+
+const registerSkills = Effect.fn("V2StandardPluginBridge.registerSkills")(function* (
+  service: SkillV2.Interface,
+  hooks: Hooks[],
+) {
+  const bundles = hooks.flatMap((hook) => hook.skill?.bundles ?? [])
+  if (bundles.length === 0) return
+  yield* service.transform((draft) => {
+    for (const bundle of bundles) draft.bundle(bundle)
+  })
+})
 
 const compatibleTools = Effect.fn("V2StandardPluginBridge.compatibleTools")(function* (
   hooks: Hooks[],

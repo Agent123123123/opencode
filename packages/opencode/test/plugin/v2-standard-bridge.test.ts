@@ -10,6 +10,7 @@ import { SystemContextRegistry } from "@opencode-ai/core/system-context/registry
 import { ToolExecution } from "@opencode-ai/core/tool/execution"
 import { Tool } from "@opencode-ai/core/tool/tool"
 import { Tools } from "@opencode-ai/core/tool/tools"
+import { SkillV2 } from "@opencode-ai/core/skill"
 import type { Hooks } from "@opencode-ai/plugin"
 import { Effect, Fiber, Layer, Scope } from "effect"
 import { z } from "zod"
@@ -20,11 +21,13 @@ import { V2StandardPluginBridge } from "../../src/plugin/v2-standard-bridge"
 test("standard hooks bridge V1 tools into V2 with real execution capabilities", async () => {
   const trace: string[] = []
   const hookActivityIDs: Array<string | undefined> = []
-  let bridgedToolIdentity: {
-    toolCallID?: string
-    turnID?: string
-    activityInputIDs?: readonly string[]
-  } | undefined
+  let bridgedToolIdentity:
+    | {
+        toolCallID?: string
+        turnID?: string
+        activityInputIDs?: readonly string[]
+      }
+    | undefined
   const tools: Record<string, Tool.AnyTool> = {}
   let policy: ToolExecution.Policy | undefined
   let systemEntry: SystemContextRegistry.Entry | undefined
@@ -35,9 +38,21 @@ test("standard hooks bridge V1 tools into V2 with real execution capabilities", 
   const firstWaitAborted = new Promise<void>((resolve) => (abortFirstWait = resolve))
   const secondWaitAborted = new Promise<void>((resolve) => (abortSecondWait = resolve))
   const abortedWaits: number[] = []
+  const skillBundles: string[] = []
   let waiting = 0
 
   const hooks: Hooks = {
+    skill: {
+      bundles: [
+        {
+          schema: "opencode.skill_bundle.v1",
+          id: "motryx.dv",
+          digest: "a".repeat(64),
+          entries: ["verification/SKILL.md"],
+          files: { "verification/SKILL.md": "---\nname: verification\ndescription: Verify\n---" },
+        },
+      ],
+    },
     tool: {
       bridge_echo: {
         description: "bridge echo",
@@ -133,6 +148,19 @@ test("standard hooks bridge V1 tools into V2 with real execution capabilities", 
     ),
     Layer.succeed(ToolExecution.Service, executionService),
     Layer.succeed(
+      SkillV2.Service,
+      SkillV2.Service.of({
+        transform: (update: (draft: SkillV2.Draft) => void) =>
+          Effect.sync(() =>
+            update({
+              source() {},
+              bundle: (bundle: Parameters<SkillV2.Draft["bundle"]>[0]) => skillBundles.push(bundle.id),
+              list: () => [],
+            }),
+          ),
+      } as never),
+    ),
+    Layer.succeed(
       SystemContextRegistry.Service,
       SystemContextRegistry.Service.of({
         register: (entry) =>
@@ -160,10 +188,12 @@ test("standard hooks bridge V1 tools into V2 with real execution capabilities", 
           tools: yield* Tools.Service,
           execution: yield* ToolExecution.Service,
           contexts: yield* SystemContextRegistry.Service,
+          skills: yield* SkillV2.Service,
         }
         yield* V2StandardPluginBridge.Service.use((bridge) => bridge.init(services))
       }).pipe(Effect.provideService(InstanceRef, instance), Effect.provide(locationLayer))
       expect(Object.keys(tools).sort()).toEqual(["bridge_echo", "bridge_wait"])
+      expect(skillBundles).toEqual(["motryx.dv"])
       expect(Tool.definition("bridge_echo", tools.bridge_echo).description).toBe("advertised echo")
       expect(Tool.definition("bridge_echo", tools.bridge_echo).inputSchema).toMatchObject({
         type: "object",

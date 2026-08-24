@@ -4,6 +4,15 @@ import { Schema } from "effect"
 import { optional } from "./schema"
 import { AbsolutePath } from "./schema"
 
+export interface Bundle extends Schema.Schema.Type<typeof Bundle> {}
+export const Bundle = Schema.Struct({
+  schema: Schema.Literal("opencode.skill_bundle.v1"),
+  id: Schema.String,
+  digest: Schema.String,
+  entries: Schema.Array(Schema.String),
+  files: Schema.Record(Schema.String, Schema.String),
+}).annotate({ identifier: "Skill.Bundle" })
+
 export interface DirectorySource extends Schema.Schema.Type<typeof DirectorySource> {}
 export const DirectorySource = Schema.Struct({
   type: Schema.Literal("directory"),

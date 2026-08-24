@@ -2,4 +2,6 @@ Load a specialized skill when the task at hand matches one of the skills listed 
 
 Use this tool to inject the skill's instructions and resources into current conversation. The output may contain detailed workflow guidance as well as references to scripts, files, etc in the same directory as the skill.
 
+Pass resource_path to read one referenced text resource relative to the skill's reported base directory. Use the same skill name; this preserves the skill permission boundary for embedded and filesystem resources.
+
 The skill name must match one of the skills listed in your system prompt.

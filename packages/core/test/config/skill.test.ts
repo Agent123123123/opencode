@@ -24,6 +24,7 @@ describe("ConfigSkillPlugin.Plugin", () => {
           source: (source) => {
             sources.push(source)
           },
+          bundle: () => {},
           list: () => sources,
         })
         if (Effect.isEffect(result)) yield* result
@@ -59,6 +60,22 @@ describe("ConfigSkillPlugin.Plugin", () => {
       )
 
       expect(sources).toEqual([
+        SkillV2.DirectorySource.make({
+          type: "directory",
+          path: AbsolutePath.make(path.join("/home/test", ".claude", "skills")),
+        }),
+        SkillV2.DirectorySource.make({
+          type: "directory",
+          path: AbsolutePath.make(path.join("/home/test", ".agents", "skills")),
+        }),
+        SkillV2.DirectorySource.make({
+          type: "directory",
+          path: AbsolutePath.make(path.join(directory, ".claude", "skills")),
+        }),
+        SkillV2.DirectorySource.make({
+          type: "directory",
+          path: AbsolutePath.make(path.join(directory, ".agents", "skills")),
+        }),
         SkillV2.DirectorySource.make({
           type: "directory",
           path: AbsolutePath.make(path.join("/repo/.opencode", "skill")),

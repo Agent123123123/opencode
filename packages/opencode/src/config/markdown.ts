@@ -20,13 +20,17 @@ export const fallbackSanitization = ConfigMarkdownCore.sanitize
 export async function parse(filePath: string) {
   const template = await Filesystem.readText(filePath)
 
+  return parseContent(template, filePath)
+}
+
+export function parseContent(template: string, location: string) {
   try {
     return ConfigMarkdownCore.parse(template)
   } catch (err) {
     throw new FrontmatterError(
       {
-        path: filePath,
-        message: `${filePath}: Failed to parse YAML frontmatter: ${err instanceof Error ? err.message : String(err)}`,
+        path: location,
+        message: `${location}: Failed to parse YAML frontmatter: ${err instanceof Error ? err.message : String(err)}`,
       },
       { cause: err },
     )

@@ -1,19 +1,21 @@
-import path from "path"
 import { Effect, Schema } from "effect"
-import { Ripgrep } from "@opencode-ai/core/ripgrep"
 import { Skill } from "../skill"
 import * as Tool from "./tool"
 import DESCRIPTION from "./skill.txt"
 
 export const Parameters = Schema.Struct({
   name: Schema.String.annotate({ description: "The name of the skill from available_skills" }),
+  resource_path: Schema.optional(
+    Schema.String.annotate({
+      description: "Optional path to a skill resource, relative to the loaded skill base directory",
+    }),
+  ),
 })
 
 export const SkillTool = Tool.define(
   "skill",
   Effect.gen(function* () {
     const skill = yield* Skill.Service
-    const ripgrep = yield* Ripgrep.Service
 
     return {
       description: DESCRIPTION,
@@ -31,16 +33,22 @@ export const SkillTool = Tool.define(
             metadata: {},
           })
 
-          const dir = path.dirname(info.location)
-          const base = dir
-          const files = yield* ripgrep.find({
-            cwd: dir,
-            pattern: "!**/SKILL.md",
-            hidden: true,
-            follow: false,
-            signal: ctx.abort,
-            limit: 10,
-          })
+          const base = yield* skill.base(params.name)
+
+          if (params.resource_path) {
+            const resource = yield* skill.readResource(params.name, params.resource_path)
+            return {
+              title: `Loaded skill resource: ${info.name}`,
+              output: [
+                `<skill_resource name="${info.name}" path="${resource.path}">`,
+                resource.content,
+                "</skill_resource>",
+              ].join("\n"),
+              metadata: { name: info.name, dir: base, path: resource.path },
+            }
+          }
+
+          const files = yield* skill.listFiles(params.name, 10)
 
           return {
             title: `Loaded skill: ${info.name}`,
@@ -55,13 +63,14 @@ export const SkillTool = Tool.define(
               "Note: file list is sampled.",
               "",
               "<skill_files>",
-              files.map((file) => `<file>${path.resolve(dir, file.path)}</file>`).join("\n"),
+              files.map((file) => `<file>${file}</file>`).join("\n"),
               "</skill_files>",
               "</skill_content>",
             ].join("\n"),
             metadata: {
               name: info.name,
-              dir,
+              dir: base,
+              path: info.location,
             },
           }
         }).pipe(Effect.orDie),

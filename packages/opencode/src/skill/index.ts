@@ -17,6 +17,10 @@ import { Glob } from "@opencode-ai/core/util/glob"
 import { Discovery } from "./discovery"
 import { isRecord } from "@/util/record"
 import { escapeHtml } from "@/util/html"
+import { Plugin } from "@/plugin"
+import { SkillBundle } from "@opencode-ai/core/skill/bundle"
+import { SkillResource } from "@opencode-ai/core/skill/resource"
+import type { Bundle } from "@opencode-ai/schema/skill"
 
 const CLAUDE_EXTERNAL_DIR = ".claude"
 const AGENTS_EXTERNAL_DIR = ".agents"
@@ -81,16 +85,25 @@ export class NotFoundError extends Schema.TaggedErrorClass<NotFoundError>()("Ski
 
 type State = {
   skills: Record<string, Info>
+  storage: Record<string, Storage>
+  bundles: Map<string, Bundle>
   dirs: Set<string>
 }
 
+type Storage =
+  | { type: "filesystem"; sourceRoot: string; entry: string }
+  | { type: "bundle"; bundleID: string; entry: string }
+  | { type: "builtin" }
+
 type DiscoveryState = {
   matches: string[]
+  roots: Record<string, string>
   dirs: string[]
 }
 
 type ScanState = {
   matches: Set<string>
+  roots: Map<string, string>
   dirs: Set<string>
 }
 
@@ -100,9 +113,20 @@ export interface Interface {
   readonly all: () => Effect.Effect<Info[]>
   readonly dirs: () => Effect.Effect<string[]>
   readonly available: (agent?: Agent.Info) => Effect.Effect<Info[]>
+  readonly base: (name: string) => Effect.Effect<string, NotFoundError>
+  readonly listFiles: (name: string, limit: number) => Effect.Effect<string[], NotFoundError>
+  readonly readResource: (
+    name: string,
+    resourcePath: string,
+  ) => Effect.Effect<{ path: string; content: string }, NotFoundError>
 }
 
-const add = Effect.fnUntraced(function* (state: State, match: string, events: EventV2Bridge.Service["Service"]) {
+const add = Effect.fnUntraced(function* (
+  state: State,
+  match: string,
+  sourceRoot: string,
+  events: EventV2Bridge.Service["Service"],
+) {
   const md = yield* Effect.tryPromise({
     try: () => ConfigMarkdown.parse(match),
     catch: (err) => err,
@@ -137,6 +161,7 @@ const add = Effect.fnUntraced(function* (state: State, match: string, events: Ev
     location: match,
     content: md.content,
   }
+  state.storage[md.data.name] = { type: "filesystem", sourceRoot, entry: match }
 })
 
 const scan = Effect.fnUntraced(function* (
@@ -164,8 +189,10 @@ const scan = Effect.fnUntraced(function* (
     }),
   )
 
-  for (const match of matches) {
+  for (const match of matches.toSorted()) {
+    state.matches.delete(match)
     state.matches.add(match)
+    state.roots.set(match, root)
     state.dirs.add(path.dirname(match))
   }
 })
@@ -180,7 +207,7 @@ const discoverSkills = Effect.fnUntraced(function* (
   directory: string,
   worktree: string,
 ) {
-  const state: ScanState = { matches: new Set(), dirs: new Set() }
+  const state: ScanState = { matches: new Set(), roots: new Map(), dirs: new Set() }
 
   const externalDirs: string[] = []
   if (!disableExternalSkills) {
@@ -228,6 +255,7 @@ const discoverSkills = Effect.fnUntraced(function* (
 
   return {
     matches: Array.from(state.matches),
+    roots: Object.fromEntries(state.roots),
     dirs: Array.from(state.dirs),
   }
 })
@@ -237,12 +265,51 @@ const loadSkills = Effect.fnUntraced(function* (
   discovered: DiscoveryState,
   events: EventV2Bridge.Service["Service"],
 ) {
-  yield* Effect.forEach(discovered.matches, (match) => add(state, match, events), {
-    concurrency: "unbounded",
+  yield* Effect.forEach(discovered.matches, (match) => add(state, match, discovered.roots[match]!, events), {
+    concurrency: 1,
     discard: true,
   })
 
   yield* Effect.logInfo("init", { count: Object.keys(state.skills).length })
+})
+
+const loadBundles = Effect.fnUntraced(function* (state: State, hooks: readonly import("@opencode-ai/plugin").Hooks[]) {
+  for (const bundleInput of hooks.flatMap((hook) => hook.skill?.bundles ?? [])) {
+    const bundle = yield* Effect.try({
+      try: () => SkillBundle.validate(bundleInput),
+      catch: (error) => error,
+    }).pipe(Effect.orDie)
+    if (state.bundles.has(bundle.id)) return yield* Effect.die(`duplicate skill bundle id: ${bundle.id}`)
+    state.bundles.set(bundle.id, bundle)
+
+    for (const entry of bundle.entries) {
+      const location = SkillBundle.location(bundle.id, entry)
+      const md = yield* Effect.try({
+        try: () => ConfigMarkdown.parseContent(bundle.files[entry]!, location),
+        catch: (error) => error,
+      }).pipe(Effect.orDie)
+      if (!isSkillFrontmatter(md.data)) return yield* Effect.die(`invalid skill frontmatter: ${location}`)
+      const existing = state.skills[md.data.name]
+      const existingStorage = state.storage[md.data.name]
+      if (existingStorage?.type === "bundle") {
+        return yield* Effect.die(`duplicate plugin bundle skill ${md.data.name}: ${existing.location}, ${location}`)
+      }
+      if (existing) {
+        yield* Effect.logWarning("bundle skill overrides existing skill", {
+          name: md.data.name,
+          existing: existing.location,
+          bundle: location,
+        })
+      }
+      state.skills[md.data.name] = {
+        name: md.data.name,
+        description: md.data.description,
+        location,
+        content: md.content,
+      }
+      state.storage[md.data.name] = { type: "bundle", bundleID: bundle.id, entry }
+    }
+  }
 })
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/Skill") {}
@@ -256,6 +323,7 @@ const layer = Layer.effect(
     const fsys = yield* FSUtil.Service
     const global = yield* Global.Service
     const flags = yield* RuntimeFlags.Service
+    const plugin = yield* Plugin.Service
     const discovered = yield* InstanceState.make(
       Effect.fn("Skill.discovery")(function* (ctx) {
         return yield* discoverSkills(
@@ -272,7 +340,7 @@ const layer = Layer.effect(
     )
     const state = yield* InstanceState.make(
       Effect.fn("Skill.state")(function* () {
-        const s: State = { skills: {}, dirs: new Set() }
+        const s: State = { skills: {}, storage: {}, bundles: new Map(), dirs: new Set() }
         // Register the built-in skill BEFORE disk discovery so a user-disk
         // skill with the same name can override it.
         s.skills[CUSTOMIZE_OPENCODE_SKILL_NAME] = {
@@ -281,7 +349,9 @@ const layer = Layer.effect(
           location: "<built-in>",
           content: CUSTOMIZE_OPENCODE_SKILL_BODY,
         }
+        s.storage[CUSTOMIZE_OPENCODE_SKILL_NAME] = { type: "builtin" }
         yield* loadSkills(s, yield* InstanceState.get(discovered), events)
+        yield* loadBundles(s, yield* plugin.list())
         return s
       }),
     )
@@ -314,7 +384,67 @@ const layer = Layer.effect(
       return list.filter((skill) => Permission.evaluate("skill", skill.name, agent.permission).action !== "deny")
     })
 
-    return Service.of({ get, require, all, dirs, available })
+    const base = Effect.fn("Skill.base")(function* (name: string) {
+      const s = yield* InstanceState.get(state)
+      const info = s.skills[name]
+      const storage = s.storage[name]
+      if (!info || !storage) return yield* new NotFoundError({ name, available: Object.keys(s.skills).toSorted() })
+      if (storage.type === "filesystem") return path.dirname(storage.entry)
+      if (storage.type === "bundle") return SkillBundle.base(storage.bundleID, storage.entry)
+      return info.location
+    })
+
+    const listFiles = Effect.fn("Skill.listFiles")(function* (name: string, limit: number) {
+      const s = yield* InstanceState.get(state)
+      const storage = s.storage[name]
+      if (!storage) return yield* new NotFoundError({ name, available: Object.keys(s.skills).toSorted() })
+      if (storage.type === "builtin") return []
+      if (storage.type === "bundle") {
+        return SkillBundle.listFiles(s.bundles.get(storage.bundleID)!, storage.entry, limit).map((resource) =>
+          SkillBundle.location(
+            storage.bundleID,
+            path.posix.normalize(path.posix.join(path.posix.dirname(storage.entry), resource)),
+          ),
+        )
+      }
+      const directory = path.dirname(storage.entry)
+      return (yield* fsys
+        .glob("**/*", {
+          cwd: directory,
+          absolute: true,
+          include: "file",
+          dot: true,
+          symlink: false,
+        })
+        .pipe(Effect.orDie))
+        .filter((file) => file !== storage.entry)
+        .toSorted()
+        .slice(0, limit)
+    })
+
+    const readResource = Effect.fn("Skill.readResource")(function* (name: string, resourcePath: string) {
+      const s = yield* InstanceState.get(state)
+      const storage = s.storage[name]
+      if (!storage) return yield* new NotFoundError({ name, available: Object.keys(s.skills).toSorted() })
+      if (storage.type === "builtin") return yield* Effect.die(`built-in skill ${name} has no resources`)
+      if (storage.type === "bundle") {
+        const bundle = s.bundles.get(storage.bundleID)!
+        const resource = SkillBundle.readResource(bundle, storage.entry, resourcePath)
+        return { path: SkillBundle.location(storage.bundleID, resource.path), content: resource.content }
+      }
+      const candidate = SkillResource.resolveFilesystem(storage.sourceRoot, storage.entry, resourcePath)
+      const sourceRoot = yield* fsys.resolve(storage.sourceRoot)
+      const target = SkillResource.validateResolvedFilesystem(sourceRoot, yield* fsys.resolve(candidate), resourcePath)
+      const info = yield* fsys.stat(target).pipe(Effect.orDie)
+      if (info.type !== "File") return yield* Effect.die(`skill resource is not a regular file: ${resourcePath}`)
+      if (info.size > SkillResource.maxBytes) {
+        return yield* Effect.die(`skill resource exceeds ${SkillResource.maxBytes} bytes: ${resourcePath}`)
+      }
+      const content = SkillResource.decodeUtf8(yield* fsys.readFile(target).pipe(Effect.orDie), resourcePath)
+      return { path: target, content }
+    })
+
+    return Service.of({ get, require, all, dirs, available, base, listFiles, readResource })
   }),
 )
 
@@ -348,7 +478,7 @@ export function fmt(list: Info[], opts: { verbose: boolean }) {
 export const node = LayerNode.make({
   service: Service,
   layer: layer,
-  deps: [Discovery.node, Config.node, EventV2Bridge.node, FSUtil.node, Global.node, RuntimeFlags.node],
+  deps: [Discovery.node, Config.node, EventV2Bridge.node, FSUtil.node, Global.node, RuntimeFlags.node, Plugin.node],
 })
 
 export * as Skill from "."

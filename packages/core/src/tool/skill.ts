@@ -1,10 +1,8 @@
 export * as SkillTool from "./skill"
 
-import path from "path"
 import { ToolFailure } from "@opencode-ai/llm"
 import { Effect, Layer, Schema } from "effect"
 import { makeLocationNode } from "../effect/app-node"
-import { FSUtil } from "../fs-util"
 import { SkillV2 } from "../skill"
 import { PermissionV2 } from "../permission"
 import { ToolRegistry } from "./registry"
@@ -16,6 +14,10 @@ const FILE_LIMIT = 10
 
 export const Input = Schema.Struct({
   name: Schema.String.annotate({ description: "The name of the skill from the available skills list" }),
+  resource_path: Schema.String.pipe(
+    Schema.optional,
+    Schema.annotate({ description: "Optional text resource path relative to the loaded skill base directory" }),
+  ),
 })
 
 export const Output = Schema.Struct({
@@ -28,12 +30,12 @@ export const description = [
   "Load a specialized skill when the task at hand matches one of the available skills in the system context.",
   "",
   "Use this tool to inject the skill's instructions and resources into the current conversation. The output may contain detailed workflow guidance as well as references to scripts, files, etc. in the same directory as the skill.",
+  "Pass resource_path to read one referenced text resource through the same skill permission boundary.",
   "",
   "The skill name must match one of the available skills in the system context.",
 ].join("\n")
 
-export const toModelOutput = (skill: SkillV2.Info, files: ReadonlyArray<string>) => {
-  const directory = path.dirname(skill.location)
+export const toModelOutput = (skill: SkillV2.Info, directory: string, files: ReadonlyArray<string>) => {
   return [
     `<skill_content name="${skill.name}">`,
     `# Skill: ${skill.name}`,
@@ -57,7 +59,6 @@ const unableToLoad = (name: string, error?: unknown) =>
 const layer = Layer.effectDiscard(
   Effect.gen(function* () {
     const tools = yield* Tools.Service
-    const fs = yield* FSUtil.Service
     const skills = yield* SkillV2.Service
     const permission = yield* PermissionV2.Service
     yield* tools
@@ -84,18 +85,24 @@ const layer = Layer.effectDiscard(
             }).pipe(Effect.mapError((error) => unableToLoad(input.name, error))),
           execute: (input, _context, skill) =>
             Effect.gen(function* () {
-              const directory = path.dirname(skill.location)
-              const files =
-                path.basename(skill.location) === "SKILL.md"
-                  ? (yield* fs.glob("**/*", { cwd: directory, absolute: true, include: "file", dot: true }))
-                      .filter((file) => path.basename(file) !== "SKILL.md")
-                      .toSorted()
-                      .slice(0, FILE_LIMIT)
-                  : []
+              if (input.resource_path) {
+                const resource = yield* skills.readResource(input.name, input.resource_path)
+                return {
+                  name: skill.name,
+                  directory: resource.path,
+                  output: [
+                    `<skill_resource name="${skill.name}" path="${resource.path}">`,
+                    resource.content,
+                    "</skill_resource>",
+                  ].join("\n"),
+                }
+              }
+              const directory = yield* skills.base(input.name)
+              const files = yield* skills.listFiles(input.name, FILE_LIMIT)
               return {
                 name: skill.name,
                 directory,
-                output: toModelOutput(skill, files),
+                output: toModelOutput(skill, directory, files),
               }
             }).pipe(Effect.mapError((error) => unableToLoad(input.name, error))),
         }),
@@ -107,5 +114,5 @@ const layer = Layer.effectDiscard(
 export const node = makeLocationNode({
   name: "tool/skill",
   layer,
-  deps: [ToolRegistry.node, FSUtil.node, SkillV2.node, PermissionV2.node],
+  deps: [ToolRegistry.node, SkillV2.node, PermissionV2.node],
 })

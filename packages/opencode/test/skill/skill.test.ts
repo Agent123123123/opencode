@@ -13,10 +13,48 @@ import { provideInstance, provideTmpdirInstance, testInstanceStoreLayer, tmpdir 
 import { testEffect } from "../lib/effect"
 import path from "path"
 import fs from "fs/promises"
+import { createHash } from "node:crypto"
+import { Plugin } from "../../src/plugin"
 
 const node = LayerNode.compile(CrossSpawnSpawner.node)
 
 const it = testEffect(Layer.mergeAll(LayerNode.compile(Skill.node), node, testInstanceStoreLayer))
+const bundleFiles = {
+  "reference/shared.md": "shared reference",
+  "verification/SKILL.md": "---\nname: verification\ndescription: Verify\n---\n# Verify",
+}
+const bundleEntries = ["verification/SKILL.md"]
+const bundleDigest = createHash("sha256")
+  .update(
+    JSON.stringify({
+      schema: "opencode.skill_bundle.v1",
+      id: "motryx.dv",
+      entries: bundleEntries,
+      files: bundleFiles,
+    }),
+  )
+  .digest("hex")
+const bundlePlugin = Layer.mock(Plugin.Service, {
+  list: () =>
+    Effect.succeed([
+      {
+        skill: {
+          bundles: [
+            {
+              schema: "opencode.skill_bundle.v1",
+              id: "motryx.dv",
+              digest: bundleDigest,
+              entries: bundleEntries,
+              files: bundleFiles,
+            },
+          ],
+        },
+      },
+    ]),
+})
+const itWithBundle = testEffect(
+  Layer.mergeAll(LayerNode.compile(Skill.node, [[Plugin.node, bundlePlugin]]), node, testInstanceStoreLayer),
+)
 const itWithoutClaudeCodeSkills = testEffect(
   Layer.mergeAll(
     LayerNode.compile(Skill.node, [[RuntimeFlags.node, RuntimeFlags.layer({ disableClaudeCodeSkills: true })]]),
@@ -64,6 +102,32 @@ const withHome = <A, E, R>(home: string, self: Effect.Effect<A, E, R>) =>
   )
 
 describe("skill", () => {
+  itWithBundle.live("loads plugin bundle content and shared resources through the native registry", () =>
+    provideTmpdirInstance(
+      (dir) =>
+        Effect.gen(function* () {
+          yield* Effect.promise(() =>
+            Bun.write(
+              path.join(dir, ".agents", "skills", "verification", "SKILL.md"),
+              "---\nname: verification\ndescription: Filesystem verification\n---\n# Filesystem",
+            ),
+          )
+          const skill = yield* Skill.Service
+          expect(yield* skill.require("verification")).toMatchObject({
+            location: "skill://motryx.dv/verification/SKILL.md",
+            content: "# Verify",
+          })
+          expect(yield* skill.base("verification")).toBe("skill://motryx.dv/verification")
+          expect(yield* skill.listFiles("verification", 10)).toEqual(["skill://motryx.dv/reference/shared.md"])
+          expect(yield* skill.readResource("verification", "../reference/shared.md")).toEqual({
+            path: "skill://motryx.dv/reference/shared.md",
+            content: "shared reference",
+          })
+        }),
+      { git: true },
+    ),
+  )
+
   it.effect("formats verbose locations as XML-safe filesystem paths", () =>
     Effect.sync(() => {
       const output = Skill.fmt(

@@ -63,6 +63,10 @@ describe("SkillTool", () => {
               reload: () => Effect.die("unused"),
               sources: () => Effect.die("unused"),
               list: () => Effect.succeed(current),
+              base: (name) => Effect.succeed(path.dirname(current.find((skill) => skill.name === name)!.location)),
+              listFiles: (name) => Effect.succeed(name === "effect" ? [reference] : []),
+              readResource: (_name, resourcePath) =>
+                Effect.succeed({ path: reference, content: `resource:${resourcePath}` }),
             }),
           )
           const skillToolLayer = AppNodeBuilder.build(
@@ -88,9 +92,11 @@ describe("SkillTool", () => {
               }),
             ).toEqual({
               type: "text",
-              value: SkillTool.toModelOutput(info, [reference]),
+              value: SkillTool.toModelOutput(info, directory, [reference]),
             })
-            expect(SkillTool.toModelOutput(info, [reference])).toContain(`Base directory for this skill: ${directory}`)
+            expect(SkillTool.toModelOutput(info, directory, [reference])).toContain(
+              `Base directory for this skill: ${directory}`,
+            )
             expect(
               yield* settleTool(registry, {
                 sessionID,
@@ -98,13 +104,32 @@ describe("SkillTool", () => {
                 call: { type: "tool-call", id: "call-skill-overflow", name: "skill", input: { name: "effect" } },
               }),
             ).toMatchObject({
-              result: { type: "text", value: SkillTool.toModelOutput(info, [reference]) },
+              result: { type: "text", value: SkillTool.toModelOutput(info, directory, [reference]) },
               output: { structured: { name: "effect" } },
             })
             expect(assertions).toMatchObject([
               { sessionID, action: "skill", resources: ["effect"], save: ["effect"] },
               { sessionID, action: "skill", resources: ["effect"], save: ["effect"] },
             ])
+            expect(
+              yield* executeTool(registry, {
+                sessionID,
+                ...toolIdentity,
+                call: {
+                  type: "tool-call",
+                  id: "call-skill-resource",
+                  name: "skill",
+                  input: { name: "effect", resource_path: "reference.md" },
+                },
+              }),
+            ).toEqual({
+              type: "text",
+              value: [
+                `<skill_resource name="effect" path="${reference}">`,
+                "resource:reference.md",
+                "</skill_resource>",
+              ].join("\n"),
+            })
             expect(
               yield* executeTool(registry, {
                 sessionID,
@@ -140,7 +165,7 @@ describe("SkillTool", () => {
                 ...toolIdentity,
                 call: { type: "tool-call", id: "call-flat-skill", name: "skill", input: { name: "public" } },
               }),
-            ).toEqual({ type: "text", value: SkillTool.toModelOutput(flat, []) })
+            ).toEqual({ type: "text", value: SkillTool.toModelOutput(flat, path.dirname(flat.location), []) })
           }).pipe(Effect.provide(skillToolLayer))
         }),
       ),

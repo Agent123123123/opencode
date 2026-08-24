@@ -229,6 +229,14 @@ export type ProviderHook = {
   models?: (provider: ProviderV2, ctx: ProviderHookContext) => Promise<Record<string, ModelV2>>
 }
 
+export type PluginSkillBundle = {
+  schema: "opencode.skill_bundle.v1"
+  id: string
+  digest: string
+  entries: string[]
+  files: Record<string, string>
+}
+
 /** @deprecated Use AuthOAuthResult instead. */
 export type AuthOuathResult = AuthOAuthResult
 
@@ -238,6 +246,9 @@ export interface Hooks {
   config?: (input: Config) => Promise<void>
   tool?: {
     [key: string]: ToolDefinition
+  }
+  skill?: {
+    bundles: PluginSkillBundle[]
   }
   auth?: AuthHook
   provider?: ProviderHook
