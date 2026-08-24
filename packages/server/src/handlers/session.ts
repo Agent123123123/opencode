@@ -13,6 +13,7 @@ import {
   UnknownError,
 } from "@opencode-ai/protocol/errors"
 import { AbsolutePath } from "@opencode-ai/core/schema"
+import { ManagedSessionAuthority } from "../managed-session-authority"
 
 const DefaultSessionsLimit = 50
 const DefaultSessionHistoryLimit = 50
@@ -68,6 +69,7 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
       .handle(
         "session.create",
         Effect.fn(function* (ctx) {
+          if (ctx.payload.executionManaged === true) yield* ManagedSessionAuthority.assertController()
           const create = session
             .create({
               id: ctx.payload.id,
@@ -118,9 +120,9 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
                   ),
               }),
             )
-          return {
-            data: yield* create,
-          }
+          const data = yield* create
+          if (data.execution.managed) yield* ManagedSessionAuthority.grant(data.id)
+          return { data }
         }),
       )
       .handle(
@@ -141,6 +143,8 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
       .handle(
         "session.executionGate.set",
         Effect.fn(function* (ctx) {
+          if (ctx.payload.open) yield* ManagedSessionAuthority.assertWrite(session, ctx.params.sessionID)
+          else yield* ManagedSessionAuthority.grant(ctx.params.sessionID)
           return {
             data: yield* session.setExecutionGate({
               sessionID: ctx.params.sessionID,
@@ -187,6 +191,7 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
       .handle(
         "session.update",
         Effect.fn(function* (ctx) {
+          yield* ManagedSessionAuthority.assertWrite(session, ctx.params.sessionID)
           return {
             data: yield* session.setTitle({ sessionID: ctx.params.sessionID, title: ctx.payload.title }).pipe(
               Effect.catchTag(
@@ -204,6 +209,7 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
       .handle(
         "session.switchAgent",
         Effect.fn(function* (ctx) {
+          yield* ManagedSessionAuthority.assertWrite(session, ctx.params.sessionID)
           yield* session.switchAgent({ sessionID: ctx.params.sessionID, agent: ctx.payload.agent }).pipe(
             Effect.catchTag("Session.NotFoundError", (error) =>
               Effect.fail(
@@ -220,6 +226,7 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
       .handle(
         "session.switchModel",
         Effect.fn(function* (ctx) {
+          yield* ManagedSessionAuthority.assertWrite(session, ctx.params.sessionID)
           yield* session.switchModel({ sessionID: ctx.params.sessionID, model: ctx.payload.model }).pipe(
             Effect.catchTags({
               "Session.NotFoundError": (error) =>
@@ -262,6 +269,7 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
       .handle(
         "session.prompt",
         Effect.fn(function* (ctx) {
+          yield* ManagedSessionAuthority.assertWrite(session, ctx.params.sessionID)
           return {
             data: yield* session
               .prompt({
@@ -313,6 +321,7 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
       .handle(
         "session.input.cancel",
         Effect.fn(function* (ctx) {
+          yield* ManagedSessionAuthority.assertWrite(session, ctx.params.sessionID)
           return {
             data: yield* session.cancelInput({
               sessionID: ctx.params.sessionID,
@@ -339,6 +348,7 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
       .handle(
         "session.compact",
         Effect.fn(function* (ctx) {
+          yield* ManagedSessionAuthority.assertWrite(session, ctx.params.sessionID)
           yield* session.compact({ sessionID: ctx.params.sessionID }).pipe(
             Effect.catchTag("Session.NotFoundError", (error) =>
               Effect.fail(
@@ -363,6 +373,7 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
       .handle(
         "session.wait",
         Effect.fn(function* (ctx) {
+          yield* ManagedSessionAuthority.assertWrite(session, ctx.params.sessionID)
           yield* session.wait(ctx.params.sessionID).pipe(
             Effect.catchTag("Session.NotFoundError", (error) =>
               Effect.fail(
@@ -387,6 +398,7 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
       .handle(
         "session.revert.stage",
         Effect.fn(function* (ctx) {
+          yield* ManagedSessionAuthority.assertWrite(session, ctx.params.sessionID)
           return {
             data: yield* session.revert.stage({ ...ctx.params, ...ctx.payload }).pipe(
               Effect.catchTag(
@@ -426,6 +438,7 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
       .handle(
         "session.revert.clear",
         Effect.fn(function* (ctx) {
+          yield* ManagedSessionAuthority.assertWrite(session, ctx.params.sessionID)
           yield* session.revert.clear(ctx.params.sessionID).pipe(
             Effect.catchTag(
               "Session.NotFoundError",
@@ -455,6 +468,7 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
       .handle(
         "session.revert.commit",
         Effect.fn(function* (ctx) {
+          yield* ManagedSessionAuthority.assertWrite(session, ctx.params.sessionID)
           yield* session.revert.commit(ctx.params.sessionID).pipe(
             Effect.catchTag(
               "Session.NotFoundError",
@@ -532,6 +546,7 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
       .handle(
         "session.interrupt",
         Effect.fn(function* (ctx) {
+          yield* ManagedSessionAuthority.assertWrite(session, ctx.params.sessionID)
           const accepted = yield* session.interruptExact({
             sessionID: ctx.params.sessionID,
             turnID: ctx.payload.turnID,

@@ -168,7 +168,7 @@ const layer = Layer.effect(
       const args = Shell.login(command) ? [...(input.args ?? []), "-l"] : [...(input.args ?? [])]
       const cwd = input.cwd || location.directory
       const env = {
-        ...process.env,
+        ...(input.inheritEnv === false ? {} : process.env),
         ...input.env,
         TERM: "xterm-256color",
         OPENCODE_TERMINAL: "1",

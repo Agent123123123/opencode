@@ -417,10 +417,10 @@ export const ShellTool = Tool.define(
       const extra = yield* plugin.trigger(
         "shell.env",
         { cwd, sessionID: ctx.sessionID, callID: ctx.callID },
-        { env: {} },
+        { env: {}, inherit: undefined as boolean | undefined },
       )
       return {
-        ...process.env,
+        ...(extra.inherit === false ? {} : process.env),
         ...extra.env,
       }
     })

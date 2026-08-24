@@ -175,7 +175,7 @@ describe("v2 pty HttpApi", () => {
       }),
   )
   ;(process.platform === "win32" ? effectIt.live.skip : effectIt.live)(
-    "applies plugin shell environment before forced PTY values",
+    "replaces inherited PTY environment when a plugin disables inheritance",
     () =>
       Effect.gen(function* () {
         const dir = yield* tmpdirScoped({ git: true, config: { formatter: false, lsp: false } })
@@ -188,6 +188,8 @@ describe("v2 pty HttpApi", () => {
             [
               "export default async () => ({",
               '  "shell.env": (input, output) => {',
+              "    output.inherit = false",
+              '    output.env.PATH = process.env.PATH ?? "/usr/bin:/bin"',
               '    output.env.SHARED = "plugin"',
               '    output.env.PLUGIN = "plugin"',
               '    output.env.TERM = "plugin"',
@@ -209,7 +211,7 @@ describe("v2 pty HttpApi", () => {
           directoryHeader(dir),
           HttpClientRequest.bodyJson({
             command: "/bin/sh",
-            args: ["-c", 'printf "%s|%s|%s|%s|%s\\n" "$CALLER" "$SHARED" "$PLUGIN" "$TERM" "$HOOK_CWD"; sleep 5'],
+            args: ["-c", 'printf "%s|%s|%s|%s|%s|%s\\n" "$CALLER" "$SHARED" "$PLUGIN" "$TERM" "$HOOK_CWD" "$HOME"; sleep 5'],
             cwd,
             env: { CALLER: "caller", SHARED: "caller", TERM: "caller" },
           }),
@@ -240,8 +242,8 @@ describe("v2 pty HttpApi", () => {
             return yield* takeUntil(expected, next)
           })
 
-        expect(yield* takeUntil(`caller|plugin|plugin|xterm-256color|${cwd}`)).toContain(
-          `caller|plugin|plugin|xterm-256color|${cwd}`,
+        expect(yield* takeUntil(`caller|plugin|plugin|xterm-256color|${cwd}|`)).toContain(
+          `caller|plugin|plugin|xterm-256color|${cwd}|`,
         )
         yield* write(new Socket.CloseEvent(1000, "done")).pipe(Effect.catch(() => Effect.void))
         yield* HttpClientRequest.delete(`/api/pty/${info.id}`).pipe(directoryHeader(dir), HttpClient.execute)

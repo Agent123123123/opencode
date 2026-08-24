@@ -68,13 +68,17 @@ export const ptyHandlers = HttpApiBuilder.group(InstanceHttpApi, "pty", (handler
 
     const create = Effect.fn("PtyHttpApi.create")(function* (ctx: { payload: typeof Pty.CreateInput.Type }) {
       const cwd = ctx.payload.cwd || (yield* InstanceState.context).directory
-      const shell = yield* plugin.trigger("shell.env", { cwd }, { env: {} as Record<string, string> })
+      const shell = yield* plugin.trigger("shell.env", { cwd }, {
+        env: {} as Record<string, string>,
+        inherit: undefined as boolean | undefined,
+      })
       return yield* pty(
         Pty.Service.use((service) =>
           service.create({
             ...ctx.payload,
             args: ctx.payload.args ? [...ctx.payload.args] : undefined,
             cwd,
+            inheritEnv: shell.inherit !== false,
             env: { ...ctx.payload.env, ...shell.env },
           }),
         ),

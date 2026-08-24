@@ -279,7 +279,7 @@ export interface Hooks {
   "tool.execute.before"?: (input: ToolExecutionHookInput, output: { args: any }) => Promise<void>
   "shell.env"?: (
     input: { cwd: string; sessionID?: string; callID?: string },
-    output: { env: Record<string, string> },
+    output: { env: Record<string, string>; inherit?: boolean },
   ) => Promise<void>
   "tool.execute.after"?: (
     input: ToolExecutionHookInput & { args: any },

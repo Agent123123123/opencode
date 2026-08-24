@@ -554,11 +554,11 @@ const layer = Layer.effect(
               const shellEnv = yield* plugin.trigger(
                 "shell.env",
                 { cwd, sessionID: input.sessionID, callID: part.callID },
-                { env: {} },
+                { env: {}, inherit: undefined as boolean | undefined },
               )
               const cmd = ChildProcess.make(sh, args, {
                 cwd,
-                extendEnv: true,
+                extendEnv: shellEnv.inherit !== false,
                 env: { ...shellEnv.env, TERM: "dumb" },
                 stdin: "ignore",
                 forceKillAfter: "3 seconds",

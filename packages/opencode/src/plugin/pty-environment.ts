@@ -15,8 +15,11 @@ export const layer = Layer.effect(
         return yield* instances.provide(
           { directory: input.directory },
           plugin
-            .trigger("shell.env", { cwd: input.cwd }, { env: {} as Record<string, string> })
-            .pipe(Effect.map((result) => result.env)),
+            .trigger("shell.env", { cwd: input.cwd }, {
+              env: {} as Record<string, string>,
+              inherit: undefined as boolean | undefined,
+            })
+            .pipe(Effect.map((result) => ({ env: result.env, inherit: result.inherit }))),
         )
       }),
     })

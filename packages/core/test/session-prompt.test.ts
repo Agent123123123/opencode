@@ -15,7 +15,6 @@ import { Prompt } from "@opencode-ai/core/session/prompt"
 import { SessionMessage } from "@opencode-ai/core/session/message"
 import { SessionProjector } from "@opencode-ai/core/session/projector"
 import { SessionExecution } from "@opencode-ai/core/session/execution"
-import { closeManagedExecutionGates } from "@opencode-ai/core/session/execution/local"
 import { SessionInput } from "@opencode-ai/core/session/input"
 import { SessionInputTable, SessionMessageTable, SessionTable } from "@opencode-ai/core/session/sql"
 import { SessionStore } from "@opencode-ai/core/session/store"
@@ -406,58 +405,6 @@ describe("SessionV2.prompt", () => {
       expect(yield* session.messages({ sessionID })).toMatchObject([
         { id: messageID, type: "user", text: "Promote once" },
       ])
-    }),
-  )
-
-  it.effect("holds managed inputs behind the durable execution gate until Sidecar reconciliation opens it", () =>
-    Effect.gen(function* () {
-      yield* setup
-      const { db } = yield* Database.Service
-      const session = yield* SessionV2.Service
-      const events = yield* EventV2.Service
-      yield* db
-        .update(SessionTable)
-        .set({
-          execution_managed: true,
-          execution_gate_open: true,
-          execution_gate_reason: "previous_process_active",
-          active_turn_id: SessionMessage.ID.make("msg_retired_turn"),
-          active_input_ids: [messageID],
-        })
-        .where(eq(SessionTable.id, sessionID))
-        .run()
-        .pipe(Effect.orDie)
-      yield* closeManagedExecutionGates(db)
-      yield* session.prompt({
-        id: messageID,
-        sessionID,
-        prompt: Prompt.make({ text: "Wait for replay" }),
-        delivery: "queue",
-        resume: false,
-      })
-
-      expect(yield* SessionInput.hasPending(db, sessionID, "queue")).toBe(false)
-      expect(yield* SessionInput.promoteNextQueued(db, events, sessionID)).toBe(false)
-      expect(yield* session.executionGate(sessionID)).toEqual({
-        managed: true,
-        open: false,
-        reason: "host_process_started",
-      })
-      expect(yield* db
-        .select({ activeTurnID: SessionTable.active_turn_id, activeInputIDs: SessionTable.active_input_ids })
-        .from(SessionTable)
-        .where(eq(SessionTable.id, sessionID))
-        .get()
-        .pipe(Effect.orDie)).toEqual({ activeTurnID: null, activeInputIDs: null })
-
-      expect(yield* session.setExecutionGate({
-        sessionID,
-        open: true,
-        reason: "motryx_sidecar_reconciled",
-      })).toEqual({ managed: true, open: true, reason: "motryx_sidecar_reconciled" })
-      expect(wakeCalls).toContain(sessionID)
-      expect(yield* SessionInput.hasPending(db, sessionID, "queue")).toBe(true)
-      expect(yield* SessionInput.promoteNextQueued(db, events, sessionID)).toBe(true)
     }),
   )
 

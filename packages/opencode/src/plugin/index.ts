@@ -289,7 +289,12 @@ const layer = Layer.effect(
       for (const hook of s.hooks) {
         const fn = hook[name] as any
         if (!fn) continue
+        const inheritanceDisabled =
+          name === "shell.env" && (output as { inherit?: boolean }).inherit === false
         yield* Effect.promise(async () => fn(input, output))
+        if (inheritanceDisabled || (name === "shell.env" && (output as { inherit?: boolean }).inherit === false)) {
+          Object.assign(output as object, { inherit: false })
+        }
       }
       return output
     })
