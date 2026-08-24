@@ -236,6 +236,22 @@ export function resolvePluginProviders(input: {
   return result
 }
 
+export function resolveConfigProviders(input: {
+  configuredProviders: Record<string, { name?: string }>
+  existingProviders: Record<string, unknown>
+  pluginProviders: Array<{ id: string }>
+  disabled: Set<string>
+  enabled?: Set<string>
+}) {
+  return Object.entries(input.configuredProviders).flatMap(([id, provider]) => {
+    if (Object.hasOwn(input.existingProviders, id)) return []
+    if (input.pluginProviders.some((item) => item.id === id)) return []
+    if (input.disabled.has(id)) return []
+    if (input.enabled && !input.enabled.has(id)) return []
+    return [{ id, name: provider.name ?? id }]
+  })
+}
+
 export const ProvidersCommand = cmd({
   command: "providers",
   aliases: ["auth"],
@@ -384,6 +400,13 @@ export const ProvidersLoginCommand = effectCmd({
       enabled,
       providerNames: Object.fromEntries(Object.entries(config.provider ?? {}).map(([id, p]) => [id, p.name])),
     })
+    const configProviders = resolveConfigProviders({
+      configuredProviders: config.provider ?? {},
+      existingProviders: providers,
+      pluginProviders,
+      disabled,
+      enabled,
+    })
     const options = [
       ...pipe(
         providers,
@@ -405,6 +428,11 @@ export const ProvidersLoginCommand = effectCmd({
         label: x.name,
         value: x.id,
         hint: "plugin",
+      })),
+      ...configProviders.map((x) => ({
+        label: x.name,
+        value: x.id,
+        hint: "config",
       })),
     ]
 
@@ -449,7 +477,9 @@ export const ProvidersLoginCommand = effectCmd({
       }
 
       yield* Prompt.log.warn(
-        `This only stores a credential for ${provider} - you will need configure it in opencode.json, check the docs for examples.`,
+        process.env.MOTRYX_PROJECT_DIR
+          ? `This only stores a credential for ${provider} - configure it in Motryx config.jsonc before use.`
+          : `This only stores a credential for ${provider} - you will need configure it in opencode.json, check the docs for examples.`,
       )
     }
 

@@ -114,7 +114,7 @@ export function createDialogProviderOptions(props: DialogProviderProps = {}) {
       placeholder: "Provider id",
       description: () => (
         <text fg={theme.textMuted}>
-          This only stores a credential. Configure the provider in opencode.json to use it.
+          This only stores a credential. Configure the provider in your product config to use it.
         </text>
       ),
     })
@@ -455,7 +455,7 @@ function ApiMethod(props: ApiMethodProps) {
         if (props.custom && !sync.data.provider_next.all.some((provider) => provider.id === props.providerID)) {
           toast.show({
             variant: "info",
-            message: `Saved credential for ${props.providerID}. Configure it in opencode.json to use it.`,
+            message: `Saved credential for ${props.providerID}. Configure it in your product config to use it.`,
           })
           dialog.clear()
           return

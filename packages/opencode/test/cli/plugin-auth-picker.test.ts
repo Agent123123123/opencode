@@ -1,5 +1,5 @@
 import { test, expect, describe } from "bun:test"
-import { resolvePluginProviders } from "../../src/cli/cmd/providers"
+import { resolveConfigProviders, resolvePluginProviders } from "../../src/cli/cmd/providers"
 import type { Hooks } from "@opencode-ai/plugin"
 
 function hookWithAuth(provider: string): Hooks {
@@ -116,5 +116,44 @@ describe("resolvePluginProviders", () => {
       providerNames: {},
     })
     expect(result).toEqual([])
+  })
+})
+
+describe("resolveConfigProviders", () => {
+  test("adds config-only providers using their configured names", () => {
+    const result = resolveConfigProviders({
+      configuredProviders: { qiuqiu: { name: "QiuqiuToken" } },
+      existingProviders: {},
+      pluginProviders: [],
+      disabled: new Set(),
+    })
+    expect(result).toEqual([{ id: "qiuqiu", name: "QiuqiuToken" }])
+  })
+
+  test("skips providers already supplied by models.dev or plugins", () => {
+    const result = resolveConfigProviders({
+      configuredProviders: {
+        anthropic: { name: "Anthropic override" },
+        portkey: { name: "Portkey override" },
+      },
+      existingProviders: { anthropic: {} },
+      pluginProviders: [{ id: "portkey" }],
+      disabled: new Set(),
+    })
+    expect(result).toEqual([])
+  })
+
+  test("respects enabled and disabled provider filters", () => {
+    const result = resolveConfigProviders({
+      configuredProviders: {
+        qiuqiu: { name: "QiuqiuToken" },
+        custom: {},
+      },
+      existingProviders: {},
+      pluginProviders: [],
+      disabled: new Set(["custom"]),
+      enabled: new Set(["qiuqiu", "custom"]),
+    })
+    expect(result).toEqual([{ id: "qiuqiu", name: "QiuqiuToken" }])
   })
 })
