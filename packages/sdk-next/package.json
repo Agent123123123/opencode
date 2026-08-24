@@ -9,6 +9,7 @@
   },
   "scripts": {
     "test": "bun test --timeout 5000",
+    "test:e2e": "bun test ./test/session-history-projection.e2e.ts",
     "typecheck": "tsgo --noEmit"
   },
   "dependencies": {

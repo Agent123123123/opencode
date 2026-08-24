@@ -259,9 +259,12 @@ const lowerAssistantMessage = Effect.fn("OpenAIChat.lowerAssistantMessage")(func
       continue
     }
   }
+  const text = ProviderShared.joinText(content)
+  if (text.length === 0 && toolCalls.length === 0)
+    return yield* invalid("OpenAI Chat assistant messages require content or tool calls")
   return {
     role: "assistant" as const,
-    content: content.length === 0 ? null : ProviderShared.joinText(content),
+    content: text.length === 0 ? null : text,
     tool_calls: toolCalls.length === 0 ? undefined : toolCalls,
     reasoning_content:
       reasoning.length > 0

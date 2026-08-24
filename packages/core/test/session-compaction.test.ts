@@ -1,5 +1,15 @@
 import { expect, test } from "bun:test"
+import { Message, Model } from "@opencode-ai/llm"
+import * as OpenAIChat from "@opencode-ai/llm/protocols/openai-chat"
+import { ModelV2 } from "@opencode-ai/core/model"
+import { ProviderV2 } from "@opencode-ai/core/provider"
 import { SessionCompaction } from "@opencode-ai/core/session/compaction"
+import { SessionMessage } from "@opencode-ai/core/session/message"
+import { SessionModelContext } from "@opencode-ai/core/session/model-context"
+import { DateTime, Effect } from "effect"
+
+const created = DateTime.makeUnsafe(0)
+const model = Model.make({ id: "model", provider: "provider", route: OpenAIChat.route })
 
 test("compaction prompt preserves detailed work state and relevant files", () => {
   const prompt = SessionCompaction.buildPrompt({ context: ["conversation history"] })
@@ -44,4 +54,55 @@ test("compaction describes tool media without embedding base64", () => {
 
   expect(serialized).toBe("Image read successfully\n[Attached image/png: pixel.png]")
   expect(serialized).not.toContain(base64)
+})
+
+test("compaction excludes failed narrative but retains terminal tool facts", () => {
+  const projection = Effect.runSync(
+    SessionModelContext.projectEntries(
+      [
+        {
+          seq: 1,
+          message: SessionMessage.Assistant.make({
+            id: SessionMessage.ID.make("msg_failed_tool"),
+            type: "assistant",
+            agent: "build",
+            model: { id: ModelV2.ID.make("model"), providerID: ProviderV2.ID.make("provider") },
+            content: [
+              SessionMessage.AssistantReasoning.make({
+                id: "reasoning_failed",
+                type: "reasoning",
+                text: "reasoning must not reach compaction",
+              }),
+              SessionMessage.AssistantTool.make({
+                id: "read_complete",
+                type: "tool",
+                name: "read",
+                state: SessionMessage.ToolStateCompleted.make({
+                  status: "completed",
+                  input: { path: "README.md" },
+                  content: [{ type: "text", text: "durable tool result" }],
+                  structured: {},
+                }),
+                time: { created, completed: created },
+              }),
+            ],
+            finish: "error",
+            error: { type: "unknown", message: "transport failed" },
+            time: { created, completed: created },
+          }),
+        },
+      ],
+      model,
+    ),
+  )
+
+  expect(projection.messages.map((message) => message.role)).toEqual(["assistant", "tool"])
+  expect(projection.messages[0]).toMatchObject(
+    Message.assistant({ type: "tool-call", id: "read_complete", name: "read", input: { path: "README.md" } }),
+  )
+  const serialized = SessionCompaction.serializeProjectedEntry(projection.entries[0]!)
+  expect(serialized).toContain('[Assistant tool call]: read({"path":"README.md"})')
+  expect(serialized).toContain("[Tool result]: durable tool result")
+  expect(serialized).toContain("durable tool result")
+  expect(serialized).not.toContain("reasoning must not reach compaction")
 })

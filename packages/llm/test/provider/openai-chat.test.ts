@@ -462,17 +462,19 @@ describe("OpenAI Chat route", () => {
     }),
   )
 
-  it.effect("lowers reasoning-only assistant history", () =>
+  it.effect("rejects reasoning-only assistant history before transport", () =>
     Effect.gen(function* () {
-      const prepared = yield* LLMClient.prepare<OpenAIChat.OpenAIChatBody>(
+      const error = yield* LLMClient.prepare<OpenAIChat.OpenAIChatBody>(
         LLM.request({
           id: "req_reasoning",
           model,
           messages: [Message.assistant({ type: "reasoning", text: "hidden" })],
         }),
-      )
+      ).pipe(Effect.flip)
 
-      expect(prepared.body.messages).toEqual([{ role: "assistant", content: null, reasoning_content: "hidden" }])
+      expect(error).toBeInstanceOf(LLMError)
+      expect(error.reason).toMatchObject({ _tag: "InvalidRequest" })
+      expect(error.message).toContain("assistant messages require content or tool calls")
     }),
   )
 

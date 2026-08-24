@@ -1,11 +1,21 @@
 export * as SessionCompaction from "./compaction"
 
-import { LLM, LLMError, LLMEvent, Message, type LLMRequest, type Model } from "@opencode-ai/llm"
+import {
+  LLM,
+  LLMError,
+  LLMEvent,
+  Message,
+  type LLMRequest,
+  type Model,
+  type ToolContent,
+  type ToolResultPart,
+} from "@opencode-ai/llm"
 import { DateTime, Effect, Stream } from "effect"
 import type { Config } from "../config"
 import type { EventV2 } from "../event"
 import { SessionEvent } from "./event"
 import { SessionMessage } from "./message"
+import { SessionModelContext } from "./model-context"
 import { SessionSchema } from "./schema"
 import { Token } from "../util/token"
 
@@ -54,11 +64,6 @@ When combining:
 - If a blocker has been resolved, update the summary to reflect that while keeping any details still needed to continue the work.
 - Update "Objective" and "Next Move" to reflect the current work state.`
 
-type Entry = {
-  readonly seq: number
-  readonly message: SessionMessage.Message
-}
-
 type Settings = {
   readonly auto: boolean
   readonly buffer: number
@@ -75,7 +80,7 @@ type Dependencies = {
 
 type Input = {
   readonly sessionID: SessionSchema.ID
-  readonly entries: readonly Entry[]
+  readonly entries: readonly SessionModelContext.ProjectedEntry[]
   readonly model: Model
   readonly request: LLMRequest
 }
@@ -85,39 +90,64 @@ const estimate = (value: unknown) => Token.estimate(JSON.stringify(value))
 const truncate = (value: string) =>
   value.length <= TOOL_OUTPUT_MAX_CHARS ? value : `${value.slice(0, TOOL_OUTPUT_MAX_CHARS)}\n[truncated]`
 
-export const serializeToolContent = (content: SessionMessage.ToolStateCompleted["content"]) =>
+export const serializeToolContent = (content: readonly ToolContent[]) =>
   content
     .map((item) =>
       item.type === "text" ? item.text : `[Attached ${item.mime}${item.name === undefined ? "" : `: ${item.name}`}]`,
     )
     .join("\n")
 
-const serialize = (message: SessionMessage.Message) => {
-  if (message.type === "user") {
-    const files = message.files?.map((file) => `[Attached ${file.mime}: ${file.name ?? file.uri}]`) ?? []
-    return [`[User]: ${message.text}`, ...files].join("\n")
+const stringify = (value: unknown) => {
+  if (typeof value === "string") return value
+  try {
+    return JSON.stringify(value) ?? String(value)
+  } catch {
+    return String(value)
   }
-  if (message.type === "assistant") {
-    return message.content
-      .flatMap((part) => {
-        if (part.type === "text") return [`[Assistant]: ${part.text}`]
-        if (part.type === "reasoning") return part.text ? [`[Assistant reasoning]: ${part.text}`] : []
-        const input = typeof part.state.input === "string" ? part.state.input : JSON.stringify(part.state.input)
-        if (part.state.status === "completed")
-          return [
-            `[Assistant tool call]: ${part.name}(${input})`,
-            `[Tool result]: ${truncate(serializeToolContent(part.state.content))}`,
-          ]
-        if (part.state.status === "error")
-          return [`[Assistant tool call]: ${part.name}(${input})`, `[Tool error]: ${part.state.error.message}`]
-        return [`[Assistant tool call]: ${part.name}(${input})`]
-      })
-      .join("\n")
+}
+
+const serializeToolResult = (part: ToolResultPart) => {
+  if (part.result.type === "content") return serializeToolContent(part.result.value)
+  return stringify(part.result.value)
+}
+
+export const serializeProjectedEntry = (entry: SessionModelContext.ProjectedEntry) => {
+  const lines: string[] = []
+  for (const message of entry.messages) {
+    for (const part of message.content) {
+      if (message.role === "system") {
+        if (part.type === "text") lines.push(`[System update]: ${part.text}`)
+        continue
+      }
+      if (message.role === "user") {
+        if (part.type === "text") {
+          if (entry.sourceType === "synthetic") lines.push(`[Synthetic context]: ${part.text}`)
+          else if (entry.sourceType === "shell") {
+            const text = part.text.startsWith("Shell command: ") ? part.text.slice("Shell command: ".length) : part.text
+            lines.push(`[Shell]: ${truncate(text)}`)
+          } else lines.push(`[User]: ${part.text}`)
+        }
+        if (part.type === "media")
+          lines.push(`[Attached ${part.mediaType}${part.filename === undefined ? "" : `: ${part.filename}`}]`)
+        continue
+      }
+      if (message.role === "assistant") {
+        if (part.type === "text") lines.push(`[Assistant]: ${part.text}`)
+        if (part.type === "reasoning" && part.text) lines.push(`[Assistant reasoning]: ${part.text}`)
+        if (part.type === "tool-call") lines.push(`[Assistant tool call]: ${part.name}(${stringify(part.input)})`)
+        if (part.type === "tool-result")
+          lines.push(
+            `[Tool ${part.result.type === "error" ? "error" : "result"}]: ${truncate(serializeToolResult(part))}`,
+          )
+        continue
+      }
+      if (message.role === "tool" && part.type === "tool-result")
+        lines.push(
+          `[Tool ${part.result.type === "error" ? "error" : "result"}]: ${truncate(serializeToolResult(part))}`,
+        )
+    }
   }
-  if (message.type === "system") return `[System update]: ${message.text}`
-  if (message.type === "synthetic") return `[Synthetic context]: ${message.text}`
-  if (message.type === "shell") return `[Shell]: ${message.command}\n${truncate(message.output)}`
-  return ""
+  return lines.join("\n")
 }
 
 const settings = (documents: readonly Config.Entry[]) => {
@@ -135,12 +165,12 @@ const settings = (documents: readonly Config.Entry[]) => {
 }
 
 const select = (
-  entries: readonly Entry[],
+  entries: readonly SessionModelContext.ProjectedEntry[],
   tokens: number,
 ): { readonly head: string; readonly recent: string } | undefined => {
   const conversation = entries
-    .filter((entry) => entry.message.type !== "compaction")
-    .map((entry) => serialize(entry.message))
+    .filter((entry) => entry.sourceType !== "compaction")
+    .map(serializeProjectedEntry)
     .filter(Boolean)
   if (conversation.length === 0) return
   let total = 0
@@ -180,11 +210,11 @@ export const make = (dependencies: Dependencies) => {
     if (context === undefined || context <= 0) return false
     const output = input.request.generation?.maxTokens ?? input.model.route.defaults.limits?.output ?? 0
     const selected = select(input.entries, config.tokens)
-    const previousSummary = input.entries.find((entry) => entry.message.type === "compaction")?.message
-    if (!selected || (selected.head.length === 0 && previousSummary?.type !== "compaction")) return false
+    const previousSummary = input.entries.find((entry) => entry.compaction !== undefined)?.compaction
+    if (!selected || (selected.head.length === 0 && previousSummary === undefined)) return false
     const summaryPrompt = buildPrompt({
-      previousSummary: previousSummary?.type === "compaction" ? previousSummary.summary : undefined,
-      context: [previousSummary?.type === "compaction" ? previousSummary.recent : "", selected.head].filter(Boolean),
+      previousSummary: previousSummary?.summary,
+      context: [previousSummary?.recent ?? "", selected.head].filter(Boolean),
     })
     const summaryOutput = Math.min(output || SUMMARY_OUTPUT_TOKENS, SUMMARY_OUTPUT_TOKENS)
     if (Token.estimate(summaryPrompt) > context - summaryOutput) return false

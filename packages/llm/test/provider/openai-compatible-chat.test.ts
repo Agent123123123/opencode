@@ -1,7 +1,7 @@
 import { describe, expect } from "bun:test"
 import { Effect, Schema } from "effect"
 import { HttpClientRequest } from "effect/unstable/http"
-import { LLM, Message, ToolCallPart } from "../../src"
+import { LLM, LLMError, Message, ToolCallPart } from "../../src"
 import { Auth, LLMClient } from "../../src/route"
 import * as OpenAICompatible from "../../src/providers/openai-compatible"
 import * as OpenAICompatibleChat from "../../src/protocols/openai-compatible-chat"
@@ -87,6 +87,21 @@ describe("OpenAI-compatible Chat route", () => {
         max_tokens: 20,
         temperature: 0,
       })
+    }),
+  )
+
+  it.effect("rejects reasoning-only assistant history before transport", () =>
+    Effect.gen(function* () {
+      const error = yield* LLMClient.prepare(
+        LLM.request({
+          model,
+          messages: [Message.assistant({ type: "reasoning", text: "internal reasoning" })],
+        }),
+      ).pipe(Effect.flip)
+
+      expect(error).toBeInstanceOf(LLMError)
+      expect(error.reason).toMatchObject({ _tag: "InvalidRequest" })
+      expect(error.message).toContain("assistant messages require content or tool calls")
     }),
   )
 

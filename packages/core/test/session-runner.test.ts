@@ -605,41 +605,40 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
-  it.effect("keeps a successor turn owned by its promoted continuation input after an earlier input lost its process", () =>
-    Effect.gen(function* () {
-      yield* setup
-      const { db } = yield* Database.Service
-      const events = yield* EventV2.Service
-      const session = yield* SessionV2.Service
-      const predecessor = yield* session.prompt({
-        sessionID,
-        prompt: Prompt.make({ text: "Original managed input" }),
-        delivery: "queue",
-        resume: false,
-      })
-      expect(yield* SessionInput.promoteNextQueued(db, events, sessionID)).toBe(true)
-      const successor = yield* session.prompt({
-        sessionID,
-        prompt: Prompt.make({ text: "Continue after exact process loss" }),
-        delivery: "queue",
-        resume: false,
-      })
-      response = fragmentFixture("text", "text-process-loss-successor", ["Continued"]).completeEvents
+  it.effect(
+    "keeps a successor turn owned by its promoted continuation input after an earlier input lost its process",
+    () =>
+      Effect.gen(function* () {
+        yield* setup
+        const { db } = yield* Database.Service
+        const events = yield* EventV2.Service
+        const session = yield* SessionV2.Service
+        const predecessor = yield* session.prompt({
+          sessionID,
+          prompt: Prompt.make({ text: "Original managed input" }),
+          delivery: "queue",
+          resume: false,
+        })
+        expect(yield* SessionInput.promoteNextQueued(db, events, sessionID)).toBe(true)
+        const successor = yield* session.prompt({
+          sessionID,
+          prompt: Prompt.make({ text: "Continue after exact process loss" }),
+          delivery: "queue",
+          resume: false,
+        })
+        response = fragmentFixture("text", "text-process-loss-successor", ["Continued"]).completeEvents
 
-      yield* session.resume(sessionID)
+        yield* session.resume(sessionID)
 
-      const history = yield* session.history({ sessionID, limit: 100 })
-      const started = history.events.find((event) => event.type === "session.turn.started")
-      expect(started).toMatchObject({
-        type: "session.turn.started",
-        data: { activityInputIDs: [successor.id] },
-      })
-      expect(started?.data.activityInputIDs).not.toContain(predecessor.id)
-      expect(userTexts(requests.at(-1)!)).toEqual([
-        "Original managed input",
-        "Continue after exact process loss",
-      ])
-    }),
+        const history = yield* session.history({ sessionID, limit: 100 })
+        const started = history.events.find((event) => event.type === "session.turn.started")
+        expect(started).toMatchObject({
+          type: "session.turn.started",
+          data: { activityInputIDs: [successor.id] },
+        })
+        expect(started?.data.activityInputIDs).not.toContain(predecessor.id)
+        expect(userTexts(requests.at(-1)!)).toEqual(["Original managed input", "Continue after exact process loss"])
+      }),
   )
 
   it.effect("publishes only NotStarted when a promoted activity fails before the start boundary", () =>
@@ -1351,6 +1350,50 @@ describe("SessionRunnerLLM", () => {
         type: "compaction",
         summary: "## Objective\n- Preserve the updated task",
       })
+    }),
+  )
+
+  it.effect("excludes failed reasoning from compaction input and retained recent context", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const marker = "FAILED_REASONING_MUST_NOT_BE_COMPACTED"
+      const failure = providerUnavailable()
+      yield* session.prompt({
+        sessionID,
+        prompt: Prompt.make({ text: "Earlier failed request ".repeat(180) }),
+        resume: false,
+      })
+      responseStream = Stream.concat(
+        Stream.fromIterable([
+          LLMEvent.stepStart({ index: 0 }),
+          LLMEvent.reasoningStart({ id: "failed-reasoning-for-compaction" }),
+          LLMEvent.reasoningDelta({ id: "failed-reasoning-for-compaction", text: marker }),
+        ]),
+        Stream.fail(failure),
+      )
+      expect(yield* session.resume(sessionID).pipe(Effect.flip)).toBe(failure)
+      expect(JSON.stringify(yield* session.context(sessionID))).toContain(marker)
+
+      currentModel = compactModel
+      requests.length = 0
+      responses = [
+        fragmentFixture("text", "text-safe-summary", ["## Objective\n- Preserve safe context"]).completeEvents,
+        fragmentFixture("text", "text-safe-final", ["Continued"]).completeEvents,
+      ]
+      yield* session.prompt({
+        sessionID,
+        prompt: Prompt.make({ text: "Recent safe request ".repeat(180) }),
+        resume: false,
+      })
+      yield* session.resume(sessionID)
+
+      expect(requests).toHaveLength(2)
+      expect(JSON.stringify(requests[0]?.messages)).not.toContain(marker)
+      expect(JSON.stringify(requests[1]?.messages)).not.toContain(marker)
+      const context = yield* session.context(sessionID)
+      expect(context[0]).toMatchObject({ type: "compaction" })
+      expect(JSON.stringify(context[0])).not.toContain(marker)
     }),
   )
 
@@ -2498,6 +2541,105 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
+  it.effect("keeps failed reasoning durable but excludes it from a same-Session successor request", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const marker = "FAILED_REASONING_MARKER"
+      const failure = new LLMError({
+        module: "test",
+        method: "stream",
+        reason: new TransportReason({
+          message: "read ECONNRESET",
+          kind: "network",
+          code: "ECONNRESET",
+          canRetry: true,
+        }),
+      })
+      yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Start before reset" }), resume: false })
+      requests.length = 0
+      responseStream = Stream.concat(
+        Stream.fromIterable([
+          LLMEvent.stepStart({ index: 0 }),
+          LLMEvent.reasoningStart({ id: "reasoning-before-reset" }),
+          LLMEvent.reasoningDelta({ id: "reasoning-before-reset", text: marker }),
+        ]),
+        Stream.fail(failure),
+      )
+
+      expect(yield* session.resume(sessionID).pipe(Effect.flip)).toBe(failure)
+      expect(yield* session.context(sessionID)).toMatchObject([
+        { type: "user", text: "Start before reset" },
+        {
+          type: "assistant",
+          finish: "error",
+          error: { type: "unknown", message: "read ECONNRESET" },
+          content: [{ type: "reasoning", text: marker }],
+        },
+      ])
+
+      yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Continue after reset" }), resume: false })
+      response = fragmentFixture("text", "text-after-reset", ["Recovered"]).completeEvents
+      yield* session.resume(sessionID)
+
+      expect(requests).toHaveLength(2)
+      expect(userTexts(requests[1]!)).toEqual(["Start before reset", "Continue after reset"])
+      expect(requests[1]?.messages.map((message) => message.role)).toEqual(["user", "user"])
+      expect(JSON.stringify(requests[1]?.messages)).not.toContain(marker)
+      expect(yield* session.context(sessionID)).toMatchObject([
+        { type: "user", text: "Start before reset" },
+        { type: "assistant", finish: "error", content: [{ type: "reasoning", text: marker }] },
+        { type: "user", text: "Continue after reset" },
+        { type: "assistant", finish: "stop", content: [{ type: "text", text: "Recovered" }] },
+      ])
+    }),
+  )
+
+  it.effect("keeps an incomplete process-loss assistant out of the next model request", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const events = yield* EventV2.Service
+      const marker = "INCOMPLETE_REASONING_MARKER"
+      yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Resume after process loss" }), resume: false })
+      yield* SessionInput.promoteSteers((yield* Database.Service).db, events, sessionID, Number.MAX_SAFE_INTEGER)
+      const assistantMessageID = SessionMessage.ID.create()
+      yield* events.publish(SessionEvent.Step.Started, {
+        sessionID,
+        assistantMessageID,
+        timestamp: yield* DateTime.now,
+        agent: "build",
+        model: { id: ModelV2.ID.make("fake-model"), providerID: ProviderV2.ID.make("fake") },
+      })
+      yield* events.publish(SessionEvent.Reasoning.Started, {
+        sessionID,
+        assistantMessageID,
+        timestamp: yield* DateTime.now,
+        reasoningID: "incomplete-reasoning",
+      })
+      yield* events.publish(SessionEvent.Reasoning.Ended, {
+        sessionID,
+        assistantMessageID,
+        timestamp: yield* DateTime.now,
+        reasoningID: "incomplete-reasoning",
+        text: marker,
+      })
+      requests.length = 0
+      response = fragmentFixture("text", "text-after-process-loss", ["Recovered"]).completeEvents
+
+      yield* session.resume(sessionID)
+
+      expect(requests).toHaveLength(1)
+      expect(requests[0]?.messages.map((message) => message.role)).toEqual(["user"])
+      expect(JSON.stringify(requests[0]?.messages)).not.toContain(marker)
+      expect(yield* session.context(sessionID)).toMatchObject([
+        { type: "user", text: "Resume after process loss" },
+        { type: "assistant", content: [{ type: "reasoning", text: marker }] },
+        { type: "assistant", finish: "stop", content: [{ type: "text", text: "Recovered" }] },
+      ])
+    }),
+  )
+
   it.effect("durably fails local tools left running by a prior process before continuing", () =>
     Effect.gen(function* () {
       yield* setup
@@ -2611,9 +2753,15 @@ describe("SessionRunnerLLM", () => {
           type: "tool-call",
           id: "call-hosted-interrupted",
           providerExecuted: true,
-          providerMetadata: { openai: { itemId: "call-hosted-interrupted" } },
+          providerMetadata: undefined,
         },
-        { type: "tool-result", id: "call-hosted-interrupted", providerExecuted: true, result: { type: "error" } },
+        {
+          type: "tool-result",
+          id: "call-hosted-interrupted",
+          providerExecuted: true,
+          providerMetadata: undefined,
+          result: { type: "error" },
+        },
       ])
     }),
   )

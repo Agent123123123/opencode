@@ -22,3 +22,16 @@ export class ContextSnapshotDecodeError extends Schema.TaggedErrorClass<ContextS
     return `Failed to decode context snapshot for session ${this.sessionID}: ${this.details}`
   }
 }
+
+export class ModelContextProjectionError extends Schema.TaggedErrorClass<ModelContextProjectionError>()(
+  "Session.ModelContextProjectionError",
+  {
+    messageID: SessionMessage.ID,
+    callID: Schema.String,
+    status: Schema.Literals(["pending", "running"]),
+  },
+) {
+  override get message() {
+    return `Cannot project assistant ${this.messageID}: tool ${this.callID} is still ${this.status}`
+  }
+}
