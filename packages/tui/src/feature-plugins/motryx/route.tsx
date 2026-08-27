@@ -706,16 +706,17 @@ function MotryxHeader(props: {
   status?: string
   visibleAttentionCount: number
 }) {
-  const target = createMemo(() => {
+  const targetRole = createMemo(() => {
     if (!props.target) return "No active conversation"
-    const role = props.target.role
-    if (role === "orchestrator") return "Orchestrator"
-    return `${props.laneName ?? "Selected lane"} / ${capitalize(role)}`
+    return capitalize(props.target.role)
   })
-  const context = createMemo(() => {
+  const targetLane = createMemo(() => {
+    if (!props.target || props.target.role === "orchestrator") return
+    return props.laneName ?? "Selected lane"
+  })
+  const workflowGoal = createMemo(() => {
     const goal = props.snapshot?.workflow?.goal.trim()
-    if (props.width >= 120 && goal && goal !== props.laneName) return `${goal} / ${target()}`
-    return target()
+    if (props.width >= 120 && goal && goal !== props.laneName) return goal
   })
   const debugLabel = createMemo(() => (props.width < 64 ? "DBG" : "DEBUG"))
 
@@ -735,17 +736,74 @@ function MotryxHeader(props: {
         <text fg={props.api.theme.current.primary}>X</text>
       </box>
       <text fg={props.api.theme.current.border}>│</text>
-      <text flexGrow={1} minWidth={0} fg={props.api.theme.current.textMuted} truncate>
-        {context()}
-      </text>
+      <Show when={workflowGoal()}>
+        {(goal) => (
+          <>
+            <text
+              flexGrow={0}
+              flexShrink={1}
+              minWidth={0}
+              fg={props.api.theme.current.textMuted}
+              wrapMode="none"
+              truncate
+            >
+              {goal()}
+            </text>
+            <text flexShrink={0} fg={props.api.theme.current.textMuted} wrapMode="none">
+              /
+            </text>
+          </>
+        )}
+      </Show>
+      <Show
+        when={targetLane()}
+        fallback={
+          <text
+            flexGrow={0}
+            flexShrink={props.target ? 0 : 1}
+            minWidth={0}
+            fg={props.api.theme.current.textMuted}
+            wrapMode="none"
+            truncate
+          >
+            {targetRole()}
+          </text>
+        }
+      >
+        {(lane) => (
+          <>
+            <text
+              flexGrow={0}
+              flexShrink={1}
+              minWidth={0}
+              maxWidth={workflowGoal() ? Math.min(36, Math.floor(props.width / 3)) : undefined}
+              fg={props.api.theme.current.textMuted}
+              wrapMode="none"
+              truncate
+            >
+              {lane()}
+            </text>
+            <text flexShrink={0} fg={props.api.theme.current.textMuted} wrapMode="none">
+              / {targetRole()}
+            </text>
+          </>
+        )}
+      </Show>
+      <box flexGrow={1} minWidth={0} />
       <Show when={props.debugView && (!props.status || props.width >= 72)}>
-        <text fg={props.api.theme.current.warning}>{debugLabel()}</text>
+        <text flexShrink={0} fg={props.api.theme.current.warning} wrapMode="none">
+          {debugLabel()}
+        </text>
       </Show>
       <Show when={props.status}>
-        {(label) => <text fg={statusColor(props.api, props.phase)}>{label()}</text>}
+        {(label) => (
+          <text flexShrink={0} fg={statusColor(props.api, props.phase)} wrapMode="none">
+            {label()}
+          </text>
+        )}
       </Show>
       <Show when={(props.snapshot?.attention.visibleOpenIncidentCount ?? 0) + props.visibleAttentionCount > 0}>
-        <text fg={props.api.theme.current.error}>
+        <text flexShrink={0} fg={props.api.theme.current.error} wrapMode="none">
           ! {(props.snapshot?.attention.visibleOpenIncidentCount ?? 0) + props.visibleAttentionCount}
         </text>
       </Show>
@@ -1146,8 +1204,8 @@ function SidecarTabs(props: {
 
 function PanelTab(props: { api: TuiPluginApi; label: string; active: boolean; onPick: () => void }) {
   return (
-    <box onMouseUp={props.onPick}>
-      <text fg={props.active ? props.api.theme.current.primary : props.api.theme.current.textMuted}>
+    <box flexShrink={0} onMouseUp={props.onPick}>
+      <text fg={props.active ? props.api.theme.current.primary : props.api.theme.current.textMuted} wrapMode="none">
         {props.active ? `[${props.label}]` : props.label}
       </text>
     </box>
@@ -1190,7 +1248,8 @@ function FlowPanel(props: {
           <scrollbox
             flexGrow={1}
             minHeight={0}
-            verticalScrollbarOptions={{ visible: true }}
+            viewportOptions={{ paddingRight: 1 }}
+            verticalScrollbarOptions={{ visible: true, paddingLeft: 1 }}
             horizontalScrollbarOptions={{ visible: false }}
           >
             <Show
@@ -1267,7 +1326,8 @@ function IncidentsPanel(props: {
     <scrollbox
       flexGrow={1}
       minHeight={0}
-      verticalScrollbarOptions={{ visible: true }}
+      viewportOptions={{ paddingRight: 1 }}
+      verticalScrollbarOptions={{ visible: true, paddingLeft: 1 }}
       horizontalScrollbarOptions={{ visible: false }}
     >
       <text fg={props.api.theme.current.text}>Active runtime attention</text>
@@ -1486,7 +1546,8 @@ function InspectPanel(props: {
     <scrollbox
       flexGrow={1}
       minHeight={0}
-      verticalScrollbarOptions={{ visible: true }}
+      viewportOptions={{ paddingRight: 1 }}
+      verticalScrollbarOptions={{ visible: true, paddingLeft: 1 }}
       horizontalScrollbarOptions={{ visible: false }}
     >
       <Show when={props.lane} fallback={<text fg={props.api.theme.current.textMuted}>Select a lane in FLOW.</text>}>

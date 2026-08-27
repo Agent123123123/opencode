@@ -27,6 +27,8 @@ test("Motryx plugin route composes the standard session surface with the Flow/In
     },
   } as unknown as TuiPluginApi
   const now = "2026-07-19T00:00:00.000Z"
+  const checkerDetail =
+    "CHECKER_DETAIL_INSPECT_ONLY registered snapshot evidence implementation showing recommended_skills"
   const snapshot: MotryxControlSnapshot = {
     schemaVersion: 6,
     projectID,
@@ -69,7 +71,7 @@ test("Motryx plugin route composes the standard session surface with the Flow/In
       reopenCount: 0,
       repairCycle: 0,
       dependsOnLaneIDs: index === 1 ? ["lane_tui_1"] : [],
-      lastCheckResult: index === 0 ? "CHECKER_DETAIL_INSPECT_ONLY" : undefined,
+      lastCheckResult: index === 0 ? checkerDetail : undefined,
       coordinatorRuntimeReadiness: "unmaterialized",
       checkerRuntimeReadiness: "unmaterialized",
     })),
@@ -170,6 +172,7 @@ test("Motryx plugin route composes the standard session surface with the Flow/In
     await clickFrameText(app, frame, "TUI migration")
     frame = await renderUntil(app, (value) => value.includes("[INSPECT]"))
     expect(frame).toContain("CHECKER_DETAIL_INSPECT_ONLY")
+    expect(frame.replace(/[^A-Za-z_]/g, "")).toContain(checkerDetail.replace(/[^A-Za-z_]/g, ""))
     expect(frame).toContain("STANDARD OPENCODE SESSION")
     expect(frame).toContain("ses_route")
     await clickFrameText(app, frame, "FLOW")
@@ -225,6 +228,10 @@ test("Motryx plugin route composes the standard session surface with the Flow/In
       expect(responsiveFrame).toContain("STANDARD OPENCODE")
       expect(responsiveFrame).toContain("PERMISSION QUESTION")
       expect(responsiveFrame).toContain("COMPOSER STATUS")
+      if (width === 40 && height === 12) {
+        expect(responsiveFrame).toContain("[FLOW] INSPECT INCIDENTS")
+        expect(responsiveFrame).not.toContain("INSPECTINCIDENTS")
+      }
     }
 
     app.resize(80, 24)
@@ -252,6 +259,9 @@ test("Motryx plugin route composes the standard session surface with the Flow/In
     frame = await renderUntil(app, (value) => value.includes("No lanes yet."))
     expect(frame).toContain("No lanes yet.")
     expect(frame).not.toContain("Nolanesyet.")
+    const longGoalHeader = frame.split("\n")[0] ?? ""
+    expect(longGoalHeader).toContain("MotryX")
+    expect(longGoalHeader).toContain("Orchestrator")
 
     currentSnapshot = { ...snapshot, workflow: undefined, lanes: [] }
     await actions!.refresh()
@@ -620,7 +630,8 @@ test("Motryx v6 surfaces retry, unknown outcome, and reconciliation attention wi
     expect(frame).toContain("effect_unknown")
     expect(frame).toContain("retry 1/2")
     expect(frame).toContain("Attempt #2 ERROR_RETRY:TERMINAL")
-    expect(frame).toContain("provider attempt")
+    expect(frame).toContain("provider")
+    expect(frame).toContain("attempt 3")
     expect(frame).toContain("HTTP 503")
     expect(frame).not.toContain("repair runtime/provider, then retry_failed_lane")
   } finally {

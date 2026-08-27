@@ -56,6 +56,7 @@ import { useTuiConfig } from "../../config"
 import { usePromptWorkspace } from "./workspace"
 import { usePromptMove } from "./move"
 import { readLocalAttachment } from "./local-attachment"
+import { visibleProviderLabel } from "./model-metadata"
 import { useLocation } from "../../context/location"
 import { v2PromptInput } from "../../context/session-v2"
 import { usePluginRuntime } from "../../plugin/runtime"
@@ -236,7 +237,10 @@ export function Prompt(props: PromptProps) {
       !!providerRequirement(),
   )
   const [cursorVersion, setCursorVersion] = createSignal(0)
-  const currentProviderLabel = createMemo(() => local.model.parsed().provider)
+  const currentProviderLabel = createMemo(() => {
+    const current = local.model.parsed()
+    return visibleProviderLabel(current.model, current.provider)
+  })
   const hasRightContent = createMemo(() => Boolean(props.right))
 
   function promptModelWarning() {
@@ -1535,30 +1539,60 @@ export function Prompt(props: PromptProps) {
               cursorStyle={tuiConfig.cursor}
               syntaxStyle={syntax()}
             />
-            <box flexDirection="row" flexShrink={0} paddingTop={1} gap={1} justifyContent="space-between">
-              <box flexDirection="row" gap={1}>
+            <box
+              flexDirection="row"
+              flexShrink={0}
+              paddingTop={1}
+              gap={1}
+              justifyContent="space-between"
+              overflow="hidden"
+            >
+              <box flexDirection="row" flexGrow={1} minWidth={0} height={1} gap={1} overflow="hidden">
                 <Show when={local.agent.current()} fallback={<box height={1} />}>
                   {(agent) => (
                     <>
-                      <text fg={fadeColor(highlight(), agentMetaAlpha())}>
+                      <text flexShrink={0} fg={fadeColor(highlight(), agentMetaAlpha())} wrapMode="none">
                         {store.mode === "shell" ? "Shell" : Locale.titlecase(agent().name)}
                       </text>
                       <Show when={store.mode === "normal" && local.permission.mode === "auto"}>
-                        <text fg={fadeColor(theme.textMuted, agentMetaAlpha())}>auto</text>
+                        <text flexShrink={0} fg={fadeColor(theme.textMuted, agentMetaAlpha())} wrapMode="none">
+                          auto
+                        </text>
                       </Show>
                       <Show when={store.mode === "normal"}>
-                        <box flexDirection="row" gap={1}>
-                          <text fg={fadeColor(theme.textMuted, modelMetaAlpha())}>·</text>
+                        <box flexDirection="row" flexGrow={1} minWidth={0} height={1} gap={1} overflow="hidden">
+                          <text flexShrink={0} fg={fadeColor(theme.textMuted, modelMetaAlpha())} wrapMode="none">
+                            ·
+                          </text>
                           <text
-                            flexShrink={0}
+                            flexShrink={1}
+                            minWidth={0}
+                            overflow="hidden"
+                            wrapMode="none"
+                            truncate
                             fg={fadeColor(leader() ? theme.textMuted : theme.text, modelMetaAlpha())}
                           >
                             {local.model.parsed().model}
                           </text>
-                          <text fg={fadeColor(theme.textMuted, modelMetaAlpha())}>{currentProviderLabel()}</text>
+                          <Show when={currentProviderLabel()}>
+                            {(provider) => (
+                              <text
+                                flexShrink={1}
+                                minWidth={0}
+                                overflow="hidden"
+                                wrapMode="none"
+                                truncate
+                                fg={fadeColor(theme.textMuted, modelMetaAlpha())}
+                              >
+                                {provider()}
+                              </text>
+                            )}
+                          </Show>
                           <Show when={showVariant()}>
-                            <text fg={fadeColor(theme.textMuted, variantMetaAlpha())}>·</text>
-                            <text>
+                            <text flexShrink={0} fg={fadeColor(theme.textMuted, variantMetaAlpha())} wrapMode="none">
+                              ·
+                            </text>
+                            <text flexShrink={0} wrapMode="none">
                               <span style={{ fg: fadeColor(theme.warning, variantMetaAlpha()), bold: true }}>
                                 {local.model.variant.current()}
                               </span>
@@ -1571,7 +1605,7 @@ export function Prompt(props: PromptProps) {
                 </Show>
               </box>
               <Show when={hasRightContent()}>
-                <box flexDirection="row" gap={1} alignItems="center">
+                <box flexDirection="row" flexShrink={0} height={1} gap={1} alignItems="center" overflow="hidden">
                   {props.right}
                 </box>
               </Show>

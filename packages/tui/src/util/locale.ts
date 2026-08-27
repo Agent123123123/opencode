@@ -37,6 +37,7 @@ export function number(num: number): string {
 }
 
 export function duration(input: number) {
+  if (!Number.isFinite(input)) return ""
   if (input < 1000) {
     return `${input}ms`
   }
