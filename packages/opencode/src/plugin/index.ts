@@ -32,6 +32,7 @@ import type { WorkspaceAdapter } from "@/control-plane/types"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { InstallationChannel } from "@opencode-ai/core/installation/version"
+import { listPreloadedPlugins } from "./preloaded"
 
 type State = {
   hooks: Hooks[]
@@ -174,6 +175,10 @@ const layer = Layer.effect(
             Effect.option,
           )
           if (init._tag === "Some") hooks.push(init.value)
+        }
+
+        for (const plugin of listPreloadedPlugins()) {
+          hooks.push(yield* Effect.promise(() => plugin.server(input)))
         }
 
         const plugins = flags.pure ? [] : (cfg.plugin_origins ?? [])

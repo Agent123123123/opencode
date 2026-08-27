@@ -32,6 +32,10 @@ import tokyonight from "./assets/tokyonight.json" with { type: "json" }
 import vercel from "./assets/vercel.json" with { type: "json" }
 import vesper from "./assets/vesper.json" with { type: "json" }
 import zenburn from "./assets/zenburn.json" with { type: "json" }
+import motryxBeige from "../../../../../assets/tui/themes/motryx-beige.json" with { type: "json" }
+import motryxChipBlue from "../../../../../assets/tui/themes/motryx-chip-blue.json" with { type: "json" }
+import motryxDarkPro from "../../../../../assets/tui/themes/motryx-dark-pro.json" with { type: "json" }
+import motryxMinimal from "../../../../../assets/tui/themes/motryx-minimal.json" with { type: "json" }
 
 export type Theme = {
   readonly primary: RGBA
@@ -161,6 +165,10 @@ export const DEFAULT_THEMES: Record<string, ThemeJson> = {
   vercel,
   zenburn,
   carbonfox,
+  ["motryx-beige"]: motryxBeige,
+  ["motryx-chip-blue"]: motryxChipBlue,
+  ["motryx-dark-pro"]: motryxDarkPro,
+  ["motryx-minimal"]: motryxMinimal,
 }
 
 const pluginThemes: Record<string, ThemeJson> = {}
