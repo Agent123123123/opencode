@@ -30,13 +30,8 @@ export const Plugin = define({
 export function generate(model: ModelV2Info): ModelV2Info["variants"] {
   if (model.api.type !== "aisdk" || model.api.package !== "@ai-sdk/openai-compatible") return []
   const ids = `${model.id} ${model.api.id}`.toLowerCase()
-  const efforts = (() => {
-    if (["glm-5.2", "glm-5-2", "glm-5p2"].some((name) => ids.includes(name))) return ["high", "max"]
-    if (ids.includes("deepseek-v4-flash")) return ["low", "high", "max"]
-    if (ids.includes("deepseek-v4-pro")) return ["high", "max"]
-    return []
-  })()
-  return efforts.map((id) => ({
+  if (!["glm-5.2", "glm-5-2", "glm-5p2"].some((name) => ids.includes(name))) return []
+  return ["high", "max"].map((id) => ({
     id,
     headers: {},
     body: { reasoning_effort: id },
