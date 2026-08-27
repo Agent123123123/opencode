@@ -64,4 +64,37 @@ describe("VariantPlugin", () => {
       ])
     }),
   )
+
+  it.effect("adds the exact DeepSeek V4 reasoning efforts", () =>
+    Effect.gen(function* () {
+      const service = yield* Catalog.Service
+      yield* service.transform((catalog) => {
+        catalog.provider.update(ProviderV2.ID.make("deepseek"), (provider) => {
+          provider.api = { type: "aisdk", package: "@ai-sdk/openai-compatible" }
+        })
+        for (const id of ["deepseek-v4-flash", "deepseek-v4-pro"] as const) {
+          catalog.model.update(ProviderV2.ID.make("deepseek"), ModelV2.ID.make(id), (model) => {
+            model.api = {
+              id: ModelV2.ID.make(id),
+              type: "aisdk",
+              package: "@ai-sdk/openai-compatible",
+            }
+          })
+        }
+      })
+      yield* VariantPlugin.Plugin.effect(host({ catalog: catalogHost(service) }))
+
+      expect((yield* service.model.get(ProviderV2.ID.make("deepseek"), ModelV2.ID.make("deepseek-v4-flash")))?.variants)
+        .toEqual([
+          expect.objectContaining({ id: "low", body: { reasoning_effort: "low" } }),
+          expect.objectContaining({ id: "high", body: { reasoning_effort: "high" } }),
+          expect.objectContaining({ id: "max", body: { reasoning_effort: "max" } }),
+        ])
+      expect((yield* service.model.get(ProviderV2.ID.make("deepseek"), ModelV2.ID.make("deepseek-v4-pro")))?.variants)
+        .toEqual([
+          expect.objectContaining({ id: "high", body: { reasoning_effort: "high" } }),
+          expect.objectContaining({ id: "max", body: { reasoning_effort: "max" } }),
+        ])
+    }),
+  )
 })
