@@ -20,7 +20,12 @@ import { V2StandardPluginBridge } from "../../src/plugin/v2-standard-bridge"
 
 test("standard hooks bridge V1 tools into V2 with real execution capabilities", async () => {
   const trace: string[] = []
-  const hookActivityIDs: Array<string | undefined> = []
+  const hookIdentities: Array<{
+    phase: "before" | "after"
+    activityID?: string
+    inputIDs?: readonly string[]
+    assistantMessageID?: string
+  }> = []
   let bridgedToolIdentity:
     | {
         toolCallID?: string
@@ -97,12 +102,13 @@ test("standard hooks bridge V1 tools into V2 with real execution capabilities", 
       output.description = "advertised echo"
     },
     "tool.execute.before": async (input, output) => {
-      hookActivityIDs.push(input.activityIdentity?.activityID)
+      hookIdentities.push({ phase: "before", ...input.activityIdentity })
       const args = output.args as { text?: string }
       trace.push(`before:${input.tool}:${args.text ?? ""}`)
       if (input.tool === "bridge_echo") args.text = `${args.text}-hook`
     },
     "tool.execute.after": async (input, output) => {
+      hookIdentities.push({ phase: "after", ...input.activityIdentity })
       trace.push(`after:${input.tool}`)
       output.output += "-after"
     },
@@ -237,7 +243,20 @@ test("standard hooks bridge V1 tools into V2 with real execution capabilities", 
         "ask:fine_grained:hello-hook",
         "after:bridge_echo",
       ])
-      expect(hookActivityIDs).toEqual([context.turnID])
+      expect(hookIdentities).toEqual([
+        {
+          phase: "before",
+          activityID: context.turnID,
+          inputIDs: context.activityInputIDs,
+          assistantMessageID: context.assistantMessageID,
+        },
+        {
+          phase: "after",
+          activityID: context.turnID,
+          inputIDs: context.activityInputIDs,
+          assistantMessageID: context.assistantMessageID,
+        },
+      ])
       expect(bridgedToolIdentity).toEqual({
         toolCallID: context.toolCallID,
         turnID: context.turnID,
