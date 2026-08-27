@@ -194,6 +194,17 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
           if (state.pending) save()
         })
 
+      const managedSessionModel = createMemo(() => {
+        if (route.data.type !== "session") return
+        const session = sync.session.get(route.data.sessionID)
+        if (session?.metadata?.executionManaged !== true || !session.model) return
+        return {
+          providerID: session.model.providerID,
+          modelID: session.model.id,
+          variant: session.model.variant ?? "default",
+        }
+      })
+
       const fallbackModel = createMemo(() => {
         if (args.model) {
           const { providerID, modelID } = parseModel(args.model)
@@ -234,6 +245,8 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
       })
 
       const currentModel = createMemo(() => {
+        const managed = managedSessionModel()
+        if (managed) return { providerID: managed.providerID, modelID: managed.modelID }
         const a = agent.current()
         return (
           getFirstValidModel(
@@ -373,18 +386,24 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
         },
         variant: {
           selected() {
+            const managed = managedSessionModel()
+            if (managed) return managed.variant
             const m = currentModel()
             if (!m) return undefined
             const key = `${m.providerID}/${m.modelID}`
             return modelStore.variant[key]
           },
           current() {
+            const managed = managedSessionModel()
+            if (managed) return managed.variant
             const v = this.selected()
             if (!v) return undefined
             if (!this.list().includes(v)) return undefined
             return v
           },
           list() {
+            const managed = managedSessionModel()
+            if (managed && !isModelValid(managed)) return [managed.variant]
             const m = currentModel()
             if (!m) return []
             const provider = sync.data.provider.find((item) => item.id === m.providerID)

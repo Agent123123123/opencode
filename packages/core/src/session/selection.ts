@@ -53,24 +53,42 @@ export type Selection = {
   readonly model: ModelV2.Ref
 }
 
+type SelectionInput = {
+  readonly agent?: AgentV2.ID
+  readonly model?: ModelV2.Ref
+}
+
+type ConfiguredSelectionInput = {
+  readonly agent?: AgentV2.ID
+  readonly model: ModelV2.Ref
+}
+
 export interface Interface {
-  readonly resolve: (input: {
-    readonly agent?: AgentV2.ID
-    readonly model?: ModelV2.Ref
-  }) => Effect.Effect<Selection, Error>
+  readonly resolve: (input: SelectionInput) => Effect.Effect<Selection, Error>
   readonly resolveModel: (model?: ModelV2.Ref) => Effect.Effect<ModelV2.Ref, ModelError>
+  readonly resolveConfigured: (input: ConfiguredSelectionInput) => Effect.Effect<Selection, Error>
+  readonly resolveConfiguredModel: (model: ModelV2.Ref) => Effect.Effect<ModelV2.Ref, ModelError>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/v2/SessionSelection") {}
 
-/** Test or embedding seam for supplying a location selection resolver directly. */
-export const layerWith = (resolve: Interface["resolve"]) =>
+/** Test or embedding seam for supplying location selection resolvers directly. */
+export const layerWith = (input: Pick<Interface, "resolve" | "resolveConfigured">) =>
   Layer.succeed(
     Service,
     Service.of({
-      resolve,
+      resolve: input.resolve,
       resolveModel: (model) =>
-        resolve({ model }).pipe(
+        input.resolve({ model }).pipe(
+          Effect.catchTags({
+            "SessionSelection.AgentNotFoundError": Effect.die,
+            "SessionSelection.AgentUnavailableError": Effect.die,
+          }),
+          Effect.map((selection) => selection.model),
+        ),
+      resolveConfigured: input.resolveConfigured,
+      resolveConfiguredModel: (model) =>
+        input.resolveConfigured({ model }).pipe(
           Effect.catchTags({
             "SessionSelection.AgentNotFoundError": Effect.die,
             "SessionSelection.AgentUnavailableError": Effect.die,
@@ -86,6 +104,21 @@ export const locationLayer = Layer.effect(
     const agents = yield* AgentV2.Service
     const catalog = yield* Catalog.Service
     const readiness = yield* ConfigReadiness.Service
+
+    const validateModel = Effect.fn("SessionSelection.validateModel")(function* (
+      requested: ModelV2.Ref | undefined,
+      model: ModelV2.Info,
+    ) {
+      const ref = ModelV2.Ref.make({
+        id: model.id,
+        providerID: model.providerID,
+        variant: requested?.variant ?? ModelV2.VariantID.make("default"),
+      })
+      if (!SessionModelSupport.supported(model)) return yield* new ModelUnsupportedError({ model: ref })
+      if (ref.variant !== "default" && !model.variants.some((variant) => variant.id === ref.variant))
+        return yield* new VariantNotFoundError({ model: ref })
+      return ref
+    })
 
     const resolveModel = Effect.fn("SessionSelection.resolveModel")(function* (requested?: ModelV2.Ref) {
       yield* readiness.wait("provider")
@@ -105,32 +138,44 @@ export const locationLayer = Layer.effect(
         if (!model) return yield* new ModelNotSelectedError()
       }
 
-      const ref = ModelV2.Ref.make({
-        id: model.id,
-        providerID: model.providerID,
-        variant: requested?.variant ?? ModelV2.VariantID.make("default"),
-      })
-      if (!SessionModelSupport.supported(model)) return yield* new ModelUnsupportedError({ model: ref })
-      if (ref.variant !== "default" && !model.variants.some((variant) => variant.id === ref.variant))
-        return yield* new VariantNotFoundError({ model: ref })
-      return ref
+      return yield* validateModel(requested, model)
+    })
+
+    const resolveConfiguredModel = Effect.fn("SessionSelection.resolveConfiguredModel")(function* (
+      requested: ModelV2.Ref,
+    ) {
+      yield* readiness.wait("provider")
+      const provider = yield* catalog.provider.get(requested.providerID)
+      const model = yield* catalog.model.get(requested.providerID, requested.id)
+      if (!provider || provider.disabled || !model?.enabled) return yield* new ModelUnavailableError({ model: requested })
+      return yield* validateModel(requested, model)
+    })
+
+    const resolveAgent = Effect.fn("SessionSelection.resolveAgent")(function* (requested?: AgentV2.ID) {
+      const selectedAgent = yield* agents.select(requested)
+      const info = selectedAgent.info
+      if (!info) return yield* new AgentNotFoundError({ agent: selectedAgent.id })
+      // Hidden controls discovery/default selection, not explicit addressability. Embedders
+      // may create sessions for a configured hidden primary agent when they know its exact ID.
+      if (info.mode === "subagent" || (requested === undefined && info.hidden))
+        return yield* new AgentUnavailableError({ agent: selectedAgent.id })
+      return { id: selectedAgent.id, info }
     })
 
     return Service.of({
       resolveModel,
+      resolveConfiguredModel,
       resolve: Effect.fn("SessionSelection.resolve")(function* (input) {
         // Config plugins are loaded asynchronously with the rest of the location runtime. A
         // selection made before either commit would validate against a partial catalog.
         yield* readiness.wait("agent")
-
-        const selectedAgent = yield* agents.select(input.agent)
-        if (!selectedAgent.info) return yield* new AgentNotFoundError({ agent: selectedAgent.id })
-        // Hidden controls discovery/default selection, not explicit addressability. Embedders
-        // may create sessions for a configured hidden primary agent when they know its exact ID.
-        if (selectedAgent.info.mode === "subagent" || (input.agent === undefined && selectedAgent.info.hidden))
-          return yield* new AgentUnavailableError({ agent: selectedAgent.id })
-
+        const selectedAgent = yield* resolveAgent(input.agent)
         return { agent: selectedAgent.id, model: yield* resolveModel(input.model ?? selectedAgent.info.model) }
+      }),
+      resolveConfigured: Effect.fn("SessionSelection.resolveConfigured")(function* (input) {
+        yield* readiness.wait("agent")
+        const selectedAgent = yield* resolveAgent(input.agent)
+        return { agent: selectedAgent.id, model: yield* resolveConfiguredModel(input.model) }
       }),
     })
   }),

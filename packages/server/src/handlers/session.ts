@@ -8,6 +8,7 @@ import {
   InvalidRequestError,
   InvalidCursorError,
   MessageNotFoundError,
+  ProviderConnectionRequiredError,
   ServiceUnavailableError,
   SessionNotFoundError,
   UnknownError,
@@ -116,6 +117,13 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
                     new ConflictError({
                       message: `Session ${error.sessionID} already exists with a different ${error.reason}`,
                       resource: error.sessionID,
+                    }),
+                  ),
+                "Session.ManagedSelectionRequiredError": (error) =>
+                  Effect.fail(
+                    new InvalidRequestError({
+                      message: `Managed session creation requires an exact ${error.field}`,
+                      field: error.field,
                     }),
                   ),
               }),
@@ -296,6 +304,42 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
                     }),
                   ),
                 ),
+                Effect.catchTags({
+                  "Session.ProviderConnectionRequiredError": (error) =>
+                    Effect.fail(
+                      new ProviderConnectionRequiredError({
+                        providerID: error.providerID,
+                        modelID: error.modelID,
+                        variant: error.variant,
+                        message: error.message,
+                      }),
+                    ),
+                  "SessionSelection.ModelNotSelectedError": () =>
+                    Effect.fail(
+                      new ServiceUnavailableError({ message: "Managed session has no selected model", service: "catalog" }),
+                    ),
+                  "SessionSelection.ModelUnavailableError": (error) =>
+                    Effect.fail(
+                      new InvalidRequestError({
+                        message: `Unavailable model: ${error.model.providerID}/${error.model.id}`,
+                        field: "model",
+                      }),
+                    ),
+                  "SessionSelection.ModelUnsupportedError": (error) =>
+                    Effect.fail(
+                      new InvalidRequestError({
+                        message: `Unsupported model: ${error.model.providerID}/${error.model.id}`,
+                        field: "model",
+                      }),
+                    ),
+                  "SessionSelection.VariantNotFoundError": (error) =>
+                    Effect.fail(
+                      new InvalidRequestError({
+                        message: `Unknown model variant: ${error.model.variant}`,
+                        field: "model.variant",
+                      }),
+                    ),
+                }),
               ),
           }
         }),

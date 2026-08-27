@@ -49,6 +49,16 @@ export type SessionNotFoundError = {
 export const isSessionNotFoundError = (value: unknown): value is SessionNotFoundError =>
   typeof value === "object" && value !== null && "_tag" in value && value["_tag"] === "SessionNotFoundError"
 
+export type ProviderConnectionRequiredError = {
+  readonly _tag: "ProviderConnectionRequiredError"
+  readonly providerID: string
+  readonly modelID: string
+  readonly variant: string
+  readonly message: string
+}
+export const isProviderConnectionRequiredError = (value: unknown): value is ProviderConnectionRequiredError =>
+  typeof value === "object" && value !== null && "_tag" in value && value["_tag"] === "ProviderConnectionRequiredError"
+
 export type MessageNotFoundError = {
   readonly _tag: "MessageNotFoundError"
   readonly sessionID: string
@@ -3100,6 +3110,7 @@ export type PtysCreateInput = {
     readonly cwd?: string
     readonly title?: string
     readonly env?: { readonly [x: string]: string }
+    readonly inheritEnv?: boolean
   }["command"]
   readonly args?: {
     readonly command?: string
@@ -3107,6 +3118,7 @@ export type PtysCreateInput = {
     readonly cwd?: string
     readonly title?: string
     readonly env?: { readonly [x: string]: string }
+    readonly inheritEnv?: boolean
   }["args"]
   readonly cwd?: {
     readonly command?: string
@@ -3114,6 +3126,7 @@ export type PtysCreateInput = {
     readonly cwd?: string
     readonly title?: string
     readonly env?: { readonly [x: string]: string }
+    readonly inheritEnv?: boolean
   }["cwd"]
   readonly title?: {
     readonly command?: string
@@ -3121,6 +3134,7 @@ export type PtysCreateInput = {
     readonly cwd?: string
     readonly title?: string
     readonly env?: { readonly [x: string]: string }
+    readonly inheritEnv?: boolean
   }["title"]
   readonly env?: {
     readonly command?: string
@@ -3128,7 +3142,16 @@ export type PtysCreateInput = {
     readonly cwd?: string
     readonly title?: string
     readonly env?: { readonly [x: string]: string }
+    readonly inheritEnv?: boolean
   }["env"]
+  readonly inheritEnv?: {
+    readonly command?: string
+    readonly args?: ReadonlyArray<string>
+    readonly cwd?: string
+    readonly title?: string
+    readonly env?: { readonly [x: string]: string }
+    readonly inheritEnv?: boolean
+  }["inheritEnv"]
 }
 
 export type PtysCreateOutput = {

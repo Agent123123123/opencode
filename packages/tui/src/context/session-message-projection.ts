@@ -49,6 +49,7 @@ export function projectSessionInfoToLegacy(input: SessionV2Info): Session {
     agent: input.agent,
     model: input.model,
     version: "v2",
+    metadata: { executionManaged: input.execution.managed },
     time: input.time,
     revert: input.revert,
   }

@@ -245,6 +245,10 @@ describe("ConfigProviderPlugin.Plugin", () => {
           type: "env",
           names: ["CUSTOM_API_KEY"],
         })
+        expect((yield* integrations.get(Integration.ID.make("custom")))?.methods).toContainEqual({
+          type: "key",
+          label: "API key",
+        })
         expect((yield* integrations.get(Integration.ID.make("custom")))?.name).toBe("Renamed")
         expect(provider.disabled).toBeUndefined()
         expect(provider.api).toEqual({ type: "aisdk", package: "custom-sdk", url: "https://example.test" })

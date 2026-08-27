@@ -2838,6 +2838,14 @@ export type PromptInput = {
   agents?: Array<PromptAgentAttachment>
 }
 
+export type ProviderConnectionRequiredError = {
+  _tag: "ProviderConnectionRequiredError"
+  providerID: string
+  modelID: string
+  variant: string
+  message: string
+}
+
 export type MessageNotFoundError = {
   _tag: "MessageNotFoundError"
   sessionID: string
@@ -9608,6 +9616,7 @@ export type PtyCreateData = {
     env?: {
       [key: string]: string
     }
+    inheritEnv?: boolean
   }
   path?: never
   query?: {
@@ -12360,6 +12369,10 @@ export type V2SessionPromptErrors = {
    * ConflictError
    */
   409: ConflictError
+  /**
+   * ProviderConnectionRequiredError | ServiceUnavailableError
+   */
+  503: ProviderConnectionRequiredError | ServiceUnavailableError
 }
 
 export type V2SessionPromptError = V2SessionPromptErrors[keyof V2SessionPromptErrors]
@@ -13908,6 +13921,7 @@ export type V2PtyCreateData = {
     env?: {
       [key: string]: string
     }
+    inheritEnv?: boolean
   }
   path?: never
   query?: {

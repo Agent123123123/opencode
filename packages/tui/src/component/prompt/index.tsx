@@ -60,6 +60,7 @@ import { useLocation } from "../../context/location"
 import { v2PromptInput } from "../../context/session-v2"
 import { usePluginRuntime } from "../../plugin/runtime"
 import { SessionMessage } from "@opencode-ai/core/session/message"
+import { managedSessionProviderRequirement, providerConnectionRequirement } from "./provider-connection"
 
 registerOpencodeSpinner()
 
@@ -217,6 +218,12 @@ export function Prompt(props: PromptProps) {
   const workspace = usePromptWorkspace(props.sessionID)
   const move = usePromptMove({ projectID: project.project, sessionID: () => props.sessionID })
   const pluginRuntime = usePluginRuntime()
+  const providerRequirement = createMemo(() =>
+    managedSessionProviderRequirement(
+      props.sessionID ? sync.session.get(props.sessionID) : undefined,
+      sync.data.model_available,
+    ),
+  )
   const footerVisible = createMemo(
     () =>
       props.showIdleFooter !== false ||
@@ -225,7 +232,8 @@ export function Prompt(props: PromptProps) {
       !!workspace.label() ||
       !!move.progress() ||
       move.pendingNew() ||
-      editorContextLabelState() !== "none",
+      editorContextLabelState() !== "none" ||
+      !!providerRequirement(),
   )
   const [cursorVersion, setCursorVersion] = createSignal(0)
   const currentProviderLabel = createMemo(() => local.model.parsed().provider)
@@ -1125,6 +1133,23 @@ export function Prompt(props: PromptProps) {
     } else {
       const failed = (error: unknown) => {
         if (v2) sync.session.setStatus(sessionID, { type: "idle" })
+        const required = providerConnectionRequirement(error)
+        if (required) {
+          toast.show({ variant: "warning", message: required.message, duration: 5000 })
+          dialog.replace(() => (
+            <DialogProviderConnect
+              preferredProviderID={required.providerID}
+              onConnected={() => {
+                dialog.clear()
+                toast.show({
+                  variant: "success",
+                  message: `${required.providerID} connected. Press Enter to send the preserved prompt.`,
+                })
+              }}
+            />
+          ))
+          return
+        }
         toast.show({
           title: "Failed to send prompt",
           message: errorMessage(error),
@@ -1661,6 +1686,15 @@ export function Prompt(props: PromptProps) {
                     </span>
                   </text>
                 </box>
+              </Match>
+              <Match when={providerRequirement()}>
+                {(required) => (
+                  <box paddingLeft={3}>
+                    <text fg={theme.warning}>
+                      Connect {required().providerID} to send with {required().modelID}#{required().variant} · /connect
+                    </text>
+                  </box>
+                )}
               </Match>
               <Match when={workspace.notice()}>
                 {(notice) => (

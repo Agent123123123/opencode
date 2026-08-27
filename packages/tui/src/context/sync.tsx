@@ -19,6 +19,7 @@ import type {
   VcsInfo,
   SnapshotFileDiff,
   ConsoleState,
+  ModelV2Info,
 } from "@opencode-ai/sdk/v2"
 import { createStore, produce, reconcile } from "solid-js/store"
 import { useProject } from "./project"
@@ -80,6 +81,7 @@ export const {
       provider: Provider[]
       provider_default: Record<string, string>
       provider_next: ProviderListResponse
+      model_available: ModelV2Info[]
       console_state: ConsoleState
       capabilities: {
         experimentalBackgroundSubagents: boolean
@@ -125,6 +127,7 @@ export const {
         default: {},
         connected: [],
       },
+      model_available: [],
       console_state: emptyConsoleState,
       capabilities: {
         experimentalBackgroundSubagents: false,
@@ -594,6 +597,13 @@ export const {
                 ),
               )
           : sdk.client.session.status({ workspace }).then((x) => x.data ?? {})
+      const availableModelsPromise =
+        startup.sessionApi === "v2"
+          ? sdk.client.v2.model
+              .list({ location: { directory: sdk.directory ?? process.cwd() } }, { throwOnError: true })
+              .then((x) => x.data.data)
+              .catch(() => [])
+          : Promise.resolve([])
       await Promise.all([
         providersPromise,
         providerListPromise,
@@ -659,6 +669,7 @@ export const {
             sessionStatusPromise.then((status) => setStore("session_status", reconcile(status))),
             sdk.client.provider.auth({ workspace }).then((x) => setStore("provider_auth", reconcile(x.data ?? {}))),
             sdk.client.vcs.get({ workspace }).then((x) => setStore("vcs", reconcile(x.data))),
+            availableModelsPromise.then((models) => setStore("model_available", reconcile(models))),
             project.workspace.sync(),
           ]).then(() => {
             setStore("status", "complete")

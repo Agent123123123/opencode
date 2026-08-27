@@ -32,6 +32,12 @@ export const Plugin = define({
                 integrationID,
                 method: { type: "env", names: [...item.env] },
               })
+              if (item.env.length === 1) {
+                integrations.method.update({
+                  integrationID,
+                  method: { type: "key", label: "API key" },
+                })
+              }
             }
           }
         }

@@ -148,6 +148,7 @@ test("projects V2 session and interactive requests without deriving new state", 
     workspaceID: "workspace-1",
     path: "lane-a",
     agent: "orchestrator",
+    metadata: { executionManaged: false },
   })
   expect(projectPermissionRequestToLegacy(permission)).toEqual({
     id: "permission-1",

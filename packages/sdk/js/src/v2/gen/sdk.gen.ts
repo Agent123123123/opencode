@@ -2782,6 +2782,7 @@ export class Pty extends HeyApiClient {
       env?: {
         [key: string]: string
       }
+      inheritEnv?: boolean
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -2797,6 +2798,7 @@ export class Pty extends HeyApiClient {
             { in: "body", key: "cwd" },
             { in: "body", key: "title" },
             { in: "body", key: "env" },
+            { in: "body", key: "inheritEnv" },
           ],
         },
       ],
@@ -6816,6 +6818,7 @@ export class Pty2 extends HeyApiClient {
       env?: {
         [key: string]: string
       }
+      inheritEnv?: boolean
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -6830,6 +6833,7 @@ export class Pty2 extends HeyApiClient {
             { in: "body", key: "cwd" },
             { in: "body", key: "title" },
             { in: "body", key: "env" },
+            { in: "body", key: "inheritEnv" },
           ],
         },
       ],

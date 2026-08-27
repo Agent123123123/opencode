@@ -39,6 +39,7 @@ import { FSUtil } from "./fs-util"
 import { SessionDurable } from "@opencode-ai/schema/durable-event-manifest"
 import { SessionSelection } from "./session/selection"
 import { SessionModelSwitch } from "./session/model-switch"
+import { ProviderV2 } from "./provider"
 
 export const RevertState = Revert.State
 export type RevertState = Revert.State
@@ -113,6 +114,22 @@ export class CreateConflictError extends Schema.TaggedErrorClass<CreateConflictE
   sessionID: SessionSchema.ID,
   reason: Schema.Literals(["location", "selection", "execution"]),
 }) {}
+export class ManagedSelectionRequiredError extends Schema.TaggedErrorClass<ManagedSelectionRequiredError>()(
+  "Session.ManagedSelectionRequiredError",
+  { field: Schema.Literals(["agent", "model"]) },
+) {}
+export class ProviderConnectionRequiredError extends Schema.TaggedErrorClass<ProviderConnectionRequiredError>()(
+  "Session.ProviderConnectionRequiredError",
+  {
+    providerID: ProviderV2.ID,
+    modelID: ModelV2.ID,
+    variant: ModelV2.VariantID,
+  },
+) {
+  override get message() {
+    return `Provider connection required for ${this.providerID}/${this.modelID}#${this.variant}`
+  }
+}
 export const MessageNotFoundError = SessionRevert.MessageNotFoundError
 export type MessageNotFoundError = SessionRevert.MessageNotFoundError
 
@@ -122,13 +139,15 @@ export type Error =
   | OperationUnavailableError
   | PromptConflictError
   | CreateConflictError
+  | ManagedSelectionRequiredError
+  | ProviderConnectionRequiredError
   | SessionSelection.Error
 
 export interface Interface {
   readonly list: (input?: ListInput) => Effect.Effect<SessionSchema.Info[]>
   readonly create: (
     input: CreateInput,
-  ) => Effect.Effect<SessionSchema.Info, CreateConflictError | SessionSelection.Error>
+  ) => Effect.Effect<SessionSchema.Info, CreateConflictError | ManagedSelectionRequiredError | SessionSelection.Error>
   readonly get: (sessionID: SessionSchema.ID) => Effect.Effect<SessionSchema.Info, NotFoundError>
   readonly messages: (input: {
     sessionID: SessionSchema.ID
@@ -170,7 +189,10 @@ export interface Interface {
     prompt: PromptInput.Prompt
     delivery?: SessionInput.Delivery
     resume?: boolean
-  }) => Effect.Effect<SessionInput.Admitted, NotFoundError | PromptConflictError>
+  }) => Effect.Effect<
+    SessionInput.Admitted,
+    NotFoundError | PromptConflictError | ProviderConnectionRequiredError | SessionSelection.ModelError
+  >
   readonly input: (input: {
     sessionID: SessionSchema.ID
     inputID: SessionMessage.ID
@@ -241,8 +263,16 @@ const layer = Layer.effect(
       new CreateConflictError({ sessionID, reason })
     const selection = (input: { agent?: AgentV2.ID; model?: ModelV2.Ref }, location: Location.Ref) =>
       SessionSelection.Service.use((service) => service.resolve(input)).pipe(Effect.provide(locations.get(location)))
+    const configuredSelection = (input: { agent?: AgentV2.ID; model: ModelV2.Ref }, location: Location.Ref) =>
+      SessionSelection.Service.use((service) => service.resolveConfigured(input)).pipe(
+        Effect.provide(locations.get(location)),
+      )
     const modelSelection = (model: ModelV2.Ref, location: Location.Ref) =>
       SessionSelection.Service.use((service) => service.resolveModel(model)).pipe(
+        Effect.provide(locations.get(location)),
+      )
+    const configuredModelSelection = (model: ModelV2.Ref, location: Location.Ref) =>
+      SessionSelection.Service.use((service) => service.resolveConfiguredModel(model)).pipe(
         Effect.provide(locations.get(location)),
       )
     const verify = (
@@ -273,17 +303,25 @@ const layer = Layer.effect(
 
     const result = Service.of({
       create: Effect.fn("V2Session.create")(function* (input) {
+        if (input.executionManaged === true && !input.agent)
+          return yield* new ManagedSelectionRequiredError({ field: "agent" })
+        if (input.executionManaged === true && !input.model)
+          return yield* new ManagedSelectionRequiredError({ field: "model" })
         const sessionID = input.id ?? SessionSchema.ID.create()
         const recorded = yield* store.get(sessionID)
         if (recorded) {
           if (!sameLocation(recorded.location, input.location)) return yield* conflict(sessionID, "location")
-          const selected = yield* selection(
-            { agent: input.agent ?? recorded.agent, model: input.model ?? recorded.model },
-            input.location,
-          )
+          const selected = input.executionManaged === true
+            ? yield* configuredSelection({ agent: input.agent, model: input.model! }, input.location)
+            : yield* selection(
+                { agent: input.agent ?? recorded.agent, model: input.model ?? recorded.model },
+                input.location,
+              )
           return yield* verify(recorded, selected, input.location, input.executionManaged)
         }
-        const selected = yield* selection({ agent: input.agent, model: input.model }, input.location)
+        const selected = input.executionManaged === true
+          ? yield* configuredSelection({ agent: input.agent, model: input.model! }, input.location)
+          : yield* selection({ agent: input.agent, model: input.model }, input.location)
         const project = yield* projects.resolve(input.location.directory)
         yield* db
           .insert(ProjectTable)
@@ -445,7 +483,22 @@ const layer = Layer.effect(
       prompt: Effect.fn("V2Session.prompt")((input) =>
         Effect.uninterruptible(
           Effect.gen(function* () {
-            yield* result.get(input.sessionID)
+            const session = yield* result.get(input.sessionID)
+            if (session.execution.managed) {
+              if (!session.model) return yield* new SessionSelection.ModelNotSelectedError()
+              const configured = yield* configuredModelSelection(session.model, session.location)
+              yield* modelSelection(configured, session.location).pipe(
+                Effect.catchTag("SessionSelection.ModelUnavailableError", () =>
+                  Effect.fail(
+                    new ProviderConnectionRequiredError({
+                      providerID: configured.providerID,
+                      modelID: configured.id,
+                      variant: configured.variant ?? ModelV2.VariantID.make("default"),
+                    }),
+                  ),
+                ),
+              )
+            }
             const prompt = resolvePrompt(input.prompt)
             const messageID = input.id ?? SessionMessage.ID.create()
             const delivery = input.delivery ?? "steer"
@@ -543,7 +596,9 @@ const layer = Layer.effect(
       }),
       switchModel: Effect.fn("V2Session.switchModel")(function* (input) {
         const session = yield* result.get(input.sessionID)
-        const selected = yield* modelSelection(input.model, session.location)
+        const selected = session.execution.managed
+          ? yield* configuredModelSelection(input.model, session.location)
+          : yield* modelSelection(input.model, session.location)
         const requested = yield* SessionModelSwitch.pending(db, input.sessionID)
         if (sameModel(requested?.model, selected)) return
         if (!requested && sameModel(session.model, selected)) return

@@ -15,6 +15,7 @@ import { isConsoleManagedProvider } from "../util/provider-origin"
 import { useConnected } from "./use-connected"
 import { useBindings } from "../keymap"
 import { useClipboard } from "../context/clipboard"
+import { useTuiStartup } from "../context/runtime"
 
 const PROVIDER_PRIORITY: Record<string, number> = {
   opencode: 0,
@@ -44,11 +45,12 @@ type ProviderOption =
       type: "custom"
     })
 
-export function providerOptions(list: { id: string; name: string }[]): ProviderOption[] {
+export function providerOptions(list: { id: string; name: string }[], preferredProviderID?: string): ProviderOption[] {
   return [
     ...pipe(
       list,
       sortBy(
+        (x) => (x.id === preferredProviderID ? -1 : 0),
         (x) => PROVIDER_PRIORITY[x.id] ?? 99,
         (x) => x.name.toLowerCase(),
         (x) => x.id,
@@ -64,7 +66,7 @@ export function providerOptions(list: { id: string; name: string }[]): ProviderO
           openai: "(ChatGPT Plus/Pro or API key)",
           "opencode-go": "Low cost subscription for everyone",
         }[provider.id],
-        category: provider.id in PROVIDER_PRIORITY ? "Popular" : "Providers",
+        category: provider.id === preferredProviderID ? "Required" : provider.id in PROVIDER_PRIORITY ? "Popular" : "Providers",
       })),
     ),
     {
@@ -87,6 +89,21 @@ export type ProviderConnectedHandler = (providerID: string) => void | Promise<vo
 
 export interface DialogProviderProps {
   onConnected?: ProviderConnectedHandler
+  preferredProviderID?: string
+}
+
+export async function saveProviderKeyConnection(input: {
+  sessionApi?: "v2"
+  connectV2: () => Promise<unknown>
+  connectLegacy: () => Promise<unknown>
+  disposeLegacy: () => Promise<unknown>
+}) {
+  if (input.sessionApi === "v2") {
+    await input.connectV2()
+    return
+  }
+  await input.connectLegacy()
+  await input.disposeLegacy()
 }
 
 export async function continueAfterProviderConnection(input: {
@@ -108,6 +125,7 @@ export function createDialogProviderOptions(props: DialogProviderProps = {}) {
   const toast = useToast()
   const { theme } = useTheme()
   const onboarded = useConnected()
+  const startup = useTuiStartup()
 
   async function promptCustomProviderID(): Promise<string | undefined> {
     const value = await DialogPrompt.show(dialog, "Other", {
@@ -133,7 +151,7 @@ export function createDialogProviderOptions(props: DialogProviderProps = {}) {
 
   const options = createMemo(() => {
     return pipe(
-      providerOptions(sync.data.provider_next.all),
+      providerOptions(sync.data.provider_next.all, props.preferredProviderID),
       map((provider) => {
         if (provider.type === "custom") {
           return {
@@ -153,7 +171,9 @@ export function createDialogProviderOptions(props: DialogProviderProps = {}) {
 
         const providerID = provider.providerID
         const consoleManaged = isConsoleManagedProvider(sync.data.console_state.consoleManagedProviders, providerID)
-        const connected = sync.data.provider_next.connected.includes(providerID)
+        const connected = startup.sessionApi === "v2"
+          ? sync.data.model_available.some((model) => model.providerID === providerID)
+          : sync.data.provider_next.connected.includes(providerID)
 
         return {
           title: provider.title,
@@ -409,6 +429,7 @@ function ApiMethod(props: ApiMethodProps) {
   const sync = useSync()
   const toast = useToast()
   const { theme } = useTheme()
+  const startup = useTuiStartup()
 
   return (
     <DialogPrompt
@@ -442,15 +463,28 @@ function ApiMethod(props: ApiMethodProps) {
       }
       onConfirm={async (value) => {
         if (!value) return
-        await sdk.client.auth.set({
-          providerID: props.providerID,
-          auth: {
-            type: "api",
-            key: value,
-            ...(props.metadata ? { metadata: props.metadata } : {}),
-          },
+        await saveProviderKeyConnection({
+          sessionApi: startup.sessionApi,
+          connectV2: () =>
+            sdk.client.v2.integration.connect.key(
+              {
+                integrationID: props.providerID,
+                key: value,
+                location: { directory: sdk.directory ?? process.cwd() },
+              },
+              { throwOnError: true },
+            ),
+          connectLegacy: () =>
+            sdk.client.auth.set({
+              providerID: props.providerID,
+              auth: {
+                type: "api",
+                key: value,
+                ...(props.metadata ? { metadata: props.metadata } : {}),
+              },
+            }),
+          disposeLegacy: () => sdk.client.instance.dispose(),
         })
-        await sdk.client.instance.dispose()
         await sync.bootstrap({ preserveSessions: true })
         if (props.custom && !sync.data.provider_next.all.some((provider) => provider.id === props.providerID)) {
           toast.show({

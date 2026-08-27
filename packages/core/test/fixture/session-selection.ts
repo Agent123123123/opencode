@@ -13,15 +13,19 @@ const fallbackModel = ModelV2.Ref.make({
   variant: ModelV2.VariantID.make("default"),
 })
 
-export const echoSessionSelection = SessionSelection.layerWith((input) =>
+const resolve = (input: { readonly agent?: AgentV2.ID; readonly model?: ModelV2.Ref }) =>
   Effect.succeed({
     agent: input.agent ?? AgentV2.ID.make("build"),
     model: ModelV2.Ref.make({
       ...(input.model ?? fallbackModel),
       variant: input.model?.variant ?? fallbackModel.variant,
     }),
-  }),
-)
+  })
+
+export const echoSessionSelection = SessionSelection.layerWith({
+  resolve,
+  resolveConfigured: (input) => resolve(input),
+})
 
 /** A narrow LocationServiceMap fixture for Session tests that only exercise create selection. */
 export const sessionSelectionLocations = Layer.effect(
