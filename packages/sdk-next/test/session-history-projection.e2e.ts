@@ -8,6 +8,7 @@ import { Flag } from "@opencode-ai/core/flag/flag"
 import { Effect, Schedule } from "effect"
 
 const marker = "FAILED_REASONING_E2E_MARKER"
+const lengthMarker = "LENGTH_REASONING_E2E_MARKER"
 
 const chunk = (delta: Record<string, unknown>, finishReason: string | null = null, usage?: object) => ({
   id: "chatcmpl_e2e",
@@ -18,7 +19,7 @@ const chunk = (delta: Record<string, unknown>, finishReason: string | null = nul
 const events = (...items: readonly unknown[]) =>
   `${items.map((item) => `data: ${item === "[DONE]" ? item : JSON.stringify(item)}\n\n`).join("")}`
 
-test("same Session continues after a reasoning stream is reset", async () => {
+test("same Sessions continue after failed and length-exhausted reasoning-only turns", async () => {
   const directory = await mkdtemp(join(tmpdir(), "opencode-session-projection-e2e-"))
   const database = Flag.OPENCODE_DB
   Flag.OPENCODE_DB = join(directory, "opencode.sqlite")
@@ -40,11 +41,38 @@ test("same Session continues after a reasoning stream is reset", async () => {
       })
       return
     }
+    if (bodies.length === 2) {
+      response.end(
+        events(
+          chunk({ role: "assistant" }),
+          chunk({ content: "Recovered after reset" }),
+          chunk({}, "stop", { prompt_tokens: 9, completion_tokens: 3, total_tokens: 12 }),
+          "[DONE]",
+        ),
+      )
+      return
+    }
+    if (bodies.length === 3) {
+      response.end(
+        events(
+          chunk({ role: "assistant" }),
+          chunk({ reasoning_content: lengthMarker }),
+          chunk({}, "length", {
+            prompt_tokens: 11,
+            completion_tokens: 8,
+            total_tokens: 19,
+            completion_tokens_details: { reasoning_tokens: 8 },
+          }),
+          "[DONE]",
+        ),
+      )
+      return
+    }
     response.end(
       events(
         chunk({ role: "assistant" }),
-        chunk({ content: "Recovered after reset" }),
-        chunk({}, "stop", { prompt_tokens: 9, completion_tokens: 3, total_tokens: 12 }),
+        chunk({ content: "Recovered after length exhaustion" }),
+        chunk({}, "stop", { prompt_tokens: 13, completion_tokens: 4, total_tokens: 17 }),
         "[DONE]",
       ),
     )
@@ -164,6 +192,86 @@ test("same Session continues after a reasoning stream is reset", async () => {
           ])
           expect(secondMessages.some((message) => message.role === "assistant")).toBe(false)
           expect((yield* opencode.sessions.get({ sessionID })).id).toBe(sessionID)
+
+          const lengthSessionID = Session.ID.make(`ses_length_projection_e2e_${crypto.randomUUID()}`)
+          yield* opencode.sessions.create({
+            id: lengthSessionID,
+            agent: Agent.ID.make("build"),
+            model: Model.Ref.make({
+              id: Model.ID.make("recovery"),
+              providerID: Provider.ID.make("projection-e2e"),
+            }),
+            location: Location.Ref.make({ directory: AbsolutePath.make(directory) }),
+          })
+          yield* opencode.sessions.switchModel({
+            sessionID: lengthSessionID,
+            model: Model.Ref.make({
+              id: Model.ID.make("recovery"),
+              providerID: Provider.ID.make("projection-e2e"),
+            }),
+          })
+          yield* opencode.sessions.prompt({
+            sessionID: lengthSessionID,
+            prompt: Prompt.make({ text: "Start the length-exhausted turn" }),
+          })
+          const exhausted = yield* opencode.sessions.context({ sessionID: lengthSessionID }).pipe(
+            Effect.filterOrFail(
+              (context) => JSON.stringify(context).includes(lengthMarker),
+              () => "length-exhausted assistant is not durable yet",
+            ),
+            Effect.retry(Schedule.spaced("10 millis")),
+            Effect.timeout("5 seconds"),
+          )
+
+          expect(exhausted).toMatchObject([
+            { type: "user", text: "Start the length-exhausted turn" },
+            {
+              type: "assistant",
+              finish: "length",
+              tokens: { output: 0, reasoning: 8 },
+              content: [{ type: "reasoning", text: lengthMarker }],
+            },
+          ])
+          const exhaustedHistory = yield* opencode.sessions.history({
+            sessionID: lengthSessionID,
+            after: 0,
+            limit: 100,
+          })
+          expect(JSON.stringify(exhaustedHistory.data)).toContain(lengthMarker)
+          expect(JSON.stringify(exhaustedHistory.data)).toContain("session.next.step.ended")
+
+          yield* opencode.sessions.prompt({
+            sessionID: lengthSessionID,
+            prompt: Prompt.make({ text: "Continue after the exhausted internal reasoning" }),
+          })
+          const lengthRecovered = yield* opencode.sessions.context({ sessionID: lengthSessionID }).pipe(
+            Effect.filterOrFail(
+              (context) => JSON.stringify(context).includes("Recovered after length exhaustion"),
+              () => "successor assistant is not durable yet",
+            ),
+            Effect.retry(Schedule.spaced("10 millis")),
+            Effect.timeout("5 seconds"),
+          )
+
+          expect(lengthRecovered).toMatchObject([
+            { type: "user", text: "Start the length-exhausted turn" },
+            { type: "assistant", finish: "length", content: [{ type: "reasoning", text: lengthMarker }] },
+            { type: "user", text: "Continue after the exhausted internal reasoning" },
+            {
+              type: "assistant",
+              finish: "stop",
+              content: [{ type: "text", text: "Recovered after length exhaustion" }],
+            },
+          ])
+          expect(bodies).toHaveLength(4)
+          expect(JSON.stringify(bodies[3])).not.toContain(lengthMarker)
+          const fourthMessages = bodies[3]?.messages as Record<string, unknown>[]
+          expect(fourthMessages.filter((message) => message.role === "user")).toEqual([
+            { role: "user", content: "Start the length-exhausted turn" },
+            { role: "user", content: "Continue after the exhausted internal reasoning" },
+          ])
+          expect(fourthMessages.some((message) => message.role === "assistant")).toBe(false)
+          expect((yield* opencode.sessions.get({ sessionID: lengthSessionID })).id).toBe(lengthSessionID)
         }),
       ),
     )
@@ -176,4 +284,4 @@ test("same Session continues after a reasoning stream is reset", async () => {
       )
     await rm(directory, { recursive: true, force: true })
   }
-}, 15_000)
+}, 20_000)

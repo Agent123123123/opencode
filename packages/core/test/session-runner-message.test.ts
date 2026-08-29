@@ -299,6 +299,149 @@ Recent work
     ])
   })
 
+  test("excludes length-exhausted reasoning-only narrative for every successor model", () => {
+    const reasoning = SessionMessage.AssistantReasoning.make({
+      type: "reasoning",
+      id: "reasoning-length",
+      text: "LENGTH_REASONING_MARKER",
+      providerMetadata: { openai: { itemId: "rs_length", reasoningEncryptedContent: "encrypted-length" } },
+    })
+    const metadataOnlyReasoning = SessionMessage.AssistantReasoning.make({
+      type: "reasoning",
+      id: "reasoning-length-metadata-only",
+      text: "",
+      providerMetadata: { openai: { itemId: "rs_length_empty", reasoningEncryptedContent: "encrypted-empty" } },
+    })
+    const emptyText = SessionMessage.AssistantText.make({ type: "text", id: "text-empty", text: "" })
+    const assistant = (value: string, modelID: string, content: SessionMessage.Assistant["content"]) =>
+      SessionMessage.Assistant.make({
+        id: id(value),
+        type: "assistant",
+        agent: "build",
+        model: { id: ModelV2.ID.make(modelID), providerID: ProviderV2.ID.make("provider") },
+        content,
+        finish: "length",
+        time: { created, completed: created },
+      })
+
+    expect(project([assistant("length-same-model", "model", [reasoning])])).toEqual([])
+    expect(project([assistant("length-other-model", "other-model", [reasoning])])).toEqual([])
+    expect(project([assistant("length-empty-text", "model", [reasoning, emptyText])])).toEqual([])
+    expect(project([assistant("length-metadata-only", "model", [metadataOnlyReasoning])])).toEqual([])
+    const ordered = project([
+      SessionMessage.User.make({ id: id("before-length"), type: "user", text: "Before", time: { created } }),
+      assistant("length-first", "model", [reasoning]),
+      assistant("length-second", "other-model", [metadataOnlyReasoning]),
+      SessionMessage.User.make({ id: id("after-length"), type: "user", text: "After", time: { created } }),
+    ])
+    expect(ordered.map((message) => message.role)).toEqual(["user", "user"])
+    expect(ordered.map((message) => message.content)).toEqual([
+      [{ type: "text", text: "Before" }],
+      [{ type: "text", text: "After" }],
+    ])
+  })
+
+  test("preserves length responses that have text or terminal tool facts", () => {
+    const textMessages = project([
+      SessionMessage.Assistant.make({
+        id: id("length-with-text"),
+        type: "assistant",
+        agent: "build",
+        model: { id: ModelV2.ID.make("model"), providerID: ProviderV2.ID.make("provider") },
+        content: [
+          SessionMessage.AssistantReasoning.make({
+            type: "reasoning",
+            id: "reasoning-length-text",
+            text: "Partial thought with text",
+          }),
+          SessionMessage.AssistantText.make({ type: "text", id: "text-length", text: "Partial answer" }),
+        ],
+        finish: "length",
+        time: { created, completed: created },
+      }),
+    ])
+    expect(textMessages[0]?.content).toEqual([
+      { type: "reasoning", text: "Partial thought with text", providerMetadata: undefined },
+      { type: "text", text: "Partial answer" },
+    ])
+
+    const toolMessages = project([
+      SessionMessage.Assistant.make({
+        id: id("length-with-tools"),
+        type: "assistant",
+        agent: "build",
+        model: { id: ModelV2.ID.make("model"), providerID: ProviderV2.ID.make("provider") },
+        content: [
+          SessionMessage.AssistantReasoning.make({
+            type: "reasoning",
+            id: "reasoning-length-tools",
+            text: "Partial thought with tools",
+          }),
+          SessionMessage.AssistantTool.make({
+            type: "tool",
+            id: "local-length",
+            name: "read",
+            state: SessionMessage.ToolStateCompleted.make({
+              status: "completed",
+              input: { path: "README.md" },
+              content: [{ type: "text", text: "Local result" }],
+              structured: {},
+            }),
+            time: { created, completed: created },
+          }),
+          SessionMessage.AssistantTool.make({
+            type: "tool",
+            id: "hosted-length",
+            name: "web_search",
+            provider: { executed: true },
+            state: SessionMessage.ToolStateCompleted.make({
+              status: "completed",
+              input: { query: "Effect" },
+              content: [],
+              structured: {},
+              result: { type: "text", value: "Hosted result" },
+            }),
+            time: { created, completed: created },
+          }),
+        ],
+        finish: "length",
+        time: { created, completed: created },
+      }),
+    ])
+
+    expect(toolMessages.map((message) => message.role)).toEqual(["assistant", "tool"])
+    expect(toolMessages[0]?.content).toEqual([
+      { type: "reasoning", text: "Partial thought with tools", providerMetadata: undefined },
+      { type: "tool-call", id: "local-length", name: "read", input: { path: "README.md" } },
+      {
+        type: "tool-call",
+        id: "hosted-length",
+        name: "web_search",
+        input: { query: "Effect" },
+        providerExecuted: true,
+        providerMetadata: undefined,
+      },
+      {
+        type: "tool-result",
+        id: "hosted-length",
+        name: "web_search",
+        result: { type: "text", value: "Hosted result" },
+        providerExecuted: true,
+        cache: undefined,
+        metadata: undefined,
+        providerMetadata: undefined,
+      },
+    ])
+    expect(toolMessages[1]?.content).toEqual([
+      {
+        type: "tool-result",
+        id: "local-length",
+        name: "read",
+        result: { type: "text", value: "Local result" },
+      },
+    ])
+  })
+
   test("drops failed narrative but preserves terminal provider-executed tool facts", () => {
     const messages = project([
       SessionMessage.Assistant.make({

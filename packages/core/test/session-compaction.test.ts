@@ -106,3 +106,38 @@ test("compaction excludes failed narrative but retains terminal tool facts", () 
   expect(serialized).toContain("durable tool result")
   expect(serialized).not.toContain("reasoning must not reach compaction")
 })
+
+test("compaction excludes length-exhausted reasoning-only narrative", () => {
+  const marker = "LENGTH_REASONING_MUST_NOT_REACH_COMPACTION"
+  const projection = Effect.runSync(
+    SessionModelContext.projectEntries(
+      [
+        {
+          seq: 1,
+          message: SessionMessage.Assistant.make({
+            id: SessionMessage.ID.make("msg_length_reasoning"),
+            type: "assistant",
+            agent: "build",
+            model: { id: ModelV2.ID.make("model"), providerID: ProviderV2.ID.make("provider") },
+            content: [
+              SessionMessage.AssistantReasoning.make({
+                id: "reasoning_length",
+                type: "reasoning",
+                text: marker,
+              }),
+            ],
+            finish: "length",
+            time: { created, completed: created },
+          }),
+        },
+      ],
+      model,
+    ),
+  )
+
+  expect(projection.messages).toEqual([])
+  const context = projection.entries.map(SessionCompaction.serializeProjectedEntry).filter(Boolean)
+  expect(context).toEqual([])
+  expect(SessionCompaction.buildPrompt({ context })).not.toContain(marker)
+  expect(JSON.stringify(projection)).not.toContain(marker)
+})

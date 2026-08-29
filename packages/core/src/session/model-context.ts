@@ -105,7 +105,12 @@ const assistant = (message: SessionMessage.Assistant, model: Model) =>
         }),
       )
 
-    const replayNarrative = hasCompletedNarrative(message)
+    const lengthExhaustedReasoningOnly =
+      message.finish === "length" &&
+      message.content.some((item) => item.type === "reasoning") &&
+      !message.content.some((item) => item.type === "text" && item.text.length > 0) &&
+      !message.content.some((item) => item.type === "tool")
+    const replayNarrative = hasCompletedNarrative(message) && !lengthExhaustedReasoningOnly
     const sameModel =
       String(message.model.providerID) === String(model.provider) && String(message.model.id) === String(model.id)
     const reuseProviderMetadata = replayNarrative && sameModel
