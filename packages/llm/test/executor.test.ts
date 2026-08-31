@@ -164,13 +164,15 @@ describe("RequestExecutor", () => {
     ),
   )
 
-  it.effect("does not retry non-transient TLS transport failures", () =>
+  it.effect("retries TLS transport failures and preserves the exact code", () =>
     Effect.gen(function* () {
       const executor = yield* RequestExecutor.Service
-      const error = yield* executor.execute(request).pipe(Effect.flip)
+      const fiber = yield* executor.execute(request).pipe(Effect.flip, Effect.forkChild)
+      yield* TestClock.adjust(10_000)
+      const error = yield* Fiber.join(fiber)
 
       expectLLMError(error)
-      expect(error).toMatchObject({ retryable: false, attemptCount: 1, retryExhausted: false })
+      expect(error).toMatchObject({ retryable: true, attemptCount: 3, retryExhausted: true })
       expect(error.reason).toMatchObject({
         _tag: "Transport",
         kind: "tls",

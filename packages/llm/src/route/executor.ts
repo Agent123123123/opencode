@@ -44,7 +44,13 @@ type TransportDiagnostic = {
   readonly message: string
 }
 
-const retryableTransportKinds = new Set<TransportDiagnostic["kind"]>(["connection", "dns", "network", "timeout"])
+const retryableTransportKinds = new Set<TransportDiagnostic["kind"]>([
+  "connection",
+  "dns",
+  "network",
+  "timeout",
+  "tls",
+])
 
 // One source of truth for what counts as a sensitive name across headers,
 // URL query keys, and field names embedded inside request/response bodies.
