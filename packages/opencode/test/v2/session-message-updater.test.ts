@@ -122,6 +122,8 @@ test.skip("tool completion stores completed timestamp", () => {
   const sessionID = SessionID.make("session")
   const callID = "call"
   const assistantMessageID = SessionMessage.ID.create()
+  const turnID = SessionMessage.ID.create()
+  const activityInputIDs = [SessionMessage.ID.create()]
 
   Effect.runSync(
     SessionMessageUpdater.update(SessionMessageUpdater.memory(state), {
@@ -150,6 +152,8 @@ test.skip("tool completion stores completed timestamp", () => {
         assistantMessageID,
         timestamp: DateTime.makeUnsafe(2),
         callID,
+        turnID,
+        activityInputIDs,
         name: "bash",
       },
     } satisfies SessionEvent.Event),
@@ -164,6 +168,8 @@ test.skip("tool completion stores completed timestamp", () => {
         assistantMessageID,
         timestamp: DateTime.makeUnsafe(3),
         callID,
+        turnID,
+        activityInputIDs,
         tool: "bash",
         input: { command: "pwd" },
         provider: { executed: true, metadata: { fake: { source: "provider" } } },
@@ -180,6 +186,8 @@ test.skip("tool completion stores completed timestamp", () => {
         assistantMessageID,
         timestamp: DateTime.makeUnsafe(4),
         callID,
+        turnID,
+        activityInputIDs,
         structured: {},
         content: [{ type: "text", text: "/tmp" }],
         provider: { executed: true, metadata: { fake: { status: "done" } } },
