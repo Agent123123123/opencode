@@ -2,7 +2,19 @@ export * as SessionInput from "./input"
 
 import { and, asc, eq, isNotNull, isNull, lte, notExists } from "drizzle-orm"
 import { DateTime, Effect, Schema } from "effect"
-import { Admitted, CancelOrigin, CancelResult, Delivery, Status } from "@opencode-ai/schema/session-input"
+import {
+  Admitted,
+  CancelOrigin,
+  CancelResult,
+  Completion,
+  CompletionContract,
+  CompletionContractDigest,
+  CompletionContractOrigin,
+  Delivery,
+  OrdinaryStopCompletionContract,
+  RequiredTerminalToolCompletionContract,
+  Status,
+} from "@opencode-ai/schema/session-input"
 import type { Database } from "../database/database"
 import type { EventV2 } from "../event"
 import { SessionEvent } from "./event"
@@ -10,13 +22,52 @@ import { SessionMessage } from "./message"
 import { Prompt } from "./prompt"
 import { SessionSchema } from "./schema"
 import { SessionInputCancellationTable, SessionInputTable, SessionMessageTable, SessionTable } from "./sql"
+import { Hash } from "../util/hash"
 
 type DatabaseService = Database.Interface["db"]
 
-export { Admitted, CancelOrigin, CancelResult, Delivery, Status }
+export {
+  Admitted,
+  CancelOrigin,
+  CancelResult,
+  Completion,
+  CompletionContract,
+  CompletionContractDigest,
+  CompletionContractOrigin,
+  Delivery,
+  OrdinaryStopCompletionContract,
+  RequiredTerminalToolCompletionContract,
+  Status,
+}
 
 const decodePrompt = Schema.decodeUnknownSync(Prompt)
 const encodePrompt = Schema.encodeSync(Prompt)
+const decodeCompletion = Schema.decodeUnknownSync(Completion)
+const encodeCompletion = Schema.encodeSync(Completion)
+const encodeCompletionContract = Schema.encodeSync(CompletionContract)
+
+export const makeCompletion = (
+  origin: CompletionContractOrigin,
+  contract: CompletionContract,
+): Completion => {
+  const canonical = contract.mode === "ordinary_stop"
+    ? OrdinaryStopCompletionContract.make(contract)
+    : RequiredTerminalToolCompletionContract.make({
+        ...contract,
+        terminalTools: [...new Set(contract.terminalTools)].sort(),
+      })
+  return Completion.make({
+    origin,
+    contract: canonical,
+    digest: CompletionContractDigest.make(Hash.sha256(JSON.stringify(encodeCompletionContract(canonical)))),
+  })
+}
+
+export const ordinaryCompletion = () =>
+  makeCompletion("builtin", OrdinaryStopCompletionContract.make({
+    schema: "opencode.managed_completion.v1",
+    mode: "ordinary_stop",
+  }))
 
 const fromRow = (row: typeof SessionInputTable.$inferSelect): Admitted =>
   Admitted.make({
@@ -25,6 +76,7 @@ const fromRow = (row: typeof SessionInputTable.$inferSelect): Admitted =>
     sessionID: SessionSchema.ID.make(row.session_id),
     prompt: decodePrompt(row.prompt),
     delivery: row.delivery,
+    ...(row.completion === null ? {} : { completion: decodeCompletion(row.completion) }),
     timeCreated: DateTime.makeUnsafe(row.time_created),
     ...(row.promoted_seq === null ? {} : { promotedSeq: row.promoted_seq }),
   })
@@ -148,6 +200,7 @@ export const admit = Effect.fn("SessionInput.admit")(function* (
     readonly sessionID: SessionSchema.ID
     readonly prompt: Prompt
     readonly delivery: Delivery
+    readonly completion?: Completion
   },
 ) {
   if (yield* findCancellation(db, input.id)) return yield* Effect.die(new LifecycleConflict({ id: input.id }))
@@ -161,6 +214,7 @@ export const admit = Effect.fn("SessionInput.admit")(function* (
       timestamp,
       prompt: input.prompt,
       delivery: input.delivery,
+      completion: input.completion,
     })
     .pipe(
       Effect.flatMap((event) =>
@@ -173,6 +227,7 @@ export const admit = Effect.fn("SessionInput.admit")(function* (
                 sessionID: input.sessionID,
                 prompt: input.prompt,
                 delivery: input.delivery,
+                completion: input.completion,
                 timeCreated: timestamp,
               }),
             ),
@@ -191,6 +246,7 @@ export const projectAdmitted = Effect.fn("SessionInput.projectAdmitted")(functio
     readonly sessionID: SessionSchema.ID
     readonly prompt: Prompt
     readonly delivery: Delivery
+    readonly completion?: Completion
     readonly timeCreated: DateTime.Utc
   },
 ) {
@@ -210,6 +266,7 @@ export const projectAdmitted = Effect.fn("SessionInput.projectAdmitted")(functio
       admitted_seq: input.admittedSeq,
       prompt: encodePrompt(input.prompt),
       delivery: input.delivery,
+      completion: input.completion ?? null,
       time_created: DateTime.toEpochMillis(input.timeCreated),
     })
     .onConflictDoNothing()
@@ -266,6 +323,7 @@ export const projectPrompted = Effect.fn("SessionInput.projectPrompted")(functio
     readonly sessionID: SessionSchema.ID
     readonly prompt: Prompt
     readonly delivery: Delivery
+    readonly completion?: Completion
     readonly timeCreated: DateTime.Utc
     readonly promotedSeq: number
   },
@@ -317,6 +375,7 @@ export const projectPrompted = Effect.fn("SessionInput.projectPrompted")(functio
       session_id: input.sessionID,
       prompt: encodePrompt(input.prompt),
       delivery: input.delivery,
+      completion: input.completion ?? null,
       admitted_seq: input.promotedSeq,
       promoted_seq: input.promotedSeq,
       turn_id: active?.turnID ?? null,
@@ -447,8 +506,12 @@ export const equivalent = (
     readonly sessionID: SessionSchema.ID
     readonly prompt: Prompt
     readonly delivery: Delivery
+    readonly completion?: Completion
   },
-) => input.delivery === expected.delivery && matchesPrompt(input, expected)
+) =>
+  input.delivery === expected.delivery && matchesPrompt(input, expected) &&
+  JSON.stringify(input.completion ? encodeCompletion(input.completion) : null) ===
+    JSON.stringify(expected.completion ? encodeCompletion(expected.completion) : null)
 
 const matchesPrompt = (input: Admitted, expected: { readonly sessionID: SessionSchema.ID; readonly prompt: Prompt }) =>
   input.sessionID === expected.sessionID &&
@@ -460,6 +523,7 @@ const matchesProjection = (
     readonly sessionID: SessionSchema.ID
     readonly prompt: Prompt
     readonly delivery: Delivery
+    readonly completion?: Completion
     readonly timeCreated: DateTime.Utc
   },
 ) =>
@@ -481,6 +545,7 @@ const publish = Effect.fn("SessionInput.publish")(function* (
         messageID: id,
         prompt: decodePrompt(row.prompt),
         delivery: row.delivery,
+        completion: row.completion === null ? undefined : decodeCompletion(row.completion),
       })
       .pipe(
         Effect.catchDefect((defect) =>

@@ -370,6 +370,41 @@ const messageTexts = (request: LLMRequest, role: "user" | "system") =>
 const userTexts = (request: LLMRequest) => messageTexts(request, "user")
 const systemTexts = (request: LLMRequest) => messageTexts(request, "system")
 
+const requiredCompletion = (instruction = "Call echo now.") =>
+  SessionInput.RequiredTerminalToolCompletionContract.make({
+    schema: "opencode.managed_completion.v1",
+    mode: "required_terminal_tool",
+    terminalTools: ["echo"],
+    correction: { maxSteps: 1, instruction },
+  })
+
+const admitManagedInput = (text: string, instruction?: string) =>
+  Effect.gen(function* () {
+    const { db } = yield* Database.Service
+    const events = yield* EventV2.Service
+    yield* db
+      .update(SessionTable)
+      .set({
+        agent: "build",
+        model: { id: "fake-model", providerID: "fake" },
+        execution_managed: true,
+        execution_gate_open: true,
+        execution_gate_reason: "test",
+      })
+      .where(eq(SessionTable.id, sessionID))
+      .run()
+      .pipe(Effect.orDie)
+    const id = SessionMessage.ID.create()
+    yield* SessionInput.admit(db, events, {
+      id,
+      sessionID,
+      prompt: Prompt.make({ text }),
+      delivery: "queue",
+      completion: SessionInput.makeCompletion("controller", requiredCompletion(instruction)),
+    })
+    return id
+  })
+
 const replaySessionProjection = (id: SessionV2.ID) =>
   Effect.gen(function* () {
     const { db } = yield* Database.Service
@@ -587,7 +622,7 @@ describe("SessionRunnerLLM", () => {
         return yield* Effect.die("Expected a complete durable turn proof")
       expect(started.data.activityInputIDs).toEqual([admitted.id])
       expect(settled.data).toMatchObject({
-        schema: "opencode.turn_settled.v2",
+        schema: "opencode.turn_settled.v3",
         turnID: started.data.turnID,
         turnStartedAt: started.data.turnStartedAt,
         activityInputIDs: [admitted.id],
@@ -665,7 +700,7 @@ describe("SessionRunnerLLM", () => {
       if (notStarted?.type !== "session.turn.not_started")
         return yield* Effect.die("Expected a durable NotStarted proof")
       expect(notStarted.data).toMatchObject({
-        schema: "opencode.turn_not_started.v1",
+        schema: "opencode.turn_not_started.v2",
         activityInputIDs: [admitted.id],
         outcome: "failed",
         errorClass: "unknown",
@@ -2645,9 +2680,14 @@ describe("SessionRunnerLLM", () => {
       yield* setup
       const session = yield* SessionV2.Service
       const events = yield* EventV2.Service
-      yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Recover interrupted tool" }), resume: false })
+      const admitted = yield* session.prompt({
+        sessionID,
+        prompt: Prompt.make({ text: "Recover interrupted tool" }),
+        resume: false,
+      })
       yield* SessionInput.promoteSteers((yield* Database.Service).db, events, sessionID, Number.MAX_SAFE_INTEGER)
       const assistantMessageID = SessionMessage.ID.create()
+      const turnID = SessionMessage.ID.create()
       yield* events.publish(SessionEvent.Step.Started, {
         sessionID,
         assistantMessageID,
@@ -2657,6 +2697,8 @@ describe("SessionRunnerLLM", () => {
       })
       yield* events.publish(SessionEvent.Tool.Input.Started, {
         sessionID,
+        turnID,
+        activityInputIDs: [admitted.id],
         timestamp: yield* DateTime.now,
         assistantMessageID,
         callID: "call-interrupted",
@@ -2664,6 +2706,8 @@ describe("SessionRunnerLLM", () => {
       })
       yield* events.publish(SessionEvent.Tool.Input.Ended, {
         sessionID,
+        turnID,
+        activityInputIDs: [admitted.id],
         timestamp: yield* DateTime.now,
         assistantMessageID,
         callID: "call-interrupted",
@@ -2671,6 +2715,8 @@ describe("SessionRunnerLLM", () => {
       })
       yield* events.publish(SessionEvent.Tool.Called, {
         sessionID,
+        turnID,
+        activityInputIDs: [admitted.id],
         timestamp: yield* DateTime.now,
         assistantMessageID,
         callID: "call-interrupted",
@@ -2705,13 +2751,14 @@ describe("SessionRunnerLLM", () => {
       yield* setup
       const session = yield* SessionV2.Service
       const events = yield* EventV2.Service
-      yield* session.prompt({
+      const admitted = yield* session.prompt({
         sessionID,
         prompt: Prompt.make({ text: "Recover interrupted hosted tool" }),
         resume: false,
       })
       yield* SessionInput.promoteSteers((yield* Database.Service).db, events, sessionID, Number.MAX_SAFE_INTEGER)
       const assistantMessageID = SessionMessage.ID.create()
+      const turnID = SessionMessage.ID.create()
       yield* events.publish(SessionEvent.Step.Started, {
         sessionID,
         assistantMessageID,
@@ -2721,6 +2768,8 @@ describe("SessionRunnerLLM", () => {
       })
       yield* events.publish(SessionEvent.Tool.Input.Started, {
         sessionID,
+        turnID,
+        activityInputIDs: [admitted.id],
         timestamp: yield* DateTime.now,
         assistantMessageID,
         callID: "call-hosted-interrupted",
@@ -2728,6 +2777,8 @@ describe("SessionRunnerLLM", () => {
       })
       yield* events.publish(SessionEvent.Tool.Input.Ended, {
         sessionID,
+        turnID,
+        activityInputIDs: [admitted.id],
         timestamp: yield* DateTime.now,
         assistantMessageID,
         callID: "call-hosted-interrupted",
@@ -2735,6 +2786,8 @@ describe("SessionRunnerLLM", () => {
       })
       yield* events.publish(SessionEvent.Tool.Called, {
         sessionID,
+        turnID,
+        activityInputIDs: [admitted.id],
         timestamp: yield* DateTime.now,
         assistantMessageID,
         callID: "call-hosted-interrupted",
@@ -2771,13 +2824,14 @@ describe("SessionRunnerLLM", () => {
       yield* setup
       const session = yield* SessionV2.Service
       const events = yield* EventV2.Service
-      yield* session.prompt({
+      const admitted = yield* session.prompt({
         sessionID,
         prompt: Prompt.make({ text: "Recover interrupted tool input" }),
         resume: false,
       })
       yield* SessionInput.promoteSteers((yield* Database.Service).db, events, sessionID, Number.MAX_SAFE_INTEGER)
       const assistantMessageID = SessionMessage.ID.create()
+      const turnID = SessionMessage.ID.create()
       yield* events.publish(SessionEvent.Step.Started, {
         sessionID,
         assistantMessageID,
@@ -2787,6 +2841,8 @@ describe("SessionRunnerLLM", () => {
       })
       yield* events.publish(SessionEvent.Tool.Input.Started, {
         sessionID,
+        turnID,
+        activityInputIDs: [admitted.id],
         timestamp: yield* DateTime.now,
         assistantMessageID,
         callID: "call-pending-interrupted",
@@ -3693,7 +3749,7 @@ describe("SessionRunnerLLM", () => {
         (event) => event.type === "session.turn.settled",
       )
       expect(settled?.data).toMatchObject({
-        schema: "opencode.turn_settled.v2",
+        schema: "opencode.turn_settled.v3",
         outcome: "error",
         errorClass: "transport",
         failure: {
@@ -4034,6 +4090,247 @@ describe("SessionRunnerLLM", () => {
       expect(yield* session.resume(sessionID).pipe(Effect.catchDefect(Effect.succeed))).toBe(
         "Tool input delta before start: call-1",
       )
+    }),
+  )
+
+  it.effect("settles a managed Turn immediately after its required terminal tool succeeds", () =>
+    Effect.gen(function* () {
+      yield* setup
+      executions.length = 0
+      const inputID = yield* admitManagedInput("Finish with echo")
+      responses = [
+        [
+          LLMEvent.stepStart({ index: 0 }),
+          LLMEvent.toolCall({ id: "call-terminal", name: "echo", input: { text: "done" } }),
+          LLMEvent.stepFinish({ index: 0, reason: "tool-calls" }),
+          LLMEvent.finish({ reason: "tool-calls" }),
+        ],
+        fragmentFixture("text", "unexpected-tail", ["must not run"]).completeEvents,
+      ]
+
+      yield* (yield* SessionRunner.Service).run({ sessionID, force: false })
+
+      expect(requests).toHaveLength(1)
+      expect(executions).toEqual(["done"])
+      const { db } = yield* Database.Service
+      const settled = yield* db
+        .select()
+        .from(EventTable)
+        .where(eq(EventTable.type, EventV2.versionedType(SessionEvent.Turn.Settled.type, 3)))
+        .all()
+        .pipe(Effect.orDie)
+      expect(settled).toHaveLength(1)
+      expect(settled[0]?.data).toMatchObject({
+        schema: "opencode.turn_settled.v3",
+        activityInputIDs: [inputID],
+        outcome: "completed",
+        completion: {
+          mode: "required_terminal_tool",
+          correctionSteps: 0,
+          terminalTool: { name: "echo", callID: "call-terminal" },
+        },
+      })
+    }),
+  )
+
+  it.effect("keeps required-terminal success authoritative over a late same-Step provider failure", () =>
+    Effect.gen(function* () {
+      yield* setup
+      executions.length = 0
+      yield* admitManagedInput("Finish before the stream fails")
+      responseStream = Stream.concat(
+        Stream.fromIterable([
+          LLMEvent.stepStart({ index: 0 }),
+          LLMEvent.toolCall({ id: "call-terminal-warning", name: "echo", input: { text: "committed" } }),
+        ]),
+        Stream.fail(providerUnavailable()),
+      )
+
+      yield* (yield* SessionRunner.Service).run({ sessionID, force: false })
+
+      expect(requests).toHaveLength(1)
+      expect(executions).toEqual(["committed"])
+      const { db } = yield* Database.Service
+      const settled = yield* db
+        .select()
+        .from(EventTable)
+        .where(eq(EventTable.type, EventV2.versionedType(SessionEvent.Turn.Settled.type, 3)))
+        .get()
+        .pipe(Effect.orDie)
+      expect(settled?.data).toMatchObject({
+        outcome: "completed",
+        completion: {
+          mode: "required_terminal_tool",
+          terminalTool: { name: "echo", callID: "call-terminal-warning" },
+        },
+        providerWarning: { kind: "transport" },
+      })
+    }),
+  )
+
+  it.effect("corrects a missing managed terminal tool inside the same Turn", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const instruction = "Use echo to finish this managed input."
+      const inputID = yield* admitManagedInput("Finish with echo", instruction)
+      const { db } = yield* Database.Service
+      const events = yield* EventV2.Service
+      const nextInputID = SessionMessage.ID.create()
+      yield* SessionInput.admit(db, events, {
+        id: nextInputID,
+        sessionID,
+        prompt: Prompt.make({ text: "Run after correction" }),
+        delivery: "queue",
+        completion: SessionInput.ordinaryCompletion(),
+      })
+      responses = [
+        fragmentFixture("text", "premature-stop", ["Done without tool"]).completeEvents,
+        [
+          LLMEvent.stepStart({ index: 0 }),
+          LLMEvent.toolCall({ id: "call-corrected", name: "echo", input: { text: "corrected" } }),
+          LLMEvent.stepFinish({ index: 0, reason: "tool-calls" }),
+          LLMEvent.finish({ reason: "tool-calls" }),
+        ],
+        fragmentFixture("text", "after-correction", ["Next input"]).completeEvents,
+      ]
+
+      yield* (yield* SessionRunner.Service).run({ sessionID, force: false })
+
+      expect(requests).toHaveLength(3)
+      expect(systemTexts(requests[1]!)).toContain(instruction)
+      expect(systemTexts(requests[2]!)).not.toContain(instruction)
+      const corrections = yield* db
+        .select()
+        .from(EventTable)
+        .where(eq(EventTable.type, EventV2.versionedType(SessionEvent.Turn.Correction.type, 1)))
+        .all()
+        .pipe(Effect.orDie)
+      expect(corrections).toHaveLength(1)
+      expect(corrections[0]?.data).toMatchObject({ rootInputID: inputID, ordinal: 1 })
+      const settled = yield* db
+        .select()
+        .from(EventTable)
+        .where(eq(EventTable.type, EventV2.versionedType(SessionEvent.Turn.Settled.type, 3)))
+        .all()
+        .pipe(Effect.orDie)
+      expect(settled).toHaveLength(2)
+      expect(settled.find((event) => (event.data as { activityInputIDs?: string[] }).activityInputIDs?.[0] === inputID)?.data)
+        .toMatchObject({
+        outcome: "completed",
+        completion: {
+          mode: "required_terminal_tool",
+          correctionSteps: 1,
+          terminalTool: { name: "echo", callID: "call-corrected" },
+        },
+      })
+      expect(settled.find((event) => (event.data as { activityInputIDs?: string[] }).activityInputIDs?.[0] === nextInputID)?.data)
+        .toMatchObject({ outcome: "completed", completion: { mode: "ordinary_stop" } })
+    }),
+  )
+
+  it.effect("fails the same managed Turn when its single correction is exhausted", () =>
+    Effect.gen(function* () {
+      yield* setup
+      yield* admitManagedInput("Finish with echo")
+      responses = [
+        fragmentFixture("text", "first-stop", ["No tool"]).completeEvents,
+        fragmentFixture("text", "second-stop", ["Still no tool"]).completeEvents,
+      ]
+
+      const exit = yield* (yield* SessionRunner.Service).run({ sessionID, force: false }).pipe(Effect.exit)
+
+      expect(Exit.isFailure(exit)).toBe(true)
+      expect(requests).toHaveLength(2)
+      const { db } = yield* Database.Service
+      const settled = yield* db
+        .select()
+        .from(EventTable)
+        .where(eq(EventTable.type, EventV2.versionedType(SessionEvent.Turn.Settled.type, 3)))
+        .get()
+        .pipe(Effect.orDie)
+      expect(settled?.data).toMatchObject({
+        outcome: "error",
+        errorClass: "protocol",
+        failure: { kind: "protocol_contract_unsatisfied", retryable: false, retryExhausted: true },
+      })
+    }),
+  )
+
+  it.effect("does not misclassify managed length exhaustion as completion correction", () =>
+    Effect.gen(function* () {
+      yield* setup
+      yield* admitManagedInput("Produce a bounded answer")
+      response = [
+        LLMEvent.stepStart({ index: 0 }),
+        LLMEvent.textStart({ id: "length-output" }),
+        LLMEvent.textDelta({ id: "length-output", text: "partial" }),
+        LLMEvent.textEnd({ id: "length-output" }),
+        LLMEvent.stepFinish({ index: 0, reason: "length" }),
+        LLMEvent.finish({ reason: "length" }),
+      ]
+
+      const exit = yield* (yield* SessionRunner.Service).run({ sessionID, force: false }).pipe(Effect.exit)
+
+      expect(Exit.isFailure(exit)).toBe(true)
+      expect(requests).toHaveLength(1)
+      const history = (yield* (yield* SessionV2.Service).history({ sessionID, limit: 100 })).events
+      expect(history.filter((event) => event.type === "session.turn.correction")).toHaveLength(0)
+      expect(history.findLast((event) => event.type === "session.turn.settled")?.data).toMatchObject({
+        outcome: "error",
+        errorClass: "resource",
+        failure: { kind: "resource_limit" },
+      })
+    }),
+  )
+
+  it.effect("lets interruption win before managed completion correction", () =>
+    Effect.gen(function* () {
+      yield* setup
+      yield* admitManagedInput("Interrupt before correction")
+      response = fragmentFixture("text", "interrupted-before-correction", ["premature stop"]).completeEvents
+      streamGate = yield* Deferred.make<void>()
+      streamStarted = yield* Deferred.make<void>()
+      const run = yield* (yield* SessionRunner.Service).run({ sessionID, force: false }).pipe(Effect.forkChild)
+      yield* Deferred.await(streamStarted)
+      yield* Fiber.interrupt(run)
+      streamGate = undefined
+      streamStarted = undefined
+
+      const history = (yield* (yield* SessionV2.Service).history({ sessionID, limit: 100 })).events
+      expect(history.filter((event) => event.type === "session.turn.correction")).toHaveLength(0)
+      expect(history.findLast((event) => event.type === "session.turn.settled")?.data).toMatchObject({
+        outcome: "aborted",
+        errorClass: "interrupt",
+      })
+    }),
+  )
+
+  it.effect("retries a transient no-effect managed preparation failure before TurnStarted", () =>
+    Effect.gen(function* () {
+      yield* setup
+      let observations = 0
+      systemLoadHook = Effect.sync(() => {
+        observations += 1
+        systemUnavailable = observations === 1
+      })
+      const inputID = yield* admitManagedInput("Retry safe preparation")
+      responses = [[
+        LLMEvent.stepStart({ index: 0 }),
+        LLMEvent.toolCall({ id: "call-after-preparation-retry", name: "echo", input: { text: "ready" } }),
+        LLMEvent.stepFinish({ index: 0, reason: "tool-calls" }),
+        LLMEvent.finish({ reason: "tool-calls" }),
+      ]]
+
+      yield* (yield* SessionRunner.Service).run({ sessionID, force: false })
+
+      expect(observations).toBeGreaterThanOrEqual(2)
+      expect(requests).toHaveLength(1)
+      const history = (yield* (yield* SessionV2.Service).history({ sessionID, limit: 100 })).events
+      expect(history.filter((event) => event.type === "session.turn.started")).toHaveLength(1)
+      expect(history.filter((event) => event.type === "session.turn.not_started")).toHaveLength(0)
+      expect(history.find((event) => event.type === "session.turn.started")?.data).toMatchObject({
+        activityInputIDs: [inputID],
+      })
     }),
   )
 })

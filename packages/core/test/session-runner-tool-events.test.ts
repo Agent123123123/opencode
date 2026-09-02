@@ -10,6 +10,8 @@ import { ProviderV2 } from "@opencode-ai/core/provider"
 import { createLLMEventPublisher } from "@opencode-ai/core/session/runner/publish-llm-event"
 
 const sessionID = SessionV2.ID.make("ses_tool_event_test")
+const turnID = SessionMessage.ID.make("msg_tool_event_turn")
+const activityInputIDs = [SessionMessage.ID.make("msg_tool_event_input")]
 const base64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB"
 
 const capture = () => {
@@ -40,6 +42,8 @@ const capture = () => {
     published,
     publisher: createLLMEventPublisher(events, {
       sessionID,
+      turnID,
+      activityInputIDs,
       agent: "build",
       model: {
         id: ModelV2.ID.make("model"),
@@ -74,7 +78,7 @@ test("local tool success serializes media base64 once and reconstructs from stru
   await Effect.runPromise(publisher.publish(call))
   await Effect.runPromise(publisher.publish(result))
 
-  const success = published.find((event) => event.type === "session.next.tool.success.1")
+  const success = published.find((event) => event.type === "session.next.tool.success.2")
   expect(success).toBeDefined()
   const serialized = JSON.stringify(success)
   expect(serialized.split(base64)).toHaveLength(2)
@@ -88,11 +92,11 @@ test("local tool success serializes media base64 once and reconstructs from stru
   })
 })
 
-test("provider-executed success retains its compatibility result", async () => {
+test("provider-executed success retains its provider result", async () => {
   const { published, publisher } = capture()
   await Effect.runPromise(publisher.publish(LLMEvent.toolCall({ ...call, providerExecuted: true })))
   await Effect.runPromise(publisher.publish(LLMEvent.toolResult({ ...result, providerExecuted: true })))
-  const success = published.find((event) => event.type === "session.next.tool.success.1")
+  const success = published.find((event) => event.type === "session.next.tool.success.2")
   expect(success?.data).toHaveProperty("result")
 })
 
@@ -106,7 +110,7 @@ test("runner progress transport publishes the durable tool checkpoint", async ()
     }),
   )
   expect(published).toContainEqual({
-    type: "session.next.tool.progress.1",
+    type: "session.next.tool.progress.2",
     data: expect.objectContaining({
       callID: call.id,
       structured: { title: "reading", metadata: { path: "pixel.png" } },
@@ -127,20 +131,22 @@ test("binary failure emits no success event", async () => {
       }),
     ),
   )
-  expect(published.some((event) => event.type === "session.next.tool.success.1")).toBe(false)
-  expect(published.some((event) => event.type === "session.next.tool.failed.1")).toBe(true)
+  expect(published.some((event) => event.type === "session.next.tool.success.2")).toBe(false)
+  expect(published.some((event) => event.type === "session.next.tool.failed.2")).toBe(true)
 })
 
-test("old success event data containing result still decodes", () => {
+test("current provider-executed success data decodes exact Turn identity", () => {
   const decoded = Schema.decodeUnknownSync(SessionEvent.Tool.Success.data)({
     sessionID,
+    turnID,
+    activityInputIDs,
     timestamp: Date.now(),
     assistantMessageID: SessionMessage.ID.create(),
     callID: "call-old",
     structured: { type: "media", mime: "image/png" },
     content: [{ type: "file", uri: `data:image/png;base64,${base64}`, mime: "image/png" }],
     result: { type: "content", value: [{ type: "file", uri: `data:image/png;base64,${base64}`, mime: "image/png" }] },
-    provider: { executed: false },
+    provider: { executed: true },
   })
   expect(decoded.result).toMatchObject({ type: "content" })
 })

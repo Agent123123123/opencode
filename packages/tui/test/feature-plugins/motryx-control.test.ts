@@ -25,7 +25,7 @@ const config: MotryxControlConfig = {
 function snapshot(overrides: Record<string, unknown> = {}) {
   const now = "2026-07-19T00:00:00.000Z"
   return {
-    schemaVersion: 6,
+    schemaVersion: 7,
     projectID,
     orchestratorSessionID: config.orchestratorSessionID,
     projectionRevision: "server-generation:ic:revision",
@@ -76,6 +76,7 @@ function snapshot(overrides: Record<string, unknown> = {}) {
     attention: { visibleOpenIncidentCount: 0, failedLaneCount: 0, activeAttentionCount: 0, userActionRequiredCount: 0, retryingCount: 0 },
     functionSlots: [],
     runs: [],
+    inputCommands: [],
     attempts: [],
     diagnostics: [],
     ...overrides,
@@ -103,9 +104,9 @@ describe("Motryx typed control snapshot", () => {
     ).toEqual({ ok: false, error: "Motryx control API must use http or https" })
   })
 
-  test("accepts an exact schema-v6 ROUTABLE/binding/reconcile proof", () => {
+  test("accepts an exact schema-v7 ROUTABLE/binding/reconcile proof", () => {
     expect(parseMotryxControlSnapshot(snapshot(), config)).toMatchObject({
-      schemaVersion: 6,
+      schemaVersion: 7,
       projectID,
       orchestratorSessionID: config.orchestratorSessionID,
       projectionRevision: "server-generation:ic:revision",
@@ -161,12 +162,24 @@ describe("Motryx typed control snapshot", () => {
             sourceKind: "lane_command",
             sourceID: "lane_1:1",
             revision: 0,
-            errorRetryCount: 0,
-            maxErrorRetries: 2,
-            protocolCorrectionCount: 0,
-            maxProtocolCorrections: 1,
             createdAt: 1_786_510_000_000,
             currentAttemptID: "attempt_1",
+          },
+        ],
+        inputCommands: [
+          {
+            inputCommandID: "command_1",
+            runID: "run_1",
+            commandNo: 1,
+            reason: "INITIAL",
+            origin: "FRAMEWORK_SUBMITTED",
+            instanceID: "inst_coordinator",
+            sessionID: "ses_coordinator",
+            stableInputID: "input_1",
+            state: "CONSUMED",
+            submitCount: 1,
+            createdAt: 1_786_510_000_000,
+            consumedAt: 1_786_510_000_001,
           },
         ],
         attempts: [
@@ -179,7 +192,7 @@ describe("Motryx typed control snapshot", () => {
             sessionID: "ses_coordinator",
             stableInputID: "input_1",
             state: "RUNNING",
-            submitCount: 1,
+            completionCorrectionCount: 0,
             createdAt: 1_786_510_000_000,
           },
         ],
@@ -199,10 +212,11 @@ describe("Motryx typed control snapshot", () => {
     })
     expect(value.functionSlots[0]).toMatchObject({ runtimeReadiness: "ready" })
     expect(value.runs[0]).toMatchObject({ runKind: "COORDINATOR", logicalOwnerID: "slot_coordinator" })
+    expect(value.inputCommands[0]).toMatchObject({ runID: "run_1", state: "CONSUMED" })
     expect(value.attempts[0]).toMatchObject({ runID: "run_1", state: "RUNNING" })
   })
 
-  test("strictly parses v6 runtime attention and retry diagnostics", () => {
+  test("strictly parses v7 runtime attention and retry diagnostics", () => {
     const value = parseMotryxControlSnapshot(snapshot({
       attentionItems: [{
         attentionID: "attention_provider_retry",
@@ -328,7 +342,7 @@ describe("Motryx typed control snapshot", () => {
       fetcher: async (input, init) => {
         request = new Request(input, init)
         return Response.json({
-          schemaVersion: 6,
+          schemaVersion: 7,
           incidentID: "incident_1",
           status: "OPEN",
           presentationState: "DISMISSED",
@@ -351,7 +365,7 @@ describe("Motryx typed control snapshot", () => {
 
 describe("Motryx typed Orchestrator sessions", () => {
   const sessions = () => ({
-    schemaVersion: 6,
+    schemaVersion: 7,
     projectID,
     status: "ROUTABLE",
     current: {

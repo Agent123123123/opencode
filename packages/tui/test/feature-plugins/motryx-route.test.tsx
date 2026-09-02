@@ -5,7 +5,11 @@ import { ScrollBoxRenderable, type Renderable } from "@opentui/core"
 import { testRender } from "@opentui/solid"
 import path from "node:path"
 import { MotryxRoute, type MotryxRouteActions } from "../../src/feature-plugins/motryx/route"
-import type { MotryxControlConfig, MotryxControlSnapshot } from "../../src/feature-plugins/motryx/control"
+import {
+  parseMotryxControlSnapshot,
+  type MotryxControlConfig,
+  type MotryxControlSnapshot,
+} from "../../src/feature-plugins/motryx/control"
 import type { SessionSurfaceProps } from "../../src/routes/session"
 import { createTuiPluginApi } from "../fixture/tui-plugin"
 
@@ -30,7 +34,7 @@ test("Motryx plugin route composes the standard session surface with the Flow/In
   const checkerDetail =
     "CHECKER_DETAIL_INSPECT_ONLY registered snapshot evidence implementation showing recommended_skills"
   const snapshot: MotryxControlSnapshot = {
-    schemaVersion: 6,
+    schemaVersion: 7,
     projectID,
     orchestratorSessionID: config.orchestratorSessionID,
     projectionRevision: "server-generation:ic:route",
@@ -81,6 +85,7 @@ test("Motryx plugin route composes the standard session surface with the Flow/In
     incidents: [],
     functionSlots: [],
     runs: [],
+    inputCommands: [],
     attempts: [],
     attentionItems: [],
     runtimeWarnings: [{
@@ -367,7 +372,7 @@ test("Motryx runtime error card can be dismissed without resolving the incident"
               attention: { visibleOpenIncidentCount: 0, failedLaneCount: 0, activeAttentionCount: 0, userActionRequiredCount: 0, retryingCount: 0 },
             }
             return Response.json({
-              schemaVersion: 6,
+              schemaVersion: 7,
               incidentID: incident.incidentID,
               status: "OPEN",
               presentationState: "DISMISSED",
@@ -402,7 +407,7 @@ test("Motryx runtime error card can be dismissed without resolving the incident"
   }
 })
 
-test("Motryx v6 surfaces retry, unknown outcome, and reconciliation attention without a workflow", async () => {
+test("Motryx v7 separates input delivery from OpenCode provider retry and reconciliation attention", async () => {
   const projectID = path.resolve("/tmp/motryx-route-attention-project")
   const sessionID = "ses_route_attention"
   const config: MotryxControlConfig = {
@@ -421,20 +426,20 @@ test("Motryx v6 surfaces retry, unknown outcome, and reconciliation attention wi
   const retryAt = Date.now() + 60_000
   const retryAttention = {
     attentionID,
-    kind: "RUN_RETRY_SCHEDULED" as const,
+    kind: "PROVIDER_RETRY" as const,
     severity: "WARNING" as const,
     scopeKind: "SESSION" as const,
     role: "orchestrator",
     runID: "run_session_retry",
     attemptID: "attempt_session_retry_2",
-    summary: "The same Orchestrator task will continue after a retryable transport failure.",
+    summary: "OpenCode is retrying the current provider request inside this Turn.",
     reasonCode: "transport",
     nextAction: "wait_for_retry",
     actionRequired: false,
     dismissible: true,
     presentationState: "VISIBLE" as const,
     createdAt: Date.now(),
-    retryLayer: "RUN" as const,
+    retryLayer: "PROVIDER" as const,
     retryAttempt: 1,
     retryLimit: 2,
     retryNotBefore: retryAt,
@@ -479,22 +484,22 @@ test("Motryx v6 surfaces retry, unknown outcome, and reconciliation attention wi
   )
 
   try {
-    let frame = await renderUntil(app, (value) => value.includes("same Orchestrator task"))
-    expect(frame).toContain("Run retry scheduled · Orchestrator")
-    expect(frame).toContain("run retry 1/2")
+    let frame = await renderUntil(app, (value) => value.includes("OpenCode is retrying"))
+    expect(frame).toContain("Provider retry · Orchestrator")
+    expect(frame).toContain("provider retry 1/2")
     expect(frame).toContain("next wait_for_retry")
     expect(frame).toContain("No workflow yet.")
 
     await clickFrameText(app, frame, "[×]")
-    frame = await renderUntil(app, (value) => !value.includes("same Orchestrator task"))
-    expect(frame).not.toContain("same Orchestrator task")
+    frame = await renderUntil(app, (value) => !value.includes("OpenCode is retrying"))
+    expect(frame).not.toContain("OpenCode is retrying")
     await actions!.refresh()
     await app.renderOnce()
-    expect(app.captureCharFrame()).not.toContain("same Orchestrator task")
+    expect(app.captureCharFrame()).not.toContain("OpenCode is retrying")
 
     actions!.showIncidents()
     frame = await renderUntil(app, (value) => value.includes("locally"))
-    expect(frame).toContain("same Orchestrator task")
+    expect(frame).toContain("OpenCode is retrying")
     expect(frame).toContain("hidden")
     expect(frame).toContain("locally")
 
@@ -516,6 +521,7 @@ test("Motryx v6 surfaces retry, unknown outcome, and reconciliation attention wi
 
     const unknownAttention = {
       ...retryAttention,
+      attentionID: "attention_outcome_unknown",
       kind: "OUTCOME_UNKNOWN" as const,
       severity: "ERROR" as const,
       summary: "The previous input may have been admitted; its outcome must be reconciled before retry.",
@@ -542,7 +548,9 @@ test("Motryx v6 surfaces retry, unknown outcome, and reconciliation attention wi
         retryingCount: 0,
       },
     }
+    expect(() => parseMotryxControlSnapshot(currentSnapshot, config)).not.toThrow()
     actions!.showFlow()
+    await app.renderOnce()
     await actions!.refresh()
     frame = await renderUntil(app, (value) => value.includes("previous input may have been admitted"))
     expect(frame).toContain("Outcome unknown · Orchestrator")
@@ -580,23 +588,32 @@ test("Motryx v6 surfaces retry, unknown outcome, and reconciliation attention wi
         sourceKind: "lane_decision",
         sourceID: "lane_debug:decision",
         revision: 2,
-        errorRetryCount: 1,
-        maxErrorRetries: 2,
-        protocolCorrectionCount: 0,
-        maxProtocolCorrections: 1,
         retryDisposition: "RECONCILIATION_REQUIRED",
         createdAt: Date.now() - 5_000,
+      }],
+      inputCommands: [{
+        inputCommandID: "command_lane_reconciliation",
+        runID: "run_lane_reconciliation",
+        commandNo: 1,
+        reason: "INITIAL",
+        origin: "FRAMEWORK_SUBMITTED",
+        instanceID: "inst_coordinator",
+        sessionID: "ses_coordinator",
+        stableInputID: "msg_lane_reconciliation",
+        state: "CONSUMED",
+        submitCount: 1,
+        createdAt: Date.now() - 4_500,
+        consumedAt: Date.now() - 4_000,
       }],
       attempts: [{
         attemptID: "attempt_lane_reconciliation",
         runID: "run_lane_reconciliation",
-        attemptNo: 2,
-        reason: "ERROR_RETRY",
+        attemptNo: 1,
+        reason: "INITIAL",
         instanceID: "inst_coordinator",
         sessionID: "ses_coordinator",
         stableInputID: "msg_lane_reconciliation",
         state: "TERMINAL",
-        submitCount: 1,
         terminalKind: "FAILED",
         failureKind: "provider_internal",
         failureSafeSummary: "Provider returned an ambiguous response after the tool effect.",
@@ -608,6 +625,7 @@ test("Motryx v6 surfaces retry, unknown outcome, and reconciliation attention wi
         hostRetryable: true,
         hostRetryExhausted: true,
         hostAttemptCount: 3,
+        completionCorrectionCount: 0,
         createdAt: Date.now() - 4_000,
         terminalAt: Date.now() - 1_000,
       }],
@@ -628,10 +646,8 @@ test("Motryx v6 surfaces retry, unknown outcome, and reconciliation attention wi
     expect(frame).toContain("reconcile_outcome")
     expect(frame).toContain("reconciliation (effect_unknown)")
     expect(frame).toContain("effect_unknown")
-    expect(frame).toContain("retry 1/2")
-    expect(frame).toContain("Attempt #2 ERROR_RETRY:TERMINAL")
-    expect(frame).toContain("provider")
-    expect(frame).toContain("attempt 3")
+    expect(frame).toContain("Input #1 INITIAL:CONSUMED")
+    expect(frame).toContain("submissions 1")
     expect(frame).toContain("HTTP 503")
     expect(frame).not.toContain("repair runtime/provider, then retry_failed_lane")
   } finally {
@@ -725,7 +741,7 @@ test("/sessions switches the exact Motryx Orchestrator and rebinds conversation 
   } as unknown as TuiPluginApi
   const now = "2026-07-19T00:00:00.000Z"
   const routeSnapshot = (sessionID: string, bindingGeneration: number): MotryxControlSnapshot => ({
-    schemaVersion: 6,
+    schemaVersion: 7,
     projectID,
     orchestratorSessionID: sessionID,
     projectionRevision: `server-generation:ic:${sessionID}`,
@@ -765,6 +781,7 @@ test("/sessions switches the exact Motryx Orchestrator and rebinds conversation 
     incidents: [],
     functionSlots: [],
     runs: [],
+    inputCommands: [],
     attempts: [],
     attentionItems: [],
     runtimeWarnings: [],
@@ -772,7 +789,7 @@ test("/sessions switches the exact Motryx Orchestrator and rebinds conversation 
     diagnostics: [],
   })
   const sessionList = (currentID: string, bindingGeneration: number) => ({
-    schemaVersion: 6,
+    schemaVersion: 7,
     projectID,
     status: "ROUTABLE",
     current: {
@@ -1204,7 +1221,7 @@ async function clickFrameText(app: Awaited<ReturnType<typeof testRender>>, frame
 function debugRouteSnapshot(projectID: string, orchestratorSessionID: string, generation = 7, server = "server") {
   const now = "2026-07-19T00:00:00.000Z"
   return {
-    schemaVersion: 6,
+    schemaVersion: 7,
     projectID,
     orchestratorSessionID,
     projectionRevision: `${server}:revision`,
@@ -1271,6 +1288,7 @@ function debugRouteSnapshot(projectID: string, orchestratorSessionID: string, ge
     incidents: [],
     functionSlots: [],
     runs: [],
+    inputCommands: [],
     attempts: [],
     attentionItems: [],
     runtimeWarnings: [],

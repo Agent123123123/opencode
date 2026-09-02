@@ -389,6 +389,7 @@ const layer = Layer.effectDiscard(
           sessionID: event.data.sessionID,
           prompt: event.data.prompt,
           delivery: event.data.delivery,
+          completion: event.data.completion,
           timeCreated: event.data.timestamp,
           promotedSeq: event.durable.seq,
         })
@@ -404,6 +405,7 @@ const layer = Layer.effectDiscard(
           sessionID: event.data.sessionID,
           prompt: event.data.prompt,
           delivery: event.data.delivery,
+          completion: event.data.completion,
           timeCreated: event.data.timestamp,
         })
       }),
@@ -473,6 +475,7 @@ const layer = Layer.effectDiscard(
         }
       }),
     )
+    yield* events.project(SessionEvent.Turn.Correction, () => Effect.void)
     yield* events.project(SessionEvent.Turn.Settled, (event) =>
       Effect.gen(function* () {
         for (const inputID of event.data.activityInputIDs) {

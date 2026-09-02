@@ -152,6 +152,7 @@ export function update(adapter: Adapter, event: SessionEvent.Event) {
         ),
       "session.turn.started": () => Effect.void,
       "session.turn.not_started": () => Effect.void,
+      "session.turn.correction": () => Effect.void,
       "session.turn.settled": () => Effect.void,
       "session.next.synthetic": (event) => {
         return adapter.appendMessage(

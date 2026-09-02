@@ -16,13 +16,19 @@ function sameSecret(actual: string, expected: string) {
   return left.length === right.length && timingSafeEqual(left, right)
 }
 
+export const isController = Effect.fn("ManagedSessionAuthority.isController")(function* () {
+  const expected = process.env.MOTRYX_CONTROLLER_TOKEN
+  if (!expected) return false
+  const request = yield* HttpServerRequest.HttpServerRequest
+  return sameSecret(request.headers[HEADER] ?? "", expected)
+})
+
 export const assertController = Effect.fn("ManagedSessionAuthority.assertController")(function* () {
   const expected = process.env.MOTRYX_CONTROLLER_TOKEN
   if (!expected) {
     return yield* new UnauthorizedError({ message: "Managed session controller is not configured" })
   }
-  const request = yield* HttpServerRequest.HttpServerRequest
-  if (sameSecret(request.headers[HEADER] ?? "", expected)) return
+  if (yield* isController()) return
   return yield* new UnauthorizedError({ message: "Managed session controller authority is required" })
 })
 

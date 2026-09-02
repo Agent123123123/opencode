@@ -9,8 +9,8 @@ import { WorkspaceEvent } from "../src/workspace-event"
 
 describe("public event manifest", () => {
   test("owns the complete public event surface", () => {
-    expect(EventManifest.ServerDefinitions.length).toBe(63)
-    expect(EventManifest.Definitions.length).toBe(93)
+    expect(EventManifest.ServerDefinitions.length).toBe(66)
+    expect(EventManifest.Definitions.length).toBe(96)
     expect(SessionV1.Event.Definitions).toEqual([
       SessionV1.Event.Created,
       SessionV1.Event.Updated,
@@ -23,8 +23,8 @@ describe("public event manifest", () => {
       SessionV1.Event.Diff,
       SessionV1.Event.Error,
     ])
-    expect(EventManifest.Latest.size).toBe(93)
-    expect(EventManifest.Durable.size).toBe(40)
+    expect(EventManifest.Latest.size).toBe(96)
+    expect(EventManifest.Durable.size).toBe(43)
   })
 
   test("uses canonical definitions for current public events", () => {
@@ -52,6 +52,11 @@ describe("public event manifest", () => {
     expect(EventManifest.Durable.has("session.next.step.ended.1")).toBe(false)
     expect(EventManifest.Durable.get("session.next.step.ended.2")).toBe(SessionEvent.Step.Ended)
     expect(EventManifest.Durable.has("session.turn.settled.1")).toBe(false)
-    expect(EventManifest.Durable.get("session.turn.settled.2")).toBe(SessionEvent.Turn.Settled)
+    expect(EventManifest.Durable.get("session.turn.settled.3")).toBe(SessionEvent.Turn.Settled)
+    expect(EventManifest.Durable.get("session.next.prompt.admitted.2")).toBe(SessionEvent.PromptAdmitted)
+    expect(EventManifest.Durable.get("session.next.prompted.2")).toBe(SessionEvent.Prompted)
+    expect(EventManifest.Durable.get("session.turn.started.2")).toBe(SessionEvent.Turn.Started)
+    expect(EventManifest.Durable.get("session.turn.correction.1")).toBe(SessionEvent.Turn.Correction)
+    expect(EventManifest.Durable.get("session.next.tool.success.2")).toBe(SessionEvent.Tool.Success)
   })
 })

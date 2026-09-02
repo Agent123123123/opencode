@@ -479,6 +479,17 @@ export type SessionsPromptInput = {
       }>
     }
     readonly delivery?: "steer" | "queue" | null
+    readonly completionContract?:
+      | (
+          | { readonly schema: "opencode.managed_completion.v1"; readonly mode: "ordinary_stop" }
+          | {
+              readonly schema: "opencode.managed_completion.v1"
+              readonly mode: "required_terminal_tool"
+              readonly terminalTools: ReadonlyArray<string>
+              readonly correction: { readonly maxSteps: 1; readonly instruction: string }
+            }
+        )
+      | null
     readonly resume?: boolean | null
   }["id"]
   readonly prompt: {
@@ -497,6 +508,17 @@ export type SessionsPromptInput = {
       }>
     }
     readonly delivery?: "steer" | "queue" | null
+    readonly completionContract?:
+      | (
+          | { readonly schema: "opencode.managed_completion.v1"; readonly mode: "ordinary_stop" }
+          | {
+              readonly schema: "opencode.managed_completion.v1"
+              readonly mode: "required_terminal_tool"
+              readonly terminalTools: ReadonlyArray<string>
+              readonly correction: { readonly maxSteps: 1; readonly instruction: string }
+            }
+        )
+      | null
     readonly resume?: boolean | null
   }["prompt"]
   readonly delivery?: {
@@ -515,8 +537,48 @@ export type SessionsPromptInput = {
       }>
     }
     readonly delivery?: "steer" | "queue" | null
+    readonly completionContract?:
+      | (
+          | { readonly schema: "opencode.managed_completion.v1"; readonly mode: "ordinary_stop" }
+          | {
+              readonly schema: "opencode.managed_completion.v1"
+              readonly mode: "required_terminal_tool"
+              readonly terminalTools: ReadonlyArray<string>
+              readonly correction: { readonly maxSteps: 1; readonly instruction: string }
+            }
+        )
+      | null
     readonly resume?: boolean | null
   }["delivery"]
+  readonly completionContract?: {
+    readonly id?: string | null
+    readonly prompt: {
+      readonly text: string
+      readonly files?: ReadonlyArray<{
+        readonly uri: string
+        readonly name?: string
+        readonly description?: string
+        readonly source?: { readonly start: number; readonly end: number; readonly text: string }
+      }>
+      readonly agents?: ReadonlyArray<{
+        readonly name: string
+        readonly source?: { readonly start: number; readonly end: number; readonly text: string }
+      }>
+    }
+    readonly delivery?: "steer" | "queue" | null
+    readonly completionContract?:
+      | (
+          | { readonly schema: "opencode.managed_completion.v1"; readonly mode: "ordinary_stop" }
+          | {
+              readonly schema: "opencode.managed_completion.v1"
+              readonly mode: "required_terminal_tool"
+              readonly terminalTools: ReadonlyArray<string>
+              readonly correction: { readonly maxSteps: 1; readonly instruction: string }
+            }
+        )
+      | null
+    readonly resume?: boolean | null
+  }["completionContract"]
   readonly resume?: {
     readonly id?: string | null
     readonly prompt: {
@@ -533,6 +595,17 @@ export type SessionsPromptInput = {
       }>
     }
     readonly delivery?: "steer" | "queue" | null
+    readonly completionContract?:
+      | (
+          | { readonly schema: "opencode.managed_completion.v1"; readonly mode: "ordinary_stop" }
+          | {
+              readonly schema: "opencode.managed_completion.v1"
+              readonly mode: "required_terminal_tool"
+              readonly terminalTools: ReadonlyArray<string>
+              readonly correction: { readonly maxSteps: 1; readonly instruction: string }
+            }
+        )
+      | null
     readonly resume?: boolean | null
   }["resume"]
 }
@@ -557,6 +630,18 @@ export type SessionsPromptOutput = {
       }>
     }
     readonly delivery: "steer" | "queue"
+    readonly completion?: {
+      readonly origin: "builtin" | "controller"
+      readonly contract:
+        | { readonly schema: "opencode.managed_completion.v1"; readonly mode: "ordinary_stop" }
+        | {
+            readonly schema: "opencode.managed_completion.v1"
+            readonly mode: "required_terminal_tool"
+            readonly terminalTools: ReadonlyArray<string>
+            readonly correction: { readonly maxSteps: 1; readonly instruction: string }
+          }
+      readonly digest: string
+    }
     readonly timeCreated: number
     readonly promotedSeq?: number
   }
@@ -591,6 +676,18 @@ export type SessionsInputOutput = {
             }>
           }
           readonly delivery: "steer" | "queue"
+          readonly completion?: {
+            readonly origin: "builtin" | "controller"
+            readonly contract:
+              | { readonly schema: "opencode.managed_completion.v1"; readonly mode: "ordinary_stop" }
+              | {
+                  readonly schema: "opencode.managed_completion.v1"
+                  readonly mode: "required_terminal_tool"
+                  readonly terminalTools: ReadonlyArray<string>
+                  readonly correction: { readonly maxSteps: 1; readonly instruction: string }
+                }
+            readonly digest: string
+          }
           readonly timeCreated: number
           readonly promotedSeq?: number
         }
@@ -616,6 +713,18 @@ export type SessionsInputOutput = {
             }>
           }
           readonly delivery: "steer" | "queue"
+          readonly completion?: {
+            readonly origin: "builtin" | "controller"
+            readonly contract:
+              | { readonly schema: "opencode.managed_completion.v1"; readonly mode: "ordinary_stop" }
+              | {
+                  readonly schema: "opencode.managed_completion.v1"
+                  readonly mode: "required_terminal_tool"
+                  readonly terminalTools: ReadonlyArray<string>
+                  readonly correction: { readonly maxSteps: 1; readonly instruction: string }
+                }
+            readonly digest: string
+          }
           readonly timeCreated: number
           readonly promotedSeq?: number
         }
@@ -672,6 +781,18 @@ export type SessionsCancelOutput = {
                   }>
                 }
                 readonly delivery: "steer" | "queue"
+                readonly completion?: {
+                  readonly origin: "builtin" | "controller"
+                  readonly contract:
+                    | { readonly schema: "opencode.managed_completion.v1"; readonly mode: "ordinary_stop" }
+                    | {
+                        readonly schema: "opencode.managed_completion.v1"
+                        readonly mode: "required_terminal_tool"
+                        readonly terminalTools: ReadonlyArray<string>
+                        readonly correction: { readonly maxSteps: 1; readonly instruction: string }
+                      }
+                  readonly digest: string
+                }
                 readonly timeCreated: number
                 readonly promotedSeq?: number
               }
@@ -697,6 +818,18 @@ export type SessionsCancelOutput = {
                   }>
                 }
                 readonly delivery: "steer" | "queue"
+                readonly completion?: {
+                  readonly origin: "builtin" | "controller"
+                  readonly contract:
+                    | { readonly schema: "opencode.managed_completion.v1"; readonly mode: "ordinary_stop" }
+                    | {
+                        readonly schema: "opencode.managed_completion.v1"
+                        readonly mode: "required_terminal_tool"
+                        readonly terminalTools: ReadonlyArray<string>
+                        readonly correction: { readonly maxSteps: 1; readonly instruction: string }
+                      }
+                  readonly digest: string
+                }
                 readonly timeCreated: number
                 readonly promotedSeq?: number
               }
@@ -737,6 +870,18 @@ export type SessionsCancelOutput = {
                   }>
                 }
                 readonly delivery: "steer" | "queue"
+                readonly completion?: {
+                  readonly origin: "builtin" | "controller"
+                  readonly contract:
+                    | { readonly schema: "opencode.managed_completion.v1"; readonly mode: "ordinary_stop" }
+                    | {
+                        readonly schema: "opencode.managed_completion.v1"
+                        readonly mode: "required_terminal_tool"
+                        readonly terminalTools: ReadonlyArray<string>
+                        readonly correction: { readonly maxSteps: 1; readonly instruction: string }
+                      }
+                  readonly digest: string
+                }
                 readonly timeCreated: number
                 readonly promotedSeq?: number
               }
@@ -762,6 +907,18 @@ export type SessionsCancelOutput = {
                   }>
                 }
                 readonly delivery: "steer" | "queue"
+                readonly completion?: {
+                  readonly origin: "builtin" | "controller"
+                  readonly contract:
+                    | { readonly schema: "opencode.managed_completion.v1"; readonly mode: "ordinary_stop" }
+                    | {
+                        readonly schema: "opencode.managed_completion.v1"
+                        readonly mode: "required_terminal_tool"
+                        readonly terminalTools: ReadonlyArray<string>
+                        readonly correction: { readonly maxSteps: 1; readonly instruction: string }
+                      }
+                  readonly digest: string
+                }
                 readonly timeCreated: number
                 readonly promotedSeq?: number
               }
@@ -1065,6 +1222,18 @@ export type SessionsHistoryOutput = {
             }>
           }
           readonly delivery: "steer" | "queue"
+          readonly completion?: {
+            readonly origin: "builtin" | "controller"
+            readonly contract:
+              | { readonly schema: "opencode.managed_completion.v1"; readonly mode: "ordinary_stop" }
+              | {
+                  readonly schema: "opencode.managed_completion.v1"
+                  readonly mode: "required_terminal_tool"
+                  readonly terminalTools: ReadonlyArray<string>
+                  readonly correction: { readonly maxSteps: 1; readonly instruction: string }
+                }
+            readonly digest: string
+          }
         }
       }
     | {
@@ -1092,6 +1261,18 @@ export type SessionsHistoryOutput = {
             }>
           }
           readonly delivery: "steer" | "queue"
+          readonly completion?: {
+            readonly origin: "builtin" | "controller"
+            readonly contract:
+              | { readonly schema: "opencode.managed_completion.v1"; readonly mode: "ordinary_stop" }
+              | {
+                  readonly schema: "opencode.managed_completion.v1"
+                  readonly mode: "required_terminal_tool"
+                  readonly terminalTools: ReadonlyArray<string>
+                  readonly correction: { readonly maxSteps: 1; readonly instruction: string }
+                }
+            readonly digest: string
+          }
         }
       }
     | {
@@ -1147,6 +1328,7 @@ export type SessionsHistoryOutput = {
           readonly turnID: string
           readonly turnStartedAt: number
           readonly activityInputIDs: ReadonlyArray<string>
+          readonly completionContractDigest?: string
         }
       }
     | {
@@ -1158,12 +1340,52 @@ export type SessionsHistoryOutput = {
         readonly data: {
           readonly timestamp: number
           readonly sessionID: string
-          readonly schema: "opencode.turn_not_started.v1"
+          readonly schema: "opencode.turn_not_started.v2"
           readonly turnID: string
           readonly activityInputIDs: ReadonlyArray<string>
           readonly outcome: "failed" | "aborted" | "interrupted"
           readonly reason: string
-          readonly errorClass: "transport" | "resource" | "protocol" | "interrupt" | "unknown"
+          readonly errorClass: "transport" | "resource" | "protocol" | "tool_unknown" | "interrupt" | "unknown"
+          readonly failure?: {
+            readonly kind:
+              | "authentication"
+              | "quota"
+              | "rate_limit"
+              | "provider_internal"
+              | "transport"
+              | "invalid_request"
+              | "content_policy"
+              | "resource_limit"
+              | "protocol_contract_unsatisfied"
+              | "tool_effect_unknown"
+              | "unknown"
+            readonly safeMessage: string
+            readonly httpStatus?: number | "Infinity" | "-Infinity" | "NaN"
+            readonly transportKind?: string
+            readonly transportCode?: string
+            readonly retryable: boolean
+            readonly retryExhausted: boolean
+            readonly attemptCount: number | "Infinity" | "-Infinity" | "NaN"
+            readonly providerID?: string
+            readonly modelID?: string
+          }
+        }
+      }
+    | {
+        readonly id: string
+        readonly metadata?: { readonly [x: string]: JsonValue }
+        readonly type: "session.turn.correction"
+        readonly durable?: { readonly aggregateID: string; readonly seq: number; readonly version: number }
+        readonly location?: { readonly directory: string; readonly workspaceID?: string }
+        readonly data: {
+          readonly timestamp: number
+          readonly sessionID: string
+          readonly turnID: string
+          readonly rootInputID: string
+          readonly contractDigest: string
+          readonly ordinal: 1
+          readonly reason: "missing_required_terminal_tool"
+          readonly instruction: string
         }
       }
     | {
@@ -1175,13 +1397,13 @@ export type SessionsHistoryOutput = {
         readonly data: {
           readonly timestamp: number
           readonly sessionID: string
-          readonly schema: "opencode.turn_settled.v2"
+          readonly schema: "opencode.turn_settled.v3"
           readonly turnID: string
           readonly turnStartedAt: number
           readonly activityInputIDs: ReadonlyArray<string>
           readonly outcome: "completed" | "error" | "aborted"
           readonly reason?: string
-          readonly errorClass?: "transport" | "resource" | "protocol" | "interrupt" | "unknown"
+          readonly errorClass?: "transport" | "resource" | "protocol" | "tool_unknown" | "interrupt" | "unknown"
           readonly abortOrigin?: "user" | "framework" | "runtime_shutdown" | "unknown"
           readonly failure?: {
             readonly kind:
@@ -1192,6 +1414,9 @@ export type SessionsHistoryOutput = {
               | "transport"
               | "invalid_request"
               | "content_policy"
+              | "resource_limit"
+              | "protocol_contract_unsatisfied"
+              | "tool_effect_unknown"
               | "unknown"
             readonly safeMessage: string
             readonly httpStatus?: number | "Infinity" | "-Infinity" | "NaN"
@@ -1200,8 +1425,38 @@ export type SessionsHistoryOutput = {
             readonly retryable: boolean
             readonly retryExhausted: boolean
             readonly attemptCount: number | "Infinity" | "-Infinity" | "NaN"
-            readonly providerID: string
-            readonly modelID: string
+            readonly providerID?: string
+            readonly modelID?: string
+          }
+          readonly completion?:
+            | { readonly mode: "ordinary_stop"; readonly correctionSteps: 0 }
+            | {
+                readonly mode: "required_terminal_tool"
+                readonly correctionSteps: 0 | 1
+                readonly terminalTool: { readonly name: string; readonly callID: string }
+              }
+          readonly providerWarning?: {
+            readonly kind:
+              | "authentication"
+              | "quota"
+              | "rate_limit"
+              | "provider_internal"
+              | "transport"
+              | "invalid_request"
+              | "content_policy"
+              | "resource_limit"
+              | "protocol_contract_unsatisfied"
+              | "tool_effect_unknown"
+              | "unknown"
+            readonly safeMessage: string
+            readonly httpStatus?: number | "Infinity" | "-Infinity" | "NaN"
+            readonly transportKind?: string
+            readonly transportCode?: string
+            readonly retryable: boolean
+            readonly retryExhausted: boolean
+            readonly attemptCount: number | "Infinity" | "-Infinity" | "NaN"
+            readonly providerID?: string
+            readonly modelID?: string
           }
         }
       }
@@ -1333,6 +1588,8 @@ export type SessionsHistoryOutput = {
           readonly sessionID: string
           readonly assistantMessageID: string
           readonly callID: string
+          readonly turnID: string
+          readonly activityInputIDs: ReadonlyArray<string>
           readonly name: string
         }
       }
@@ -1347,6 +1604,8 @@ export type SessionsHistoryOutput = {
           readonly sessionID: string
           readonly assistantMessageID: string
           readonly callID: string
+          readonly turnID: string
+          readonly activityInputIDs: ReadonlyArray<string>
           readonly text: string
         }
       }
@@ -1361,6 +1620,8 @@ export type SessionsHistoryOutput = {
           readonly sessionID: string
           readonly assistantMessageID: string
           readonly callID: string
+          readonly turnID: string
+          readonly activityInputIDs: ReadonlyArray<string>
           readonly tool: string
           readonly input: { readonly [x: string]: JsonValue }
           readonly provider: {
@@ -1380,6 +1641,8 @@ export type SessionsHistoryOutput = {
           readonly sessionID: string
           readonly assistantMessageID: string
           readonly callID: string
+          readonly turnID: string
+          readonly activityInputIDs: ReadonlyArray<string>
           readonly structured: { readonly [x: string]: JsonValue }
           readonly content: ReadonlyArray<
             | { readonly type: "text"; readonly text: string }
@@ -1398,6 +1661,8 @@ export type SessionsHistoryOutput = {
           readonly sessionID: string
           readonly assistantMessageID: string
           readonly callID: string
+          readonly turnID: string
+          readonly activityInputIDs: ReadonlyArray<string>
           readonly structured: { readonly [x: string]: JsonValue }
           readonly content: ReadonlyArray<
             | { readonly type: "text"; readonly text: string }
@@ -1422,6 +1687,8 @@ export type SessionsHistoryOutput = {
           readonly sessionID: string
           readonly assistantMessageID: string
           readonly callID: string
+          readonly turnID?: string
+          readonly activityInputIDs?: ReadonlyArray<string>
           readonly error: { readonly type: "unknown"; readonly message: string }
           readonly result?: JsonValue
           readonly provider: {
@@ -1641,6 +1908,18 @@ export type SessionsEventsOutput =
           }>
         }
         readonly delivery: "steer" | "queue"
+        readonly completion?: {
+          readonly origin: "builtin" | "controller"
+          readonly contract:
+            | { readonly schema: "opencode.managed_completion.v1"; readonly mode: "ordinary_stop" }
+            | {
+                readonly schema: "opencode.managed_completion.v1"
+                readonly mode: "required_terminal_tool"
+                readonly terminalTools: ReadonlyArray<string>
+                readonly correction: { readonly maxSteps: 1; readonly instruction: string }
+              }
+          readonly digest: string
+        }
       }
     }
   | {
@@ -1668,6 +1947,18 @@ export type SessionsEventsOutput =
           }>
         }
         readonly delivery: "steer" | "queue"
+        readonly completion?: {
+          readonly origin: "builtin" | "controller"
+          readonly contract:
+            | { readonly schema: "opencode.managed_completion.v1"; readonly mode: "ordinary_stop" }
+            | {
+                readonly schema: "opencode.managed_completion.v1"
+                readonly mode: "required_terminal_tool"
+                readonly terminalTools: ReadonlyArray<string>
+                readonly correction: { readonly maxSteps: 1; readonly instruction: string }
+              }
+          readonly digest: string
+        }
       }
     }
   | {
@@ -1723,6 +2014,7 @@ export type SessionsEventsOutput =
         readonly turnID: string
         readonly turnStartedAt: number
         readonly activityInputIDs: ReadonlyArray<string>
+        readonly completionContractDigest?: string
       }
     }
   | {
@@ -1734,12 +2026,52 @@ export type SessionsEventsOutput =
       readonly data: {
         readonly timestamp: number
         readonly sessionID: string
-        readonly schema: "opencode.turn_not_started.v1"
+        readonly schema: "opencode.turn_not_started.v2"
         readonly turnID: string
         readonly activityInputIDs: ReadonlyArray<string>
         readonly outcome: "failed" | "aborted" | "interrupted"
         readonly reason: string
-        readonly errorClass: "transport" | "resource" | "protocol" | "interrupt" | "unknown"
+        readonly errorClass: "transport" | "resource" | "protocol" | "tool_unknown" | "interrupt" | "unknown"
+        readonly failure?: {
+          readonly kind:
+            | "authentication"
+            | "quota"
+            | "rate_limit"
+            | "provider_internal"
+            | "transport"
+            | "invalid_request"
+            | "content_policy"
+            | "resource_limit"
+            | "protocol_contract_unsatisfied"
+            | "tool_effect_unknown"
+            | "unknown"
+          readonly safeMessage: string
+          readonly httpStatus?: number
+          readonly transportKind?: string
+          readonly transportCode?: string
+          readonly retryable: boolean
+          readonly retryExhausted: boolean
+          readonly attemptCount: number
+          readonly providerID?: string
+          readonly modelID?: string
+        }
+      }
+    }
+  | {
+      readonly id: string
+      readonly metadata?: { readonly [x: string]: unknown }
+      readonly type: "session.turn.correction"
+      readonly durable?: { readonly aggregateID: string; readonly seq: number; readonly version: number }
+      readonly location?: { readonly directory: string; readonly workspaceID?: string }
+      readonly data: {
+        readonly timestamp: number
+        readonly sessionID: string
+        readonly turnID: string
+        readonly rootInputID: string
+        readonly contractDigest: string
+        readonly ordinal: 1
+        readonly reason: "missing_required_terminal_tool"
+        readonly instruction: string
       }
     }
   | {
@@ -1751,13 +2083,13 @@ export type SessionsEventsOutput =
       readonly data: {
         readonly timestamp: number
         readonly sessionID: string
-        readonly schema: "opencode.turn_settled.v2"
+        readonly schema: "opencode.turn_settled.v3"
         readonly turnID: string
         readonly turnStartedAt: number
         readonly activityInputIDs: ReadonlyArray<string>
         readonly outcome: "completed" | "error" | "aborted"
         readonly reason?: string
-        readonly errorClass?: "transport" | "resource" | "protocol" | "interrupt" | "unknown"
+        readonly errorClass?: "transport" | "resource" | "protocol" | "tool_unknown" | "interrupt" | "unknown"
         readonly abortOrigin?: "user" | "framework" | "runtime_shutdown" | "unknown"
         readonly failure?: {
           readonly kind:
@@ -1768,6 +2100,9 @@ export type SessionsEventsOutput =
             | "transport"
             | "invalid_request"
             | "content_policy"
+            | "resource_limit"
+            | "protocol_contract_unsatisfied"
+            | "tool_effect_unknown"
             | "unknown"
           readonly safeMessage: string
           readonly httpStatus?: number
@@ -1776,8 +2111,38 @@ export type SessionsEventsOutput =
           readonly retryable: boolean
           readonly retryExhausted: boolean
           readonly attemptCount: number
-          readonly providerID: string
-          readonly modelID: string
+          readonly providerID?: string
+          readonly modelID?: string
+        }
+        readonly completion?:
+          | { readonly mode: "ordinary_stop"; readonly correctionSteps: 0 }
+          | {
+              readonly mode: "required_terminal_tool"
+              readonly correctionSteps: 0 | 1
+              readonly terminalTool: { readonly name: string; readonly callID: string }
+            }
+        readonly providerWarning?: {
+          readonly kind:
+            | "authentication"
+            | "quota"
+            | "rate_limit"
+            | "provider_internal"
+            | "transport"
+            | "invalid_request"
+            | "content_policy"
+            | "resource_limit"
+            | "protocol_contract_unsatisfied"
+            | "tool_effect_unknown"
+            | "unknown"
+          readonly safeMessage: string
+          readonly httpStatus?: number
+          readonly transportKind?: string
+          readonly transportCode?: string
+          readonly retryable: boolean
+          readonly retryExhausted: boolean
+          readonly attemptCount: number
+          readonly providerID?: string
+          readonly modelID?: string
         }
       }
     }
@@ -1909,6 +2274,8 @@ export type SessionsEventsOutput =
         readonly sessionID: string
         readonly assistantMessageID: string
         readonly callID: string
+        readonly turnID: string
+        readonly activityInputIDs: ReadonlyArray<string>
         readonly name: string
       }
     }
@@ -1923,6 +2290,8 @@ export type SessionsEventsOutput =
         readonly sessionID: string
         readonly assistantMessageID: string
         readonly callID: string
+        readonly turnID: string
+        readonly activityInputIDs: ReadonlyArray<string>
         readonly text: string
       }
     }
@@ -1937,6 +2306,8 @@ export type SessionsEventsOutput =
         readonly sessionID: string
         readonly assistantMessageID: string
         readonly callID: string
+        readonly turnID: string
+        readonly activityInputIDs: ReadonlyArray<string>
         readonly tool: string
         readonly input: { readonly [x: string]: unknown }
         readonly provider: {
@@ -1956,6 +2327,8 @@ export type SessionsEventsOutput =
         readonly sessionID: string
         readonly assistantMessageID: string
         readonly callID: string
+        readonly turnID: string
+        readonly activityInputIDs: ReadonlyArray<string>
         readonly structured: { readonly [x: string]: unknown }
         readonly content: ReadonlyArray<
           | { readonly type: "text"; readonly text: string }
@@ -1974,6 +2347,8 @@ export type SessionsEventsOutput =
         readonly sessionID: string
         readonly assistantMessageID: string
         readonly callID: string
+        readonly turnID: string
+        readonly activityInputIDs: ReadonlyArray<string>
         readonly structured: { readonly [x: string]: unknown }
         readonly content: ReadonlyArray<
           | { readonly type: "text"; readonly text: string }
@@ -1998,6 +2373,8 @@ export type SessionsEventsOutput =
         readonly sessionID: string
         readonly assistantMessageID: string
         readonly callID: string
+        readonly turnID?: string
+        readonly activityInputIDs?: ReadonlyArray<string>
         readonly error: { readonly type: "unknown"; readonly message: string }
         readonly result?: unknown
         readonly provider: {

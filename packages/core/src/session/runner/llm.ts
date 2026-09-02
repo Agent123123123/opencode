@@ -34,7 +34,7 @@ import { SessionMessage } from "../message"
 import { SessionModelContext } from "../model-context"
 import { SessionSchema } from "../schema"
 import { SessionStore } from "../store"
-import { type RunError, Service } from "./index"
+import { ManagedTurnError, type RunError, Service } from "./index"
 import { SessionRunnerModel } from "./model"
 import { SessionModelSwitch } from "../model-switch"
 import { createLLMEventPublisher } from "./publish-llm-event"
@@ -174,6 +174,13 @@ const layer = Layer.effect(
       interruptedToolsReconciled: boolean
       providerID?: string
       modelID?: string
+      providerWarning?: SessionEvent.Turn.Failure
+      managed: boolean
+      completion?: SessionInput.Completion
+      correctionActive: boolean
+      correctionUsed: boolean
+      terminalTool?: { readonly callID: string; readonly name: string }
+      preStartRetryCount: number
     }
 
     const continueAfterCompaction = (step: number) => new TurnTransitionError({ _tag: "ContinueAfterCompaction", step })
@@ -253,11 +260,49 @@ const layer = Layer.effect(
         ? activityBeforePromotion
         : currentActivityInputIDs(yield* getContext(session.id))
       activity.activityInputIDs = activityInputIDs
+      activity.managed = session.execution.managed
+      if (session.execution.managed) {
+        if (activityInputIDs.length !== 1) {
+          return yield* new ManagedTurnError({
+            kind: "protocol",
+            message: `Managed Turn requires exactly one root Input; received ${activityInputIDs.length}`,
+          })
+        }
+        const root = yield* SessionInput.find(db, activityInputIDs[0]!)
+        if (
+          !root || root.sessionID !== session.id || root.delivery !== "queue" ||
+          root.promotedSeq === undefined || !root.completion
+        ) {
+          return yield* new ManagedTurnError({
+            kind: "protocol",
+            message: "Managed Turn root Input lacks queued promotion or its durable completion contract",
+          })
+        }
+        if (activity.completion && activity.completion.digest !== root.completion.digest) {
+          return yield* new ManagedTurnError({
+            kind: "protocol",
+            message: "Managed Turn completion contract changed during execution",
+          })
+        }
+        activity.completion = root.completion
+      }
       const system = initialized ?? (yield* SessionContextEpoch.prepare(db, events, contextSource, session.id))
       const entries = yield* SessionHistory.entriesForRunner(db, session.id, system.baselineSeq)
       const projection = yield* SessionModelContext.projectEntries(entries, model)
-      const isLastStep = agent.info?.steps !== undefined && currentStep >= agent.info.steps
-      const toolMaterialization = isLastStep ? undefined : yield* tools.materialize(agent.info?.permissions)
+      const completionContract = activity.completion?.contract
+      const requiresTerminalTool = completionContract?.mode === "required_terminal_tool"
+      const isLastStep = !activity.correctionActive && agent.info?.steps !== undefined && currentStep >= agent.info.steps
+      const toolsDisabled = isLastStep && !requiresTerminalTool
+      const toolMaterialization = toolsDisabled ? undefined : yield* tools.materialize(agent.info?.permissions)
+      if (requiresTerminalTool) {
+        const available = new Set(toolMaterialization?.definitions.map((tool) => tool.name) ?? [])
+        if (!completionContract.terminalTools.some((name) => available.has(name))) {
+          return yield* new ManagedTurnError({
+            kind: "protocol",
+            message: `No managed completion tool is available: ${completionContract.terminalTools.join(", ")}`,
+          })
+        }
+      }
       const promptCacheKey = /^ses_[0-9a-f]{64}$/.test(session.id) ? session.id.slice(4) : session.id
       const request = LLM.request({
         model,
@@ -265,9 +310,15 @@ const layer = Layer.effect(
         system: [agent.info?.system, system.baseline]
           .filter((part): part is string => part !== undefined && part.length > 0)
           .map(SystemPart.make),
-        messages: [...projection.messages, ...(isLastStep ? [Message.assistant(MAX_STEPS_PROMPT)] : [])],
+        messages: [
+          ...projection.messages,
+          ...(toolsDisabled ? [Message.assistant(MAX_STEPS_PROMPT)] : []),
+          ...(activity.correctionActive && completionContract?.mode === "required_terminal_tool"
+            ? [Message.system(completionContract.correction.instruction)]
+            : []),
+        ],
         tools: toolMaterialization?.definitions ?? [],
-        toolChoice: isLastStep ? "none" : undefined,
+        toolChoice: toolsDisabled ? "none" : undefined,
       })
       if (yield* compaction.compactIfNeeded({ sessionID: session.id, entries: projection.entries, model, request }))
         return yield* Effect.die(continueAfterCompaction(currentStep))
@@ -285,11 +336,14 @@ const layer = Layer.effect(
           turnID: activity.turnID,
           turnStartedAt,
           activityInputIDs,
+          completionContractDigest: activity.completion?.digest,
         })
         activity.started = true
       }
       const publisher = createLLMEventPublisher(events, {
         sessionID: session.id,
+        turnID: activity.turnID,
+        activityInputIDs,
         agent: agent.id,
         model: {
           id: ModelV2.ID.make(model.id),
@@ -428,10 +482,62 @@ const layer = Layer.effect(
             yield* withPublication(publisher.failUnsettledTools("Tool execution interrupted"))
           if (stream._tag === "Success" && !publisher.hasProviderError())
             yield* withPublication(publisher.failUnsettledTools("Provider did not return a tool result"))
-          if (stream._tag === "Failure") return yield* Effect.failCause(stream.cause)
-          if (settled._tag === "Failure" && Cause.hasInterrupts(settled.cause))
+          if (stream._tag === "Failure" && Cause.hasInterrupts(stream.cause)) {
+            return yield* Effect.failCause(stream.cause)
+          }
+          if (settled._tag === "Failure" && Cause.hasInterrupts(settled.cause)) {
             return yield* Effect.failCause(settled.cause)
+          }
+          const terminalTool = completionContract?.mode === "required_terminal_tool"
+            ? publisher.successfulLocalTools().find((tool) => completionContract.terminalTools.includes(tool.name))
+            : undefined
+          if (terminalTool) {
+            activity.terminalTool = terminalTool
+            const warning = failure instanceof LLMError
+              ? failure
+              : providerFailure
+                ? providerEventFailure(providerFailure)
+                : undefined
+            if (warning) activity.providerWarning = runtimeFailure(warning, activity.providerID, activity.modelID)
+            return { needsContinuation: false, step: currentStep }
+          }
+          if (stream._tag === "Failure") return yield* Effect.failCause(stream.cause)
           if (providerFailure) return yield* providerEventFailure(providerFailure)
+          if (session.execution.managed && stepSettlement?.finish === "length") {
+            return yield* new ManagedTurnError({
+              kind: "resource",
+              message: "Managed Turn reached the provider output limit before completion",
+            })
+          }
+          if (completionContract?.mode === "required_terminal_tool") {
+            if (activity.correctionActive) {
+              return yield* new ManagedTurnError({
+                kind: "protocol",
+                message: "Managed completion contract remained unsatisfied after correction",
+              })
+            }
+            if (stepSettlement?.finish === "stop") {
+              activity.correctionUsed = true
+              activity.correctionActive = true
+              yield* events.publish(SessionEvent.Turn.Correction, {
+                sessionID: session.id,
+                timestamp: yield* DateTime.now,
+                turnID: activity.turnID,
+                rootInputID: activityInputIDs[0]!,
+                contractDigest: activity.completion!.digest,
+                ordinal: 1,
+                reason: "missing_required_terminal_tool",
+                instruction: completionContract.correction.instruction,
+              })
+              return { needsContinuation: true, step: currentStep }
+            }
+            if (isLastStep || !needsContinuation) {
+              return yield* new ManagedTurnError({
+                kind: "protocol",
+                message: "Managed completion contract remained unsatisfied at the Step limit",
+              })
+            }
+          }
           return { needsContinuation: !publisher.hasProviderError() && needsContinuation, step: currentStep }
         }),
       )
@@ -468,6 +574,14 @@ const layer = Layer.effect(
             return yield* runTurn(sessionID, undefined, defect.transition.step, activity)
           }),
         ),
+        Effect.catch((error) => {
+          if (
+            activity.started || !(error instanceof SystemContext.InitializationBlocked) ||
+            activity.preStartRetryCount >= 2
+          ) return Effect.fail(error)
+          activity.preStartRetryCount += 1
+          return Effect.yieldNow.pipe(Effect.andThen(runTurn(sessionID, promotion, step, activity)))
+        }),
       )
     })
 
@@ -475,13 +589,15 @@ const layer = Layer.effect(
       readonly sessionID: SessionSchema.ID
       readonly force: boolean
     }) {
+      const session = yield* getSession(input.sessionID)
       yield* SessionModelSwitch.applyPending(db, events, input.sessionID)
       const hasSteer = yield* SessionInput.hasPending(db, input.sessionID, "steer")
       const hasQueue = hasSteer ? false : yield* SessionInput.hasPending(db, input.sessionID, "queue")
       const hasOrphanedPromotion = yield* SessionInput.hasOrphanedPromoted(db, input.sessionID)
-      if (!input.force && !hasSteer && !hasQueue && !hasOrphanedPromotion) return
+      const forced = input.force && !session.execution.managed
+      if (!forced && !hasSteer && !hasQueue && !hasOrphanedPromotion) return
       let promotion: SessionInput.Delivery | undefined = hasSteer ? "steer" : hasQueue ? "queue" : undefined
-      let shouldRun = input.force || hasSteer || hasQueue || hasOrphanedPromotion
+      let shouldRun = forced || hasSteer || hasQueue || hasOrphanedPromotion
       while (shouldRun) {
         yield* SessionModelSwitch.applyPending(db, events, input.sessionID)
         const activity: Activity = {
@@ -490,6 +606,10 @@ const layer = Layer.effect(
           started: false,
           activityInputIDs: [],
           interruptedToolsReconciled: false,
+          managed: false,
+          correctionActive: false,
+          correctionUsed: false,
+          preStartRetryCount: 0,
         }
         const activityExit = yield* Effect.uninterruptibleMask((restore) =>
           restore(
@@ -500,8 +620,10 @@ const layer = Layer.effect(
                 const result = yield* runTurn(input.sessionID, promotion, step, activity)
                 needsContinuation = result.needsContinuation
                 step = result.step + 1
-                promotion = "steer"
-                if (!needsContinuation) needsContinuation = yield* SessionInput.hasPending(db, input.sessionID, "steer")
+                promotion = activity.managed ? undefined : "steer"
+                if (!activity.managed && !needsContinuation) {
+                  needsContinuation = yield* SessionInput.hasPending(db, input.sessionID, "steer")
+                }
               }
             }),
           ).pipe(
@@ -532,12 +654,22 @@ const layer = Layer.effect(
                   yield* events.publish(SessionEvent.Turn.NotStarted, {
                     sessionID: input.sessionID,
                     timestamp: yield* DateTime.now,
-                    schema: "opencode.turn_not_started.v1",
+                    schema: "opencode.turn_not_started.v2",
                     turnID: activity.turnID,
                     activityInputIDs: promotedInputIDs,
                     outcome: interrupted ? "interrupted" : "failed",
                     reason: failureReason,
-                    errorClass: interrupted ? "interrupt" : "unknown",
+                    errorClass: interrupted ? "interrupt" : runtimeErrorClass(error),
+                    ...(!interrupted
+                      ? {
+                          failure: {
+                            ...runtimeFailure(error, activity.providerID, activity.modelID),
+                            retryable: error instanceof SystemContext.InitializationBlocked,
+                            retryExhausted: error instanceof SystemContext.InitializationBlocked,
+                            attemptCount: activity.preStartRetryCount + 1,
+                          },
+                        }
+                      : {}),
                   })
                   return
                 }
@@ -547,11 +679,23 @@ const layer = Layer.effect(
                 yield* events.publish(SessionEvent.Turn.Settled, {
                   sessionID: input.sessionID,
                   timestamp: yield* DateTime.now,
-                  schema: "opencode.turn_settled.v2",
+                  schema: "opencode.turn_settled.v3",
                   turnID: activity.turnID,
                   turnStartedAt,
                   activityInputIDs: activity.activityInputIDs,
                   outcome: interrupted ? "aborted" : Exit.isFailure(exit) ? "error" : "completed",
+                  ...(activity.terminalTool
+                    ? {
+                        completion: {
+                          mode: "required_terminal_tool" as const,
+                          correctionSteps: activity.correctionUsed ? 1 as const : 0 as const,
+                          terminalTool: activity.terminalTool,
+                        },
+                      }
+                    : activity.completion?.contract.mode === "ordinary_stop" && !Exit.isFailure(exit)
+                      ? { completion: { mode: "ordinary_stop" as const, correctionSteps: 0 as const } }
+                      : {}),
+                  ...(activity.providerWarning ? { providerWarning: activity.providerWarning } : {}),
                   ...(Exit.isFailure(exit)
                     ? {
                         reason: failureReason,
@@ -626,6 +770,11 @@ const mergeInputIDs = (
 ): ReadonlyArray<SessionMessage.ID> => [...new Set([...current, ...added])]
 
 const failureKind = (error: unknown): SessionEvent.Turn.Failure["kind"] => {
+  if (error instanceof ManagedTurnError) {
+    if (error.kind === "protocol") return "protocol_contract_unsatisfied"
+    if (error.kind === "resource") return "resource_limit"
+    return "tool_effect_unknown"
+  }
   if (!(error instanceof LLMError)) return "unknown"
   switch (error.reason._tag) {
     case "Authentication": return "authentication"
@@ -642,6 +791,11 @@ const failureKind = (error: unknown): SessionEvent.Turn.Failure["kind"] => {
 }
 
 const runtimeErrorClass = (error: unknown) => {
+  if (error instanceof ManagedTurnError) {
+    if (error.kind === "resource") return "resource" as const
+    if (error.kind === "protocol") return "protocol" as const
+    return "tool_unknown" as const
+  }
   const kind = failureKind(error)
   if (kind === "authentication" || kind === "quota" || kind === "rate_limit") return "resource" as const
   if (kind === "provider_internal" || kind === "transport") return "transport" as const
@@ -660,7 +814,8 @@ const runtimeFailure = (
     : reason && "status" in reason && typeof reason.status === "number"
       ? reason.status
       : undefined
-  const message = llmError?.reason.message ?? "Agent turn failed before a typed provider error was available"
+  const message = llmError?.reason.message ?? (error instanceof Error ? error.message : undefined) ??
+    "Agent turn failed before a typed provider error was available"
   const safeMessage = message.replace(/\s+/g, " ").trim().slice(0, 500) || "Agent turn failed"
   return {
     kind: failureKind(error),
@@ -669,9 +824,9 @@ const runtimeFailure = (
     ...(reason?._tag === "Transport" && reason.kind ? { transportKind: reason.kind } : {}),
     ...(reason?._tag === "Transport" && reason.code ? { transportCode: reason.code } : {}),
     retryable: llmError?.retryable ?? false,
-    retryExhausted: llmError?.retryExhausted ?? false,
+    retryExhausted: llmError?.retryExhausted ?? error instanceof ManagedTurnError,
     attemptCount: Math.max(1, Math.trunc(llmError?.attemptCount ?? 1)),
-    providerID: providerID ?? "unknown",
-    modelID: modelID ?? "unknown",
+    ...(providerID ? { providerID } : {}),
+    ...(modelID ? { modelID } : {}),
   }
 }

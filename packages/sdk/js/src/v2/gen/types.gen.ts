@@ -28,6 +28,7 @@ export type Event =
   | EventSessionNextContextUpdated
   | EventSessionTurnStarted
   | EventSessionTurnNotStarted
+  | EventSessionTurnCorrection
   | EventSessionTurnSettled
   | EventSessionNextSynthetic
   | EventSessionNextShellStarted
@@ -882,6 +883,7 @@ export type GlobalEvent = {
           messageID: string
           prompt: Prompt
           delivery: "steer" | "queue"
+          completion?: SessionInputCompletion
         }
       }
     | {
@@ -893,6 +895,7 @@ export type GlobalEvent = {
           messageID: string
           prompt: Prompt
           delivery: "steer" | "queue"
+          completion?: SessionInputCompletion
         }
       }
     | {
@@ -936,6 +939,7 @@ export type GlobalEvent = {
           turnID: string
           turnStartedAt: number
           activityInputIDs: Array<string>
+          completionContractDigest?: string
         }
       }
     | {
@@ -944,12 +948,49 @@ export type GlobalEvent = {
         properties: {
           timestamp: number
           sessionID: string
-          schema: "opencode.turn_not_started.v1"
+          schema: "opencode.turn_not_started.v2"
           turnID: string
           activityInputIDs: Array<string>
           outcome: "failed" | "aborted" | "interrupted"
           reason: string
-          errorClass: "transport" | "resource" | "protocol" | "interrupt" | "unknown"
+          errorClass: "transport" | "resource" | "protocol" | "tool_unknown" | "interrupt" | "unknown"
+          failure?: {
+            kind:
+              | "authentication"
+              | "quota"
+              | "rate_limit"
+              | "provider_internal"
+              | "transport"
+              | "invalid_request"
+              | "content_policy"
+              | "resource_limit"
+              | "protocol_contract_unsatisfied"
+              | "tool_effect_unknown"
+              | "unknown"
+            safeMessage: string
+            httpStatus?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+            transportKind?: string
+            transportCode?: string
+            retryable: boolean
+            retryExhausted: boolean
+            attemptCount: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+            providerID?: string
+            modelID?: string
+          }
+        }
+      }
+    | {
+        id: string
+        type: "session.turn.correction"
+        properties: {
+          timestamp: number
+          sessionID: string
+          turnID: string
+          rootInputID: string
+          contractDigest: string
+          ordinal: 1
+          reason: "missing_required_terminal_tool"
+          instruction: string
         }
       }
     | {
@@ -958,13 +999,13 @@ export type GlobalEvent = {
         properties: {
           timestamp: number
           sessionID: string
-          schema: "opencode.turn_settled.v2"
+          schema: "opencode.turn_settled.v3"
           turnID: string
           turnStartedAt: number
           activityInputIDs: Array<string>
           outcome: "completed" | "error" | "aborted"
           reason?: string
-          errorClass?: "transport" | "resource" | "protocol" | "interrupt" | "unknown"
+          errorClass?: "transport" | "resource" | "protocol" | "tool_unknown" | "interrupt" | "unknown"
           abortOrigin?: "user" | "framework" | "runtime_shutdown" | "unknown"
           failure?: {
             kind:
@@ -975,6 +1016,9 @@ export type GlobalEvent = {
               | "transport"
               | "invalid_request"
               | "content_policy"
+              | "resource_limit"
+              | "protocol_contract_unsatisfied"
+              | "tool_effect_unknown"
               | "unknown"
             safeMessage: string
             httpStatus?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
@@ -983,8 +1027,44 @@ export type GlobalEvent = {
             retryable: boolean
             retryExhausted: boolean
             attemptCount: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-            providerID: string
-            modelID: string
+            providerID?: string
+            modelID?: string
+          }
+          completion?:
+            | {
+                mode: "ordinary_stop"
+                correctionSteps: 0
+              }
+            | {
+                mode: "required_terminal_tool"
+                correctionSteps: 0 | 1
+                terminalTool: {
+                  name: string
+                  callID: string
+                }
+              }
+          providerWarning?: {
+            kind:
+              | "authentication"
+              | "quota"
+              | "rate_limit"
+              | "provider_internal"
+              | "transport"
+              | "invalid_request"
+              | "content_policy"
+              | "resource_limit"
+              | "protocol_contract_unsatisfied"
+              | "tool_effect_unknown"
+              | "unknown"
+            safeMessage: string
+            httpStatus?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+            transportKind?: string
+            transportCode?: string
+            retryable: boolean
+            retryExhausted: boolean
+            attemptCount: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+            providerID?: string
+            modelID?: string
           }
         }
       }
@@ -1137,6 +1217,8 @@ export type GlobalEvent = {
           sessionID: string
           assistantMessageID: string
           callID: string
+          turnID: string
+          activityInputIDs: Array<string>
           name: string
         }
       }
@@ -1148,6 +1230,8 @@ export type GlobalEvent = {
           sessionID: string
           assistantMessageID: string
           callID: string
+          turnID: string
+          activityInputIDs: Array<string>
           delta: string
         }
       }
@@ -1159,6 +1243,8 @@ export type GlobalEvent = {
           sessionID: string
           assistantMessageID: string
           callID: string
+          turnID: string
+          activityInputIDs: Array<string>
           text: string
         }
       }
@@ -1170,6 +1256,8 @@ export type GlobalEvent = {
           sessionID: string
           assistantMessageID: string
           callID: string
+          turnID: string
+          activityInputIDs: Array<string>
           tool: string
           input: {
             [key: string]: unknown
@@ -1188,6 +1276,8 @@ export type GlobalEvent = {
           sessionID: string
           assistantMessageID: string
           callID: string
+          turnID: string
+          activityInputIDs: Array<string>
           structured: {
             [key: string]: unknown
           }
@@ -1202,6 +1292,8 @@ export type GlobalEvent = {
           sessionID: string
           assistantMessageID: string
           callID: string
+          turnID: string
+          activityInputIDs: Array<string>
           structured: {
             [key: string]: unknown
           }
@@ -1222,6 +1314,8 @@ export type GlobalEvent = {
           sessionID: string
           assistantMessageID: string
           callID: string
+          turnID?: string
+          activityInputIDs?: Array<string>
           error: SessionErrorUnknown
           result?: unknown
           provider: {
@@ -1728,6 +1822,7 @@ export type GlobalEvent = {
     | SyncEventSessionNextContextUpdated
     | SyncEventSessionTurnStarted
     | SyncEventSessionTurnNotStarted
+    | SyncEventSessionTurnCorrection
     | SyncEventSessionTurnSettled
     | SyncEventSessionNextSynthetic
     | SyncEventSessionNextShellStarted
@@ -2872,6 +2967,7 @@ export type SessionDurableEvent =
   | SessionNextContextUpdated
   | SessionTurnStarted
   | SessionTurnNotStarted
+  | SessionTurnCorrection
   | SessionTurnSettled
   | SessionNextSynthetic
   | SessionNextShellStarted
@@ -3005,7 +3101,8 @@ export type V2Event =
   | SessionNextExecutionGateChanged
   | SessionNextContextUpdated
   | SessionTurnStarted
-  | SessionTurnNotStarted
+  | SessionTurnNotStarted1
+  | SessionTurnCorrection
   | SessionTurnSettled1
   | SessionNextSynthetic
   | SessionNextShellStarted
@@ -3202,6 +3299,31 @@ export type PromptFileAttachment = {
 export type PromptAgentAttachment = {
   name: string
   source?: PromptSource
+}
+
+export type SessionInputOrdinaryStopCompletionContract = {
+  schema: "opencode.managed_completion.v1"
+  mode: "ordinary_stop"
+}
+
+export type SessionInputRequiredTerminalToolCompletionContract = {
+  schema: "opencode.managed_completion.v1"
+  mode: "required_terminal_tool"
+  terminalTools: Array<string>
+  correction: {
+    maxSteps: 1
+    instruction: string
+  }
+}
+
+export type SessionInputCompletionContract =
+  | SessionInputOrdinaryStopCompletionContract
+  | SessionInputRequiredTerminalToolCompletionContract
+
+export type SessionInputCompletion = {
+  origin: "builtin" | "controller"
+  contract: SessionInputCompletionContract
+  digest: string
 }
 
 export type SessionErrorUnknown = {
@@ -3524,7 +3646,7 @@ export type SyncEventSessionNextPrompted = {
   type: "sync"
   id: string
   syncEvent: {
-    type: "session.next.prompted.1"
+    type: "session.next.prompted.2"
     id: string
     seq: number
     aggregateID: string
@@ -3534,6 +3656,7 @@ export type SyncEventSessionNextPrompted = {
       messageID: string
       prompt: Prompt
       delivery: "steer" | "queue"
+      completion?: SessionInputCompletion
     }
   }
 }
@@ -3542,7 +3665,7 @@ export type SyncEventSessionNextPromptAdmitted = {
   type: "sync"
   id: string
   syncEvent: {
-    type: "session.next.prompt.admitted.1"
+    type: "session.next.prompt.admitted.2"
     id: string
     seq: number
     aggregateID: string
@@ -3552,6 +3675,7 @@ export type SyncEventSessionNextPromptAdmitted = {
       messageID: string
       prompt: Prompt
       delivery: "steer" | "queue"
+      completion?: SessionInputCompletion
     }
   }
 }
@@ -3613,7 +3737,7 @@ export type SyncEventSessionTurnStarted = {
   type: "sync"
   id: string
   syncEvent: {
-    type: "session.turn.started.1"
+    type: "session.turn.started.2"
     id: string
     seq: number
     aggregateID: string
@@ -3623,6 +3747,7 @@ export type SyncEventSessionTurnStarted = {
       turnID: string
       turnStartedAt: number
       activityInputIDs: Array<string>
+      completionContractDigest?: string
     }
   }
 }
@@ -3631,19 +3756,63 @@ export type SyncEventSessionTurnNotStarted = {
   type: "sync"
   id: string
   syncEvent: {
-    type: "session.turn.not_started.1"
+    type: "session.turn.not_started.2"
     id: string
     seq: number
     aggregateID: string
     data: {
       timestamp: number
       sessionID: string
-      schema: "opencode.turn_not_started.v1"
+      schema: "opencode.turn_not_started.v2"
       turnID: string
       activityInputIDs: Array<string>
       outcome: "failed" | "aborted" | "interrupted"
       reason: string
-      errorClass: "transport" | "resource" | "protocol" | "interrupt" | "unknown"
+      errorClass: "transport" | "resource" | "protocol" | "tool_unknown" | "interrupt" | "unknown"
+      failure?: {
+        kind:
+          | "authentication"
+          | "quota"
+          | "rate_limit"
+          | "provider_internal"
+          | "transport"
+          | "invalid_request"
+          | "content_policy"
+          | "resource_limit"
+          | "protocol_contract_unsatisfied"
+          | "tool_effect_unknown"
+          | "unknown"
+        safeMessage: string
+        httpStatus?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        transportKind?: string
+        transportCode?: string
+        retryable: boolean
+        retryExhausted: boolean
+        attemptCount: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        providerID?: string
+        modelID?: string
+      }
+    }
+  }
+}
+
+export type SyncEventSessionTurnCorrection = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "session.turn.correction.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      timestamp: number
+      sessionID: string
+      turnID: string
+      rootInputID: string
+      contractDigest: string
+      ordinal: 1
+      reason: "missing_required_terminal_tool"
+      instruction: string
     }
   }
 }
@@ -3652,20 +3821,20 @@ export type SyncEventSessionTurnSettled = {
   type: "sync"
   id: string
   syncEvent: {
-    type: "session.turn.settled.2"
+    type: "session.turn.settled.3"
     id: string
     seq: number
     aggregateID: string
     data: {
       timestamp: number
       sessionID: string
-      schema: "opencode.turn_settled.v2"
+      schema: "opencode.turn_settled.v3"
       turnID: string
       turnStartedAt: number
       activityInputIDs: Array<string>
       outcome: "completed" | "error" | "aborted"
       reason?: string
-      errorClass?: "transport" | "resource" | "protocol" | "interrupt" | "unknown"
+      errorClass?: "transport" | "resource" | "protocol" | "tool_unknown" | "interrupt" | "unknown"
       abortOrigin?: "user" | "framework" | "runtime_shutdown" | "unknown"
       failure?: {
         kind:
@@ -3676,6 +3845,9 @@ export type SyncEventSessionTurnSettled = {
           | "transport"
           | "invalid_request"
           | "content_policy"
+          | "resource_limit"
+          | "protocol_contract_unsatisfied"
+          | "tool_effect_unknown"
           | "unknown"
         safeMessage: string
         httpStatus?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
@@ -3684,8 +3856,44 @@ export type SyncEventSessionTurnSettled = {
         retryable: boolean
         retryExhausted: boolean
         attemptCount: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-        providerID: string
-        modelID: string
+        providerID?: string
+        modelID?: string
+      }
+      completion?:
+        | {
+            mode: "ordinary_stop"
+            correctionSteps: 0
+          }
+        | {
+            mode: "required_terminal_tool"
+            correctionSteps: 0 | 1
+            terminalTool: {
+              name: string
+              callID: string
+            }
+          }
+      providerWarning?: {
+        kind:
+          | "authentication"
+          | "quota"
+          | "rate_limit"
+          | "provider_internal"
+          | "transport"
+          | "invalid_request"
+          | "content_policy"
+          | "resource_limit"
+          | "protocol_contract_unsatisfied"
+          | "tool_effect_unknown"
+          | "unknown"
+        safeMessage: string
+        httpStatus?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        transportKind?: string
+        transportCode?: string
+        retryable: boolean
+        retryExhausted: boolean
+        attemptCount: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        providerID?: string
+        modelID?: string
       }
     }
   }
@@ -3884,7 +4092,7 @@ export type SyncEventSessionNextToolInputStarted = {
   type: "sync"
   id: string
   syncEvent: {
-    type: "session.next.tool.input.started.1"
+    type: "session.next.tool.input.started.2"
     id: string
     seq: number
     aggregateID: string
@@ -3893,6 +4101,8 @@ export type SyncEventSessionNextToolInputStarted = {
       sessionID: string
       assistantMessageID: string
       callID: string
+      turnID: string
+      activityInputIDs: Array<string>
       name: string
     }
   }
@@ -3902,7 +4112,7 @@ export type SyncEventSessionNextToolInputEnded = {
   type: "sync"
   id: string
   syncEvent: {
-    type: "session.next.tool.input.ended.1"
+    type: "session.next.tool.input.ended.2"
     id: string
     seq: number
     aggregateID: string
@@ -3911,6 +4121,8 @@ export type SyncEventSessionNextToolInputEnded = {
       sessionID: string
       assistantMessageID: string
       callID: string
+      turnID: string
+      activityInputIDs: Array<string>
       text: string
     }
   }
@@ -3920,7 +4132,7 @@ export type SyncEventSessionNextToolCalled = {
   type: "sync"
   id: string
   syncEvent: {
-    type: "session.next.tool.called.1"
+    type: "session.next.tool.called.2"
     id: string
     seq: number
     aggregateID: string
@@ -3929,6 +4141,8 @@ export type SyncEventSessionNextToolCalled = {
       sessionID: string
       assistantMessageID: string
       callID: string
+      turnID: string
+      activityInputIDs: Array<string>
       tool: string
       input: {
         [key: string]: unknown
@@ -3945,7 +4159,7 @@ export type SyncEventSessionNextToolProgress = {
   type: "sync"
   id: string
   syncEvent: {
-    type: "session.next.tool.progress.1"
+    type: "session.next.tool.progress.2"
     id: string
     seq: number
     aggregateID: string
@@ -3954,6 +4168,8 @@ export type SyncEventSessionNextToolProgress = {
       sessionID: string
       assistantMessageID: string
       callID: string
+      turnID: string
+      activityInputIDs: Array<string>
       structured: {
         [key: string]: unknown
       }
@@ -3966,7 +4182,7 @@ export type SyncEventSessionNextToolSuccess = {
   type: "sync"
   id: string
   syncEvent: {
-    type: "session.next.tool.success.1"
+    type: "session.next.tool.success.2"
     id: string
     seq: number
     aggregateID: string
@@ -3975,6 +4191,8 @@ export type SyncEventSessionNextToolSuccess = {
       sessionID: string
       assistantMessageID: string
       callID: string
+      turnID: string
+      activityInputIDs: Array<string>
       structured: {
         [key: string]: unknown
       }
@@ -3993,7 +4211,7 @@ export type SyncEventSessionNextToolFailed = {
   type: "sync"
   id: string
   syncEvent: {
-    type: "session.next.tool.failed.1"
+    type: "session.next.tool.failed.2"
     id: string
     seq: number
     aggregateID: string
@@ -4002,6 +4220,8 @@ export type SyncEventSessionNextToolFailed = {
       sessionID: string
       assistantMessageID: string
       callID: string
+      turnID?: string
+      activityInputIDs?: Array<string>
       error: SessionErrorUnknown
       result?: unknown
       provider: {
@@ -4241,6 +4461,7 @@ export type SessionInputAdmitted = {
   sessionID: string
   prompt: Prompt
   delivery: "steer" | "queue"
+  completion?: SessionInputCompletion
   timeCreated: number
   promotedSeq?: number
 }
@@ -4610,6 +4831,7 @@ export type SessionNextPrompted = {
     messageID: string
     prompt: Prompt
     delivery: "steer" | "queue"
+    completion?: SessionInputCompletion
   }
 }
 
@@ -4631,6 +4853,7 @@ export type SessionNextPromptAdmitted = {
     messageID: string
     prompt: Prompt
     delivery: "steer" | "queue"
+    completion?: SessionInputCompletion
   }
 }
 
@@ -4714,6 +4937,7 @@ export type SessionTurnStarted = {
     turnID: string
     turnStartedAt: number
     activityInputIDs: Array<string>
+    completionContractDigest?: string
   }
 }
 
@@ -4732,12 +4956,59 @@ export type SessionTurnNotStarted = {
   data: {
     timestamp: number
     sessionID: string
-    schema: "opencode.turn_not_started.v1"
+    schema: "opencode.turn_not_started.v2"
     turnID: string
     activityInputIDs: Array<string>
     outcome: "failed" | "aborted" | "interrupted"
     reason: string
-    errorClass: "transport" | "resource" | "protocol" | "interrupt" | "unknown"
+    errorClass: "transport" | "resource" | "protocol" | "tool_unknown" | "interrupt" | "unknown"
+    failure?: {
+      kind:
+        | "authentication"
+        | "quota"
+        | "rate_limit"
+        | "provider_internal"
+        | "transport"
+        | "invalid_request"
+        | "content_policy"
+        | "resource_limit"
+        | "protocol_contract_unsatisfied"
+        | "tool_effect_unknown"
+        | "unknown"
+      safeMessage: string
+      httpStatus?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      transportKind?: string
+      transportCode?: string
+      retryable: boolean
+      retryExhausted: boolean
+      attemptCount: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      providerID?: string
+      modelID?: string
+    }
+  }
+}
+
+export type SessionTurnCorrection = {
+  id: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  type: "session.turn.correction"
+  durable?: {
+    aggregateID: string
+    seq: number
+    version: number
+  }
+  location?: LocationRef
+  data: {
+    timestamp: number
+    sessionID: string
+    turnID: string
+    rootInputID: string
+    contractDigest: string
+    ordinal: 1
+    reason: "missing_required_terminal_tool"
+    instruction: string
   }
 }
 
@@ -4756,13 +5027,13 @@ export type SessionTurnSettled = {
   data: {
     timestamp: number
     sessionID: string
-    schema: "opencode.turn_settled.v2"
+    schema: "opencode.turn_settled.v3"
     turnID: string
     turnStartedAt: number
     activityInputIDs: Array<string>
     outcome: "completed" | "error" | "aborted"
     reason?: string
-    errorClass?: "transport" | "resource" | "protocol" | "interrupt" | "unknown"
+    errorClass?: "transport" | "resource" | "protocol" | "tool_unknown" | "interrupt" | "unknown"
     abortOrigin?: "user" | "framework" | "runtime_shutdown" | "unknown"
     failure?: {
       kind:
@@ -4773,6 +5044,9 @@ export type SessionTurnSettled = {
         | "transport"
         | "invalid_request"
         | "content_policy"
+        | "resource_limit"
+        | "protocol_contract_unsatisfied"
+        | "tool_effect_unknown"
         | "unknown"
       safeMessage: string
       httpStatus?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
@@ -4781,8 +5055,44 @@ export type SessionTurnSettled = {
       retryable: boolean
       retryExhausted: boolean
       attemptCount: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-      providerID: string
-      modelID: string
+      providerID?: string
+      modelID?: string
+    }
+    completion?:
+      | {
+          mode: "ordinary_stop"
+          correctionSteps: 0
+        }
+      | {
+          mode: "required_terminal_tool"
+          correctionSteps: 0 | 1
+          terminalTool: {
+            name: string
+            callID: string
+          }
+        }
+    providerWarning?: {
+      kind:
+        | "authentication"
+        | "quota"
+        | "rate_limit"
+        | "provider_internal"
+        | "transport"
+        | "invalid_request"
+        | "content_policy"
+        | "resource_limit"
+        | "protocol_contract_unsatisfied"
+        | "tool_effect_unknown"
+        | "unknown"
+      safeMessage: string
+      httpStatus?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      transportKind?: string
+      transportCode?: string
+      retryable: boolean
+      retryExhausted: boolean
+      attemptCount: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      providerID?: string
+      modelID?: string
     }
   }
 }
@@ -4980,6 +5290,8 @@ export type SessionNextToolInputStarted = {
     sessionID: string
     assistantMessageID: string
     callID: string
+    turnID: string
+    activityInputIDs: Array<string>
     name: string
   }
 }
@@ -5001,6 +5313,8 @@ export type SessionNextToolInputEnded = {
     sessionID: string
     assistantMessageID: string
     callID: string
+    turnID: string
+    activityInputIDs: Array<string>
     text: string
   }
 }
@@ -5022,6 +5336,8 @@ export type SessionNextToolCalled = {
     sessionID: string
     assistantMessageID: string
     callID: string
+    turnID: string
+    activityInputIDs: Array<string>
     tool: string
     input: {
       [key: string]: unknown
@@ -5050,6 +5366,8 @@ export type SessionNextToolProgress = {
     sessionID: string
     assistantMessageID: string
     callID: string
+    turnID: string
+    activityInputIDs: Array<string>
     structured: {
       [key: string]: unknown
     }
@@ -5074,6 +5392,8 @@ export type SessionNextToolSuccess = {
     sessionID: string
     assistantMessageID: string
     callID: string
+    turnID: string
+    activityInputIDs: Array<string>
     structured: {
       [key: string]: unknown
     }
@@ -5104,6 +5424,8 @@ export type SessionNextToolFailed = {
     sessionID: string
     assistantMessageID: string
     callID: string
+    turnID?: string
+    activityInputIDs?: Array<string>
     error: SessionErrorUnknown
     result?: unknown
     provider: {
@@ -5274,6 +5596,53 @@ export type SessionNextRevertCommitted = {
   }
 }
 
+export type SessionTurnNotStarted1 = {
+  id: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  type: "session.turn.not_started"
+  durable?: {
+    aggregateID: string
+    seq: number
+    version: number
+  }
+  location?: LocationRef
+  data: {
+    timestamp: number
+    sessionID: string
+    schema: "opencode.turn_not_started.v2"
+    turnID: string
+    activityInputIDs: Array<string>
+    outcome: "failed" | "aborted" | "interrupted"
+    reason: string
+    errorClass: "transport" | "resource" | "protocol" | "tool_unknown" | "interrupt" | "unknown"
+    failure?: {
+      kind:
+        | "authentication"
+        | "quota"
+        | "rate_limit"
+        | "provider_internal"
+        | "transport"
+        | "invalid_request"
+        | "content_policy"
+        | "resource_limit"
+        | "protocol_contract_unsatisfied"
+        | "tool_effect_unknown"
+        | "unknown"
+      safeMessage: string
+      httpStatus?: number | "NaN" | "Infinity" | "-Infinity"
+      transportKind?: string
+      transportCode?: string
+      retryable: boolean
+      retryExhausted: boolean
+      attemptCount: number | "NaN" | "Infinity" | "-Infinity"
+      providerID?: string
+      modelID?: string
+    }
+  }
+}
+
 export type SessionTurnSettled1 = {
   id: string
   metadata?: {
@@ -5289,13 +5658,13 @@ export type SessionTurnSettled1 = {
   data: {
     timestamp: number
     sessionID: string
-    schema: "opencode.turn_settled.v2"
+    schema: "opencode.turn_settled.v3"
     turnID: string
     turnStartedAt: number
     activityInputIDs: Array<string>
     outcome: "completed" | "error" | "aborted"
     reason?: string
-    errorClass?: "transport" | "resource" | "protocol" | "interrupt" | "unknown"
+    errorClass?: "transport" | "resource" | "protocol" | "tool_unknown" | "interrupt" | "unknown"
     abortOrigin?: "user" | "framework" | "runtime_shutdown" | "unknown"
     failure?: {
       kind:
@@ -5306,6 +5675,9 @@ export type SessionTurnSettled1 = {
         | "transport"
         | "invalid_request"
         | "content_policy"
+        | "resource_limit"
+        | "protocol_contract_unsatisfied"
+        | "tool_effect_unknown"
         | "unknown"
       safeMessage: string
       httpStatus?: number | "NaN" | "Infinity" | "-Infinity"
@@ -5314,8 +5686,44 @@ export type SessionTurnSettled1 = {
       retryable: boolean
       retryExhausted: boolean
       attemptCount: number | "NaN" | "Infinity" | "-Infinity"
-      providerID: string
-      modelID: string
+      providerID?: string
+      modelID?: string
+    }
+    completion?:
+      | {
+          mode: "ordinary_stop"
+          correctionSteps: 0
+        }
+      | {
+          mode: "required_terminal_tool"
+          correctionSteps: 0 | 1
+          terminalTool: {
+            name: string
+            callID: string
+          }
+        }
+    providerWarning?: {
+      kind:
+        | "authentication"
+        | "quota"
+        | "rate_limit"
+        | "provider_internal"
+        | "transport"
+        | "invalid_request"
+        | "content_policy"
+        | "resource_limit"
+        | "protocol_contract_unsatisfied"
+        | "tool_effect_unknown"
+        | "unknown"
+      safeMessage: string
+      httpStatus?: number | "NaN" | "Infinity" | "-Infinity"
+      transportKind?: string
+      transportCode?: string
+      retryable: boolean
+      retryExhausted: boolean
+      attemptCount: number | "NaN" | "Infinity" | "-Infinity"
+      providerID?: string
+      modelID?: string
     }
   }
 }
@@ -5825,6 +6233,8 @@ export type SessionNextToolInputDelta = {
     sessionID: string
     assistantMessageID: string
     callID: string
+    turnID: string
+    activityInputIDs: Array<string>
     delta: string
   }
 }
@@ -6859,6 +7269,7 @@ export type EventSessionNextPrompted = {
     messageID: string
     prompt: Prompt
     delivery: "steer" | "queue"
+    completion?: SessionInputCompletion
   }
 }
 
@@ -6871,6 +7282,7 @@ export type EventSessionNextPromptAdmitted = {
     messageID: string
     prompt: Prompt
     delivery: "steer" | "queue"
+    completion?: SessionInputCompletion
   }
 }
 
@@ -6918,6 +7330,7 @@ export type EventSessionTurnStarted = {
     turnID: string
     turnStartedAt: number
     activityInputIDs: Array<string>
+    completionContractDigest?: string
   }
 }
 
@@ -6927,12 +7340,50 @@ export type EventSessionTurnNotStarted = {
   properties: {
     timestamp: number
     sessionID: string
-    schema: "opencode.turn_not_started.v1"
+    schema: "opencode.turn_not_started.v2"
     turnID: string
     activityInputIDs: Array<string>
     outcome: "failed" | "aborted" | "interrupted"
     reason: string
-    errorClass: "transport" | "resource" | "protocol" | "interrupt" | "unknown"
+    errorClass: "transport" | "resource" | "protocol" | "tool_unknown" | "interrupt" | "unknown"
+    failure?: {
+      kind:
+        | "authentication"
+        | "quota"
+        | "rate_limit"
+        | "provider_internal"
+        | "transport"
+        | "invalid_request"
+        | "content_policy"
+        | "resource_limit"
+        | "protocol_contract_unsatisfied"
+        | "tool_effect_unknown"
+        | "unknown"
+      safeMessage: string
+      httpStatus?: number | "NaN" | "Infinity" | "-Infinity"
+      transportKind?: string
+      transportCode?: string
+      retryable: boolean
+      retryExhausted: boolean
+      attemptCount: number | "NaN" | "Infinity" | "-Infinity"
+      providerID?: string
+      modelID?: string
+    }
+  }
+}
+
+export type EventSessionTurnCorrection = {
+  id: string
+  type: "session.turn.correction"
+  properties: {
+    timestamp: number
+    sessionID: string
+    turnID: string
+    rootInputID: string
+    contractDigest: string
+    ordinal: 1
+    reason: "missing_required_terminal_tool"
+    instruction: string
   }
 }
 
@@ -6942,13 +7393,13 @@ export type EventSessionTurnSettled = {
   properties: {
     timestamp: number
     sessionID: string
-    schema: "opencode.turn_settled.v2"
+    schema: "opencode.turn_settled.v3"
     turnID: string
     turnStartedAt: number
     activityInputIDs: Array<string>
     outcome: "completed" | "error" | "aborted"
     reason?: string
-    errorClass?: "transport" | "resource" | "protocol" | "interrupt" | "unknown"
+    errorClass?: "transport" | "resource" | "protocol" | "tool_unknown" | "interrupt" | "unknown"
     abortOrigin?: "user" | "framework" | "runtime_shutdown" | "unknown"
     failure?: {
       kind:
@@ -6959,6 +7410,9 @@ export type EventSessionTurnSettled = {
         | "transport"
         | "invalid_request"
         | "content_policy"
+        | "resource_limit"
+        | "protocol_contract_unsatisfied"
+        | "tool_effect_unknown"
         | "unknown"
       safeMessage: string
       httpStatus?: number | "NaN" | "Infinity" | "-Infinity"
@@ -6967,8 +7421,44 @@ export type EventSessionTurnSettled = {
       retryable: boolean
       retryExhausted: boolean
       attemptCount: number | "NaN" | "Infinity" | "-Infinity"
-      providerID: string
-      modelID: string
+      providerID?: string
+      modelID?: string
+    }
+    completion?:
+      | {
+          mode: "ordinary_stop"
+          correctionSteps: 0
+        }
+      | {
+          mode: "required_terminal_tool"
+          correctionSteps: 0 | 1
+          terminalTool: {
+            name: string
+            callID: string
+          }
+        }
+    providerWarning?: {
+      kind:
+        | "authentication"
+        | "quota"
+        | "rate_limit"
+        | "provider_internal"
+        | "transport"
+        | "invalid_request"
+        | "content_policy"
+        | "resource_limit"
+        | "protocol_contract_unsatisfied"
+        | "tool_effect_unknown"
+        | "unknown"
+      safeMessage: string
+      httpStatus?: number | "NaN" | "Infinity" | "-Infinity"
+      transportKind?: string
+      transportCode?: string
+      retryable: boolean
+      retryExhausted: boolean
+      attemptCount: number | "NaN" | "Infinity" | "-Infinity"
+      providerID?: string
+      modelID?: string
     }
   }
 }
@@ -7134,6 +7624,8 @@ export type EventSessionNextToolInputStarted = {
     sessionID: string
     assistantMessageID: string
     callID: string
+    turnID: string
+    activityInputIDs: Array<string>
     name: string
   }
 }
@@ -7146,6 +7638,8 @@ export type EventSessionNextToolInputDelta = {
     sessionID: string
     assistantMessageID: string
     callID: string
+    turnID: string
+    activityInputIDs: Array<string>
     delta: string
   }
 }
@@ -7158,6 +7652,8 @@ export type EventSessionNextToolInputEnded = {
     sessionID: string
     assistantMessageID: string
     callID: string
+    turnID: string
+    activityInputIDs: Array<string>
     text: string
   }
 }
@@ -7170,6 +7666,8 @@ export type EventSessionNextToolCalled = {
     sessionID: string
     assistantMessageID: string
     callID: string
+    turnID: string
+    activityInputIDs: Array<string>
     tool: string
     input: {
       [key: string]: unknown
@@ -7189,6 +7687,8 @@ export type EventSessionNextToolProgress = {
     sessionID: string
     assistantMessageID: string
     callID: string
+    turnID: string
+    activityInputIDs: Array<string>
     structured: {
       [key: string]: unknown
     }
@@ -7204,6 +7704,8 @@ export type EventSessionNextToolSuccess = {
     sessionID: string
     assistantMessageID: string
     callID: string
+    turnID: string
+    activityInputIDs: Array<string>
     structured: {
       [key: string]: unknown
     }
@@ -7225,6 +7727,8 @@ export type EventSessionNextToolFailed = {
     sessionID: string
     assistantMessageID: string
     callID: string
+    turnID?: string
+    activityInputIDs?: Array<string>
     error: SessionErrorUnknown
     result?: unknown
     provider: {
@@ -12343,6 +12847,7 @@ export type V2SessionPromptData = {
     id?: string
     prompt: PromptInput
     delivery?: "steer" | "queue"
+    completionContract?: SessionInputCompletionContract
     resume?: boolean
   }
   path: {

@@ -43,4 +43,19 @@ describe("managed session service write authority", () => {
     ProcessAuthority.grant(sessionID)
     await expect(Effect.runPromise(ManagedSessionAuthority.assertWrite(session, sessionID))).resolves.toBeUndefined()
   })
+
+  test("recognizes only the exact existing Motryx controller credential", async () => {
+    process.env.MOTRYX_CONTROLLER_TOKEN = "exact-controller-token"
+    const check = (token: string) =>
+      Effect.runPromise(
+        ManagedSessionAuthority.isController().pipe(
+          Effect.provideService(HttpServerRequest.HttpServerRequest, {
+            headers: { [ManagedSessionAuthority.HEADER]: token },
+          } as unknown as HttpServerRequest.HttpServerRequest),
+        ),
+      )
+
+    await expect(check("exact-controller-token")).resolves.toBe(true)
+    await expect(check("wrong-controller-token")).resolves.toBe(false)
+  })
 })

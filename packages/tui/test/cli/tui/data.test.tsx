@@ -185,6 +185,8 @@ test("settles pending tools when a live failure arrives", async () => {
       type: "session.next.tool.input.started",
       properties: {
         sessionID: "session-1",
+        turnID: "msg_turn_1",
+        activityInputIDs: ["msg_input_1"],
         assistantMessageID: "msg_explicit_assistant_9",
         timestamp: 2,
         callID: "call-1",
@@ -196,6 +198,8 @@ test("settles pending tools when a live failure arrives", async () => {
       type: "session.next.tool.called",
       properties: {
         sessionID: "session-1",
+        turnID: "msg_turn_1",
+        activityInputIDs: ["msg_input_1"],
         timestamp: 2,
         assistantMessageID: "msg_explicit_assistant_9",
         callID: "call-1",

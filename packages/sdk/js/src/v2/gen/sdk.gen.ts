@@ -195,6 +195,7 @@ import type {
   SessionGetResponses,
   SessionInitErrors,
   SessionInitResponses,
+  SessionInputCompletionContract,
   SessionListErrors,
   SessionListResponses,
   SessionMessageErrors,
@@ -5786,6 +5787,7 @@ export class Session3 extends HeyApiClient {
       id?: string
       prompt?: PromptInput
       delivery?: "steer" | "queue"
+      completionContract?: SessionInputCompletionContract
       resume?: boolean
     },
     options?: Options<never, ThrowOnError>,
@@ -5799,6 +5801,7 @@ export class Session3 extends HeyApiClient {
             { in: "body", key: "id" },
             { in: "body", key: "prompt" },
             { in: "body", key: "delivery" },
+            { in: "body", key: "completionContract" },
             { in: "body", key: "resume" },
           ],
         },

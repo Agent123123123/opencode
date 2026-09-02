@@ -298,8 +298,8 @@ describe("SessionV2.create", () => {
             .pipe(Effect.orDie)).map((event) => [event.seq, event.type]),
         ).toEqual([
           [0, EventV2.versionedType(SessionV1.Event.Created.type, 1)],
-          [1, EventV2.versionedType(SessionEvent.PromptAdmitted.type, 1)],
-          [2, EventV2.versionedType(SessionEvent.Prompted.type, 1)],
+          [1, EventV2.versionedType(SessionEvent.PromptAdmitted.type, 2)],
+          [2, EventV2.versionedType(SessionEvent.Prompted.type, 2)],
         ])
       }).pipe(Effect.provide(Layer.fresh(targetLayer)))
     }),

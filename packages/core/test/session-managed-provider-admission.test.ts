@@ -97,7 +97,7 @@ const countPromptAdmissions = Database.Service.use(({ db }) =>
   db
     .select()
     .from(EventTable)
-    .where(eq(EventTable.type, EventV2.versionedType(SessionEvent.PromptAdmitted.type, 1)))
+    .where(eq(EventTable.type, EventV2.versionedType(SessionEvent.PromptAdmitted.type, 2)))
     .all()
     .pipe(
       Effect.orDie,
@@ -148,7 +148,14 @@ describe("managed session provider admission", () => {
           id: messageID,
           prompt: Prompt.make({ text: "needs provider" }),
         }),
-      ).toMatchObject({ id: messageID })
+      ).toMatchObject({
+        id: messageID,
+        delivery: "queue",
+        completion: {
+          origin: "builtin",
+          contract: { schema: "opencode.managed_completion.v1", mode: "ordinary_stop" },
+        },
+      })
       expect(yield* countInputs).toBe(1)
       expect(yield* countPromptAdmissions).toBe(1)
       expect(wakeCalls).toEqual([created.id])
@@ -158,6 +165,73 @@ describe("managed session provider admission", () => {
       expect(yield* SessionModelSwitch.pending((yield* Database.Service).db, created.id)).toMatchObject({
         model: switchedModel,
       })
+    }),
+  )
+
+  it.effect("rejects managed steer and persists an exact controller completion contract", () =>
+    Effect.gen(function* () {
+      connected = true
+      const session = yield* SessionV2.Service
+      const created = yield* session.create({
+        location: Location.Ref.make({ directory: AbsolutePath.make("/managed-contract-project") }),
+        agent: exactAgent,
+        model: exactModel,
+        executionManaged: true,
+      })
+      const steer = yield* session
+        .prompt({
+          sessionID: created.id,
+          prompt: Prompt.make({ text: "must queue" }),
+          delivery: "steer",
+          resume: false,
+        })
+        .pipe(Effect.flip)
+      expect(steer).toMatchObject({ _tag: "Session.ManagedInputError", reason: "steer_not_allowed" })
+
+      const inputID = SessionMessage.ID.create()
+      const contract = {
+        schema: "opencode.managed_completion.v1" as const,
+        mode: "required_terminal_tool" as const,
+        terminalTools: ["submit_lane", "submit_pending"],
+        correction: { maxSteps: 1 as const, instruction: "Call exactly one terminal submission tool now." },
+      }
+      const admitted = yield* session.prompt({
+        id: inputID,
+        sessionID: created.id,
+        prompt: Prompt.make({ text: "complete the lane" }),
+        completionContract: contract,
+        resume: false,
+      })
+      expect(admitted).toMatchObject({
+        id: inputID,
+        delivery: "queue",
+        completion: { origin: "controller", contract },
+      })
+      expect(admitted.completion?.digest).toMatch(/^[0-9a-f]{64}$/)
+
+      expect(
+        yield* session.prompt({
+          id: inputID,
+          sessionID: created.id,
+          prompt: Prompt.make({ text: "complete the lane" }),
+          completionContract: { ...contract, terminalTools: [...contract.terminalTools].reverse() },
+          resume: false,
+        }),
+      ).toEqual(admitted)
+
+      const conflict = yield* session
+        .prompt({
+          id: inputID,
+          sessionID: created.id,
+          prompt: Prompt.make({ text: "complete the lane" }),
+          completionContract: {
+            ...contract,
+            correction: { maxSteps: 1, instruction: "Use another instruction." },
+          },
+          resume: false,
+        })
+        .pipe(Effect.flip)
+      expect(conflict).toMatchObject({ _tag: "Session.PromptConflictError", messageID: inputID })
     }),
   )
 })

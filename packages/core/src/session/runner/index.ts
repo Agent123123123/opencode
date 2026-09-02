@@ -1,12 +1,17 @@
 export * as SessionRunner from "./index"
 
 import type { LLMError } from "@opencode-ai/llm"
-import { Context, Effect } from "effect"
+import { Context, Effect, Schema } from "effect"
 import { SessionSchema } from "../schema"
 import type { ContextSnapshotDecodeError, MessageDecodeError, ModelContextProjectionError } from "../error"
 import { SessionRunnerModel } from "./model"
 import type { SystemContext } from "../../system-context/index"
 import type { ToolOutputStore } from "../../tool-output-store"
+
+export class ManagedTurnError extends Schema.TaggedErrorClass<ManagedTurnError>()("SessionRunner.ManagedTurnError", {
+  kind: Schema.Literals(["protocol", "resource", "tool_unknown"]),
+  message: Schema.String,
+}) {}
 
 export type RunError =
   | LLMError
@@ -16,6 +21,7 @@ export type RunError =
   | ModelContextProjectionError
   | SystemContext.InitializationBlocked
   | ToolOutputStore.Error
+  | ManagedTurnError
 
 /** Runs one local continuation from already-recorded Session history. */
 export interface Interface {

@@ -1,6 +1,6 @@
 import path from "node:path"
 
-export const MOTRYX_CONTROL_SCHEMA_VERSION = 6 as const
+export const MOTRYX_CONTROL_SCHEMA_VERSION = 7 as const
 
 export type MotryxControlConfig = {
   apiURL: string
@@ -222,32 +222,50 @@ export type MotryxRunProjection = {
   sourceKind: string
   sourceID: string
   revision: number
-  errorRetryCount: number
-  maxErrorRetries: number
-  protocolCorrectionCount: number
-  maxProtocolCorrections: number
-  retryNotBefore?: number
   retryDisposition?: "ALLOWED_AFTER_REPAIR" | "RECONCILIATION_REQUIRED" | "FORBIDDEN"
   resultRef?: string
   failureRef?: string
   createdAt: number
   terminalAt?: number
+  currentInputCommandID?: string
   currentAttemptID?: string
+}
+
+export type MotryxManagedInputCommandProjection = {
+  inputCommandID: string
+  runID: string
+  commandNo: number
+  reason: "INITIAL" | "EXPLICIT_CONTINUATION"
+  origin: "FRAMEWORK_SUBMITTED" | "HOST_ADOPTED"
+  instanceID: string
+  sessionID: string
+  stableInputID: string
+  state: "DELIVERY_PENDING" | "DELIVERY_UNKNOWN" | "ADMITTED" | "PROMOTED" | "CONSUMED"
+  submitCount: number
+  createdAt: number
+  dispatchNotBefore?: number
+  lastSubmitError?: string
+  hostAdmittedSeq?: number
+  hostPromotedSeq?: number
+  deliveryHostIncarnationID?: string
+  cancelOrigin?: "USER" | "FRAMEWORK" | "SHUTDOWN" | "STALE" | "BUSINESS"
+  cancelReason?: string
+  cancelRequestedAt?: number
+  admittedAt?: number
+  promotedAt?: number
+  consumedAt?: number
 }
 
 export type MotryxAttemptProjection = {
   attemptID: string
   runID: string
   attemptNo: number
-  reason: "INITIAL" | "ERROR_RETRY" | "PROTOCOL_CORRECTION" | "WAIT_RESUME"
+  reason: "INITIAL" | "EXPLICIT_CONTINUATION"
   instanceID: string
   sessionID: string
   stableInputID: string
-  state: "PENDING" | "RUNNING" | "OUTCOME_UNKNOWN" | "TERMINAL"
-  submitCount: number
+  state: "RUNNING" | "OUTCOME_UNKNOWN" | "TERMINAL"
   createdAt: number
-  dispatchNotBefore?: number
-  lastSubmitError?: string
   turnID?: string
   startedAt?: number
   terminalKind?: "NOT_STARTED" | "COMPLETED" | "FAILED" | "INTERRUPTED" | "PROCESS_LOST" | "CANCELED_BEFORE_START"
@@ -264,6 +282,7 @@ export type MotryxAttemptProjection = {
   hostRetryable?: boolean
   hostRetryExhausted?: boolean
   hostAttemptCount?: number
+  completionCorrectionCount: number
   cancelOrigin?: "USER" | "FRAMEWORK" | "SHUTDOWN" | "STALE" | "BUSINESS"
   cancelReason?: string
   cancelRequestedAt?: number
@@ -271,9 +290,6 @@ export type MotryxAttemptProjection = {
 
 export type MotryxAttentionKind =
   | "PROVIDER_RETRY"
-  | "RUN_RETRY_SCHEDULED"
-  | "RUN_RETRY_RUNNING"
-  | "PROTOCOL_CORRECTION"
   | "DELIVERY_RETRY"
   | "OUTCOME_UNKNOWN"
   | "WAITING_ATTENTION"
@@ -291,6 +307,7 @@ export type MotryxAttentionItemProjection = {
   role: string
   laneID?: string
   runID?: string
+  inputCommandID?: string
   attemptID?: string
   incidentID?: string
   summary: string
@@ -336,6 +353,7 @@ export type MotryxControlSnapshot = {
   }
   functionSlots: MotryxFunctionSlotProjection[]
   runs: MotryxRunProjection[]
+  inputCommands: MotryxManagedInputCommandProjection[]
   attempts: MotryxAttemptProjection[]
   diagnostics: Record<string, unknown>[]
   runtimeWarnings: MotryxRuntimeHealthWarning[]
@@ -415,7 +433,7 @@ export async function fetchMotryxControlHealth(
     throw new MotryxControlSchemaError("Motryx control health did not return JSON")
   }
   const root = requiredRecord(await response.json(), "health")
-  if (root.schemaVersion !== MOTRYX_CONTROL_SCHEMA_VERSION) fail("health.schemaVersion must be 6")
+  if (root.schemaVersion !== MOTRYX_CONTROL_SCHEMA_VERSION) fail("health.schemaVersion must be 7")
   if (root.status !== "ok" && root.status !== "switching" && root.status !== "starting") {
     fail("health.status is invalid")
   }
@@ -504,7 +522,7 @@ async function parseSessionListResponse(response: Response, config: MotryxContro
 
 export function parseMotryxSessionList(value: unknown, expected: MotryxControlConfig): MotryxSessionList {
   const root = requiredRecord(value, "sessions")
-  if (root.schemaVersion !== MOTRYX_CONTROL_SCHEMA_VERSION) fail("sessions.schemaVersion must be 6")
+  if (root.schemaVersion !== MOTRYX_CONTROL_SCHEMA_VERSION) fail("sessions.schemaVersion must be 7")
   const projectID = exactProject(root.projectID, expected.projectID, "sessions.projectID")
   if (root.status !== "ROUTABLE" && root.status !== "SWITCHING" && root.status !== "UNAVAILABLE") {
     fail("sessions.status is invalid")
@@ -635,7 +653,7 @@ export async function dismissMotryxIncident(
     throw new MotryxControlHttpError(response.status, `Motryx incident dismissal returned HTTP ${response.status}${detail}`)
   }
   const result = requiredRecord(value, "incident dismissal")
-  if (result.schemaVersion !== MOTRYX_CONTROL_SCHEMA_VERSION) fail("incident dismissal schemaVersion must be 6")
+  if (result.schemaVersion !== MOTRYX_CONTROL_SCHEMA_VERSION) fail("incident dismissal schemaVersion must be 7")
   if (result.incidentID !== input.incidentID) fail("incident dismissal returned a different incident")
   if (result.presentationState !== "DISMISSED") fail("incident dismissal did not persist DISMISSED")
   return {
@@ -648,7 +666,7 @@ export async function dismissMotryxIncident(
 
 export function parseMotryxControlSnapshot(value: unknown, expected: MotryxControlConfig): MotryxControlSnapshot {
   const root = requiredRecord(value, "snapshot")
-  if (root.schemaVersion !== MOTRYX_CONTROL_SCHEMA_VERSION) fail("snapshot.schemaVersion must be 6")
+  if (root.schemaVersion !== MOTRYX_CONTROL_SCHEMA_VERSION) fail("snapshot.schemaVersion must be 7")
   const projectID = exactProject(root.projectID, expected.projectID, "snapshot.projectID")
   const orchestratorSessionID = exactString(
     root.orchestratorSessionID,
@@ -688,6 +706,7 @@ export function parseMotryxControlSnapshot(value: unknown, expected: MotryxContr
     attention: parseAttention(root.attention),
     functionSlots: requiredArray(root.functionSlots, "snapshot.functionSlots", parseFunctionSlot),
     runs: requiredArray(root.runs, "snapshot.runs", parseRun),
+    inputCommands: requiredArray(root.inputCommands, "snapshot.inputCommands", parseInputCommand),
     attempts: requiredArray(root.attempts, "snapshot.attempts", parseAttempt),
     diagnostics: requiredArray(root.diagnostics, "snapshot.diagnostics", (item, label) => requiredRecord(item, label)),
     runtimeWarnings: parseMotryxRuntimeHealthWarnings(root.runtimeWarnings, "snapshot.runtimeWarnings"),
@@ -921,9 +940,6 @@ function parseAttention(value: unknown): MotryxControlSnapshot["attention"] {
 
 const ATTENTION_KINDS = new Set<MotryxAttentionKind>([
   "PROVIDER_RETRY",
-  "RUN_RETRY_SCHEDULED",
-  "RUN_RETRY_RUNNING",
-  "PROTOCOL_CORRECTION",
   "DELIVERY_RETRY",
   "OUTCOME_UNKNOWN",
   "WAITING_ATTENTION",
@@ -955,6 +971,7 @@ function parseAttentionItem(value: unknown, label: string): MotryxAttentionItemP
     role: requiredString(item.role, `${label}.role`),
     laneID: optionalString(item.laneID, `${label}.laneID`),
     runID: optionalString(item.runID, `${label}.runID`),
+    inputCommandID: optionalString(item.inputCommandID, `${label}.inputCommandID`),
     attemptID: optionalString(item.attemptID, `${label}.attemptID`),
     incidentID: optionalString(item.incidentID, `${label}.incidentID`),
     summary: requiredString(item.summary, `${label}.summary`),
@@ -1053,14 +1070,6 @@ function parseRun(value: unknown, label: string): MotryxRunProjection {
     sourceKind: requiredString(item.sourceKind, `${label}.sourceKind`),
     sourceID: requiredString(item.sourceID, `${label}.sourceID`),
     revision: nonNegativeInteger(item.revision, `${label}.revision`),
-    errorRetryCount: nonNegativeInteger(item.errorRetryCount, `${label}.errorRetryCount`),
-    maxErrorRetries: nonNegativeInteger(item.maxErrorRetries, `${label}.maxErrorRetries`),
-    protocolCorrectionCount: nonNegativeInteger(
-      item.protocolCorrectionCount,
-      `${label}.protocolCorrectionCount`,
-    ),
-    maxProtocolCorrections: nonNegativeInteger(item.maxProtocolCorrections, `${label}.maxProtocolCorrections`),
-    retryNotBefore: optionalFiniteNumber(item.retryNotBefore, `${label}.retryNotBefore`),
     retryDisposition: optionalEnum(
       item.retryDisposition,
       new Set(["ALLOWED_AFTER_REPAIR", "RECONCILIATION_REQUIRED", "FORBIDDEN"] as const),
@@ -1070,7 +1079,53 @@ function parseRun(value: unknown, label: string): MotryxRunProjection {
     failureRef: optionalString(item.failureRef, `${label}.failureRef`),
     createdAt: finiteNumber(item.createdAt, `${label}.createdAt`),
     terminalAt: optionalFiniteNumber(item.terminalAt, `${label}.terminalAt`),
+    currentInputCommandID: optionalString(item.currentInputCommandID, `${label}.currentInputCommandID`),
     currentAttemptID: optionalString(item.currentAttemptID, `${label}.currentAttemptID`),
+  })
+}
+
+function parseInputCommand(value: unknown, label: string): MotryxManagedInputCommandProjection {
+  const item = requiredRecord(value, label)
+  return compact({
+    inputCommandID: requiredString(item.inputCommandID, `${label}.inputCommandID`),
+    runID: requiredString(item.runID, `${label}.runID`),
+    commandNo: positiveInteger(item.commandNo, `${label}.commandNo`),
+    reason: exactEnum(
+      item.reason,
+      new Set(["INITIAL", "EXPLICIT_CONTINUATION"] as const),
+      `${label}.reason`,
+    ),
+    origin: exactEnum(
+      item.origin,
+      new Set(["FRAMEWORK_SUBMITTED", "HOST_ADOPTED"] as const),
+      `${label}.origin`,
+    ),
+    instanceID: requiredString(item.instanceID, `${label}.instanceID`),
+    sessionID: requiredString(item.sessionID, `${label}.sessionID`),
+    stableInputID: requiredString(item.stableInputID, `${label}.stableInputID`),
+    state: exactEnum(item.state, new Set([
+      "DELIVERY_PENDING", "DELIVERY_UNKNOWN", "ADMITTED", "PROMOTED", "CONSUMED",
+    ] as const), `${label}.state`),
+    submitCount: nonNegativeInteger(item.submitCount, `${label}.submitCount`),
+    createdAt: finiteNumber(item.createdAt, `${label}.createdAt`),
+    dispatchNotBefore: optionalFiniteNumber(item.dispatchNotBefore, `${label}.dispatchNotBefore`),
+    lastSubmitError: optionalString(item.lastSubmitError, `${label}.lastSubmitError`),
+    hostAdmittedSeq: optionalNonNegativeInteger(item.hostAdmittedSeq, `${label}.hostAdmittedSeq`),
+    hostPromotedSeq: optionalNonNegativeInteger(item.hostPromotedSeq, `${label}.hostPromotedSeq`),
+    deliveryHostIncarnationID: optionalString(
+      item.deliveryHostIncarnationID,
+      `${label}.deliveryHostIncarnationID`,
+    ),
+    cancelOrigin: optionalEnum(
+      item.cancelOrigin,
+      new Set(["USER", "FRAMEWORK", "SHUTDOWN", "STALE", "BUSINESS"] as const),
+      `${label}.cancelOrigin`,
+    ),
+    cancelReason: optionalString(item.cancelReason, `${label}.cancelReason`),
+    cancelRequestedAt: optionalFiniteNumber(item.cancelRequestedAt, `${label}.cancelRequestedAt`),
+    admittedAt: optionalFiniteNumber(item.admittedAt, `${label}.admittedAt`),
+    promotedAt: optionalFiniteNumber(item.promotedAt, `${label}.promotedAt`),
+    consumedAt: optionalFiniteNumber(item.consumedAt, `${label}.consumedAt`),
   })
 }
 
@@ -1082,7 +1137,7 @@ function parseAttempt(value: unknown, label: string): MotryxAttemptProjection {
     attemptNo: positiveInteger(item.attemptNo, `${label}.attemptNo`),
     reason: exactEnum(
       item.reason,
-      new Set(["INITIAL", "ERROR_RETRY", "PROTOCOL_CORRECTION", "WAIT_RESUME"] as const),
+      new Set(["INITIAL", "EXPLICIT_CONTINUATION"] as const),
       `${label}.reason`,
     ),
     instanceID: requiredString(item.instanceID, `${label}.instanceID`),
@@ -1090,13 +1145,10 @@ function parseAttempt(value: unknown, label: string): MotryxAttemptProjection {
     stableInputID: requiredString(item.stableInputID, `${label}.stableInputID`),
     state: exactEnum(
       item.state,
-      new Set(["PENDING", "RUNNING", "OUTCOME_UNKNOWN", "TERMINAL"] as const),
+      new Set(["RUNNING", "OUTCOME_UNKNOWN", "TERMINAL"] as const),
       `${label}.state`,
     ),
-    submitCount: nonNegativeInteger(item.submitCount, `${label}.submitCount`),
     createdAt: finiteNumber(item.createdAt, `${label}.createdAt`),
-    dispatchNotBefore: optionalFiniteNumber(item.dispatchNotBefore, `${label}.dispatchNotBefore`),
-    lastSubmitError: optionalString(item.lastSubmitError, `${label}.lastSubmitError`),
     turnID: optionalString(item.turnID, `${label}.turnID`),
     startedAt: optionalFiniteNumber(item.startedAt, `${label}.startedAt`),
     terminalKind: optionalEnum(item.terminalKind, new Set([
@@ -1117,6 +1169,10 @@ function parseAttempt(value: unknown, label: string): MotryxAttemptProjection {
     hostRetryable: optionalBoolean(item.hostRetryable, `${label}.hostRetryable`),
     hostRetryExhausted: optionalBoolean(item.hostRetryExhausted, `${label}.hostRetryExhausted`),
     hostAttemptCount: optionalNonNegativeInteger(item.hostAttemptCount, `${label}.hostAttemptCount`),
+    completionCorrectionCount: nonNegativeInteger(
+      item.completionCorrectionCount,
+      `${label}.completionCorrectionCount`,
+    ),
     cancelOrigin: optionalEnum(
       item.cancelOrigin,
       new Set(["USER", "FRAMEWORK", "SHUTDOWN", "STALE", "BUSINESS"] as const),

@@ -48,6 +48,8 @@ describe("Tool.Progress", () => {
         .run()
         .pipe(Effect.orDie)
       const assistantMessageID = SessionMessage.ID.create()
+      const turnID = SessionMessage.ID.create()
+      const activityInputIDs = [SessionMessage.ID.create()]
       yield* service.publish(SessionEvent.Step.Started, {
         sessionID,
         assistantMessageID,
@@ -69,6 +71,8 @@ describe("Tool.Progress", () => {
         Effect.gen(function* () {
           yield* service.publish(SessionEvent.Tool.Input.Started, {
             sessionID,
+            turnID,
+            activityInputIDs,
             timestamp,
             assistantMessageID,
             callID,
@@ -76,6 +80,8 @@ describe("Tool.Progress", () => {
           })
           yield* service.publish(SessionEvent.Tool.Called, {
             sessionID,
+            turnID,
+            activityInputIDs,
             timestamp,
             assistantMessageID,
             callID,
@@ -92,6 +98,8 @@ describe("Tool.Progress", () => {
 
       yield* service.publish(SessionEvent.Tool.Progress, {
         sessionID,
+        turnID,
+        activityInputIDs,
         timestamp,
         assistantMessageID,
         callID: "call-success",
@@ -104,6 +112,8 @@ describe("Tool.Progress", () => {
 
       const success = yield* service.publish(SessionEvent.Tool.Success, {
         sessionID,
+        turnID,
+        activityInputIDs,
         timestamp,
         assistantMessageID,
         callID: "call-success",
@@ -118,6 +128,8 @@ describe("Tool.Progress", () => {
       yield* start("call-failed")
       yield* service.publish(SessionEvent.Tool.Progress, {
         sessionID,
+        turnID,
+        activityInputIDs,
         timestamp,
         assistantMessageID,
         callID: "call-failed",
@@ -150,9 +162,9 @@ describe("Tool.Progress", () => {
         .orderBy(asc(EventTable.seq))
         .all()
         .pipe(Effect.orDie)
-      expect(rows.map((row) => row.type)).toContain(EventV2.versionedType(SessionEvent.Tool.Progress.type, 1))
-      expect(rows.map((row) => row.type)).toContain(EventV2.versionedType(SessionEvent.Tool.Success.type, 1))
-      expect(rows.map((row) => row.type)).toContain(EventV2.versionedType(SessionEvent.Tool.Failed.type, 1))
+      expect(rows.map((row) => row.type)).toContain(EventV2.versionedType(SessionEvent.Tool.Progress.type, 2))
+      expect(rows.map((row) => row.type)).toContain(EventV2.versionedType(SessionEvent.Tool.Success.type, 2))
+      expect(rows.map((row) => row.type)).toContain(EventV2.versionedType(SessionEvent.Tool.Failed.type, 2))
     }),
   )
 })

@@ -47,6 +47,7 @@ test("projects external V2 turns incrementally and preserves the exact session a
           agent: "orchestrator",
           model,
           location: { directory },
+          execution: { managed: true, gateOpen: true },
         },
       })
     if (url.pathname === `/api/session/${sessionID}/message`) {

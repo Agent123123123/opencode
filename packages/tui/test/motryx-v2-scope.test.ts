@@ -10,7 +10,7 @@ function sourceFiles(root: string): string[] {
   })
 }
 
-test("the narrow V2 TUI adapter does not grow Catalog or selection parity", () => {
+test("the narrow V2 TUI adapter does not grow worker-control or session-selection parity", () => {
   const root = path.join(import.meta.dir, "../src")
   const source = sourceFiles(root)
     .map((file) => readFileSync(file, "utf8"))
@@ -20,8 +20,8 @@ test("the narrow V2 TUI adapter does not grow Catalog or selection parity", () =
   for (const forbidden of [
     "client.v2.agent",
     "client.v2.command",
-    "client.v2.integration",
-    "client.v2.model",
+    "client.v2.integration.list",
+    "client.v2.integration.get",
     "client.v2.provider",
     "client.v2.skill",
     "client.v2.session.list",

@@ -5,6 +5,7 @@ import { optional } from "./schema"
 import { Event } from "./event"
 import { ProviderMetadata, ToolContent } from "./llm"
 import { Delivery } from "./session-delivery"
+import { Completion, CompletionContractDigest } from "./session-input"
 import { Model } from "./model"
 import { DateTimeUtcFromMillis, NonNegativeInt, RelativePath } from "./schema"
 import { FileAttachment, Prompt } from "./prompt"
@@ -34,6 +35,7 @@ const PromptFields = {
   messageID: SessionMessage.ID,
   prompt: Prompt,
   delivery: Delivery,
+  completion: Completion.pipe(optional),
 }
 
 const options = {
@@ -48,7 +50,31 @@ const stepSettlementOptions = {
     version: 2,
   },
 } as const
+const turnStartOptions = {
+  durable: {
+    aggregate: "sessionID",
+    version: 2,
+  },
+} as const
+const turnNotStartedOptions = {
+  durable: {
+    aggregate: "sessionID",
+    version: 2,
+  },
+} as const
+const promptOptions = {
+  durable: {
+    aggregate: "sessionID",
+    version: 2,
+  },
+} as const
 const turnSettlementOptions = {
+  durable: {
+    aggregate: "sessionID",
+    version: 3,
+  },
+} as const
+const toolOptions = {
   durable: {
     aggregate: "sessionID",
     version: 2,
@@ -125,14 +151,14 @@ export type ExecutionGateChanged = typeof ExecutionGateChanged.Type
 
 export const Prompted = Event.define({
   type: "session.next.prompted",
-  ...options,
+  ...promptOptions,
   schema: PromptFields,
 })
 export type Prompted = typeof Prompted.Type
 
 export const PromptAdmitted = Event.define({
   type: "session.next.prompt.admitted",
-  ...options,
+  ...promptOptions,
   schema: PromptFields,
 })
 export type PromptAdmitted = typeof PromptAdmitted.Type
@@ -171,6 +197,9 @@ export namespace Turn {
       "transport",
       "invalid_request",
       "content_policy",
+      "resource_limit",
+      "protocol_contract_unsatisfied",
+      "tool_effect_unknown",
       "unknown",
     ]),
     safeMessage: Schema.String,
@@ -180,19 +209,20 @@ export namespace Turn {
     retryable: Schema.Boolean,
     retryExhausted: Schema.Boolean,
     attemptCount: Schema.Number,
-    providerID: Schema.String,
-    modelID: Schema.String,
+    providerID: Schema.String.pipe(optional),
+    modelID: Schema.String.pipe(optional),
   })
   export type Failure = typeof Failure.Type
 
   export const Started = Event.define({
     type: "session.turn.started",
-    ...options,
+    ...turnStartOptions,
     schema: {
       ...Base,
       turnID: SessionMessage.ID,
       turnStartedAt: DateTimeUtcFromMillis,
       activityInputIDs: Schema.Array(SessionMessage.ID),
+      completionContractDigest: CompletionContractDigest.pipe(optional),
     },
   })
   export type Started = typeof Started.Type
@@ -203,33 +233,67 @@ export namespace Turn {
    */
   export const NotStarted = Event.define({
     type: "session.turn.not_started",
-    ...options,
+    ...turnNotStartedOptions,
     schema: {
       ...Base,
-      schema: Schema.Literal("opencode.turn_not_started.v1"),
+      schema: Schema.Literal("opencode.turn_not_started.v2"),
       turnID: SessionMessage.ID,
       activityInputIDs: Schema.Array(SessionMessage.ID),
       outcome: Schema.Literals(["failed", "aborted", "interrupted"]),
       reason: Schema.String,
-      errorClass: Schema.Literals(["transport", "resource", "protocol", "interrupt", "unknown"]),
+      errorClass: Schema.Literals(["transport", "resource", "protocol", "tool_unknown", "interrupt", "unknown"]),
+      failure: Failure.pipe(optional),
     },
   })
   export type NotStarted = typeof NotStarted.Type
+
+  export const Correction = Event.define({
+    type: "session.turn.correction",
+    ...options,
+    schema: {
+      ...Base,
+      turnID: SessionMessage.ID,
+      rootInputID: SessionMessage.ID,
+      contractDigest: CompletionContractDigest,
+      ordinal: Schema.Literal(1),
+      reason: Schema.Literal("missing_required_terminal_tool"),
+      instruction: Schema.String,
+    },
+  })
+  export type Correction = typeof Correction.Type
+
+  export const Completion = Schema.Union([
+    Schema.Struct({
+      mode: Schema.Literal("ordinary_stop"),
+      correctionSteps: Schema.Literal(0),
+    }),
+    Schema.Struct({
+      mode: Schema.Literal("required_terminal_tool"),
+      correctionSteps: Schema.Literals([0, 1]),
+      terminalTool: Schema.Struct({
+        name: Schema.String,
+        callID: Schema.String,
+      }),
+    }),
+  ])
+  export type Completion = typeof Completion.Type
 
   export const Settled = Event.define({
     type: "session.turn.settled",
     ...turnSettlementOptions,
     schema: {
       ...Base,
-      schema: Schema.Literal("opencode.turn_settled.v2"),
+      schema: Schema.Literal("opencode.turn_settled.v3"),
       turnID: SessionMessage.ID,
       turnStartedAt: DateTimeUtcFromMillis,
       activityInputIDs: Schema.Array(SessionMessage.ID),
       outcome: Schema.Literals(["completed", "error", "aborted"]),
       reason: Schema.String.pipe(optional),
-      errorClass: Schema.Literals(["transport", "resource", "protocol", "interrupt", "unknown"]).pipe(optional),
+      errorClass: Schema.Literals(["transport", "resource", "protocol", "tool_unknown", "interrupt", "unknown"]).pipe(optional),
       abortOrigin: Schema.Literals(["user", "framework", "runtime_shutdown", "unknown"]).pipe(optional),
       failure: Failure.pipe(optional),
+      completion: Completion.pipe(optional),
+      providerWarning: Failure.pipe(optional),
     },
   })
   export type Settled = typeof Settled.Type
@@ -402,13 +466,18 @@ export namespace Tool {
     assistantMessageID: SessionMessage.ID,
     callID: Schema.String,
   }
+  const ToolIdentity = {
+    turnID: SessionMessage.ID,
+    activityInputIDs: Schema.Array(SessionMessage.ID),
+  }
 
   export namespace Input {
     export const Started = Event.define({
       type: "session.next.tool.input.started",
-      ...options,
+      ...toolOptions,
       schema: {
         ...ToolBase,
+        ...ToolIdentity,
         name: Schema.String,
       },
     })
@@ -419,6 +488,7 @@ export namespace Tool {
       type: "session.next.tool.input.delta",
       schema: {
         ...ToolBase,
+        ...ToolIdentity,
         delta: Schema.String,
       },
     })
@@ -426,9 +496,10 @@ export namespace Tool {
 
     export const Ended = Event.define({
       type: "session.next.tool.input.ended",
-      ...options,
+      ...toolOptions,
       schema: {
         ...ToolBase,
+        ...ToolIdentity,
         text: Schema.String,
       },
     })
@@ -437,9 +508,10 @@ export namespace Tool {
 
   export const Called = Event.define({
     type: "session.next.tool.called",
-    ...options,
+    ...toolOptions,
     schema: {
       ...ToolBase,
+      ...ToolIdentity,
       tool: Schema.String,
       input: Schema.Record(Schema.String, Schema.Unknown),
       provider: Schema.Struct({
@@ -456,9 +528,10 @@ export namespace Tool {
    */
   export const Progress = Event.define({
     type: "session.next.tool.progress",
-    ...options,
+    ...toolOptions,
     schema: {
       ...ToolBase,
+      ...ToolIdentity,
       structured: Schema.Record(Schema.String, Schema.Unknown),
       content: Schema.Array(ToolContent),
     },
@@ -467,9 +540,10 @@ export namespace Tool {
 
   export const Success = Event.define({
     type: "session.next.tool.success",
-    ...options,
+    ...toolOptions,
     schema: {
       ...ToolBase,
+      ...ToolIdentity,
       structured: Schema.Record(Schema.String, Schema.Unknown),
       content: Schema.Array(ToolContent),
       outputPaths: Schema.Array(Schema.String).pipe(optional),
@@ -484,9 +558,11 @@ export namespace Tool {
 
   export const Failed = Event.define({
     type: "session.next.tool.failed",
-    ...options,
+    ...toolOptions,
     schema: {
       ...ToolBase,
+      turnID: SessionMessage.ID.pipe(optional),
+      activityInputIDs: Schema.Array(SessionMessage.ID).pipe(optional),
       error: UnknownError,
       result: Schema.Unknown.pipe(optional),
       provider: Schema.Struct({
@@ -584,6 +660,7 @@ export const DurableDefinitions = Event.inventory(
   ContextUpdated,
   Turn.Started,
   Turn.NotStarted,
+  Turn.Correction,
   Turn.Settled,
   Synthetic,
   Shell.Started,
@@ -622,6 +699,7 @@ export const Definitions = Event.inventory(
   ContextUpdated,
   Turn.Started,
   Turn.NotStarted,
+  Turn.Correction,
   Turn.Settled,
   Synthetic,
   Shell.Started,

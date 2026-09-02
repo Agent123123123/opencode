@@ -130,6 +130,9 @@ export class ProviderConnectionRequiredError extends Schema.TaggedErrorClass<Pro
     return `Provider connection required for ${this.providerID}/${this.modelID}#${this.variant}`
   }
 }
+export class ManagedInputError extends Schema.TaggedErrorClass<ManagedInputError>()("Session.ManagedInputError", {
+  reason: Schema.Literals(["steer_not_allowed", "completion_not_allowed"]),
+}) {}
 export const MessageNotFoundError = SessionRevert.MessageNotFoundError
 export type MessageNotFoundError = SessionRevert.MessageNotFoundError
 
@@ -141,6 +144,7 @@ export type Error =
   | CreateConflictError
   | ManagedSelectionRequiredError
   | ProviderConnectionRequiredError
+  | ManagedInputError
   | SessionSelection.Error
 
 export interface Interface {
@@ -188,10 +192,11 @@ export interface Interface {
     sessionID: SessionSchema.ID
     prompt: PromptInput.Prompt
     delivery?: SessionInput.Delivery
+    completionContract?: SessionInput.CompletionContract
     resume?: boolean
   }) => Effect.Effect<
     SessionInput.Admitted,
-    NotFoundError | PromptConflictError | ProviderConnectionRequiredError | SessionSelection.ModelError
+    NotFoundError | PromptConflictError | ProviderConnectionRequiredError | ManagedInputError | SessionSelection.ModelError
   >
   readonly input: (input: {
     sessionID: SessionSchema.ID
@@ -501,13 +506,25 @@ const layer = Layer.effect(
             }
             const prompt = resolvePrompt(input.prompt)
             const messageID = input.id ?? SessionMessage.ID.create()
-            const delivery = input.delivery ?? "steer"
-            const expected = { sessionID: input.sessionID, messageID, prompt, delivery }
+            const delivery = input.delivery ?? (session.execution.managed ? "queue" : "steer")
+            if (session.execution.managed && delivery === "steer") {
+              return yield* new ManagedInputError({ reason: "steer_not_allowed" })
+            }
+            if (!session.execution.managed && input.completionContract) {
+              return yield* new ManagedInputError({ reason: "completion_not_allowed" })
+            }
+            const completion = session.execution.managed
+              ? input.completionContract
+                ? SessionInput.makeCompletion("controller", input.completionContract)
+                : SessionInput.ordinaryCompletion()
+              : undefined
+            const expected = { sessionID: input.sessionID, messageID, prompt, delivery, completion }
             const admitted = yield* SessionInput.admit(db, events, {
               id: messageID,
               sessionID: input.sessionID,
               prompt,
               delivery,
+              completion,
             }).pipe(
               Effect.catchDefect((defect) =>
                 defect instanceof SessionInput.LifecycleConflict

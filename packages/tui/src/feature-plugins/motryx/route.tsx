@@ -1422,9 +1422,6 @@ function compareRuntimeAttention(left: MotryxAttentionItemProjection, right: Mot
 function runtimeAttentionTitle(attention: MotryxAttentionItemProjection): string {
   const labels: Record<MotryxAttentionItemProjection["kind"], string> = {
     PROVIDER_RETRY: "Provider retry",
-    RUN_RETRY_SCHEDULED: "Run retry scheduled",
-    RUN_RETRY_RUNNING: "Run retry running",
-    PROTOCOL_CORRECTION: "Protocol correction",
     DELIVERY_RETRY: "Input delivery retry",
     OUTCOME_UNKNOWN: "Outcome unknown",
     WAITING_ATTENTION: "Waiting for attention",
@@ -1471,9 +1468,6 @@ function formatRunInspection(run: MotryxControlSnapshot["runs"][number]): string
   const values = [
     `${run.runKind}:${run.status}`,
     run.waitingKind ? `waiting ${run.waitingKind}${run.waitingRef ? ` (${run.waitingRef})` : ""}` : undefined,
-    `error retry ${run.errorRetryCount}/${run.maxErrorRetries}`,
-    `protocol correction ${run.protocolCorrectionCount}/${run.maxProtocolCorrections}`,
-    run.retryNotBefore !== undefined ? formatRetryTime(run.retryNotBefore) : undefined,
     run.retryDisposition ? `disposition ${run.retryDisposition}` : undefined,
   ].filter((value): value is string => Boolean(value))
   return values.join(" · ")
@@ -1482,16 +1476,27 @@ function formatRunInspection(run: MotryxControlSnapshot["runs"][number]): string
 function formatAttemptInspection(attempt: MotryxControlSnapshot["attempts"][number]): string {
   const values = [
     `Attempt #${attempt.attemptNo} ${attempt.reason}:${attempt.state}`,
-    attempt.submitCount > 0 ? `delivery submissions ${attempt.submitCount}` : undefined,
-    attempt.lastSubmitError ? `delivery ${attempt.lastSubmitError}` : undefined,
     attempt.hostAttemptCount !== undefined ? `provider attempt ${attempt.hostAttemptCount}` : undefined,
+    attempt.completionCorrectionCount > 0
+      ? `completion correction ${attempt.completionCorrectionCount}/1`
+      : undefined,
     attempt.failureSafeSummary,
     attempt.failureKind ? `failure ${attempt.failureKind}` : undefined,
     attempt.httpStatus !== undefined ? `HTTP ${attempt.httpStatus}` : undefined,
     attempt.transportCode ? `transport ${attempt.transportCode}` : undefined,
     attempt.transportKind ? `kind ${attempt.transportKind}` : undefined,
     attempt.providerID && attempt.modelID ? `${attempt.providerID}/${attempt.modelID}` : undefined,
-    attempt.dispatchNotBefore !== undefined ? formatRetryTime(attempt.dispatchNotBefore) : undefined,
+  ].filter((value): value is string => Boolean(value))
+  return values.join(" · ")
+}
+
+function formatInputCommandInspection(command: MotryxControlSnapshot["inputCommands"][number]): string {
+  const values = [
+    `Input #${command.commandNo} ${command.reason}:${command.state}`,
+    command.origin,
+    command.submitCount > 0 ? `delivery submissions ${command.submitCount}` : undefined,
+    command.lastSubmitError ? `delivery ${command.lastSubmitError}` : undefined,
+    command.dispatchNotBefore !== undefined ? formatRetryTime(command.dispatchNotBefore) : undefined,
   ].filter((value): value is string => Boolean(value))
   return values.join(" · ")
 }
@@ -1514,6 +1519,9 @@ function InspectPanel(props: {
     run.laneID === props.lane?.id || run.relatedLaneID === props.lane?.id,
   ))
   const runIDs = createMemo(() => new Set(runs().map((run) => run.runID)))
+  const inputCommands = createMemo(() =>
+    props.snapshot.inputCommands.filter((command) => runIDs().has(command.runID)),
+  )
   const attempts = createMemo(() => props.snapshot.attempts.filter((attempt) => runIDs().has(attempt.runID)))
   const attentionItems = createMemo(() => props.snapshot.attentionItems
     .filter((attention) => attention.laneID === props.lane?.id && attention.presentationState === "VISIBLE")
@@ -1650,6 +1658,15 @@ function InspectPanel(props: {
               value={
                 runs()
                   .map(formatRunInspection)
+                  .join(", ") || "none"
+              }
+            />
+            <InspectValue
+              api={props.api}
+              label="input commands"
+              value={
+                inputCommands()
+                  .map(formatInputCommandInspection)
                   .join(", ") || "none"
               }
             />

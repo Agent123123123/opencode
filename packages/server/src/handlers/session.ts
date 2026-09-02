@@ -278,6 +278,30 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
         "session.prompt",
         Effect.fn(function* (ctx) {
           yield* ManagedSessionAuthority.assertWrite(session, ctx.params.sessionID)
+          const info = yield* session.get(ctx.params.sessionID).pipe(
+            Effect.catchTag("Session.NotFoundError", (error) =>
+              Effect.fail(
+                new SessionNotFoundError({
+                  sessionID: error.sessionID,
+                  message: `Session not found: ${error.sessionID}`,
+                }),
+              ),
+            ),
+          )
+          const controller = yield* ManagedSessionAuthority.isController()
+          if (ctx.payload.completionContract && !info.execution.managed) {
+            return yield* new InvalidRequestError({
+              message: "Completion contracts require a managed session",
+              field: "completionContract",
+            })
+          }
+          if (ctx.payload.completionContract) yield* ManagedSessionAuthority.assertController()
+          if (info.execution.managed && controller && !ctx.payload.completionContract) {
+            return yield* new InvalidRequestError({
+              message: "Managed controller input requires an explicit completion contract",
+              field: "completionContract",
+            })
+          }
           return {
             data: yield* session
               .prompt({
@@ -285,6 +309,7 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
                 id: ctx.payload.id,
                 prompt: ctx.payload.prompt,
                 delivery: ctx.payload.delivery,
+                completionContract: ctx.payload.completionContract,
                 resume: ctx.payload.resume,
               })
               .pipe(
@@ -301,6 +326,16 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
                     new ConflictError({
                       message: `Prompt message ID conflicts with an existing durable record: ${error.messageID}`,
                       resource: error.messageID,
+                    }),
+                  ),
+                ),
+                Effect.catchTag("Session.ManagedInputError", (error) =>
+                  Effect.fail(
+                    new InvalidRequestError({
+                      message: error.reason === "steer_not_allowed"
+                        ? "Managed sessions accept queued inputs only"
+                        : "Completion contracts require a managed session",
+                      field: error.reason === "steer_not_allowed" ? "delivery" : "completionContract",
                     }),
                   ),
                 ),

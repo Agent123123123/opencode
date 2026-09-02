@@ -8,6 +8,8 @@ import { SessionSchema } from "../schema"
 
 type Input = {
   readonly sessionID: SessionSchema.ID
+  readonly turnID: SessionMessage.ID
+  readonly activityInputIDs: ReadonlyArray<SessionMessage.ID>
   readonly agent: string
   readonly model: ModelV2.Ref
   readonly snapshot?: string
@@ -52,6 +54,7 @@ const settledOutput = (value: ToolOutput | undefined, result: ToolResultValue): 
 
 /** Persist one provider turn without executing tools or starting a continuation turn. */
 export const createLLMEventPublisher = (events: EventV2.Interface, input: Input) => {
+  const toolIdentity = { turnID: input.turnID, activityInputIDs: input.activityInputIDs }
   const tools = new Map<
     string,
     {
@@ -60,6 +63,7 @@ export const createLLMEventPublisher = (events: EventV2.Interface, input: Input)
       inputEnded: boolean
       called: boolean
       settled: boolean
+      succeeded: boolean
       providerExecuted: boolean
       providerMetadata?: ProviderMetadata
     }
@@ -147,6 +151,7 @@ export const createLLMEventPublisher = (events: EventV2.Interface, input: Input)
       if (!tool) return yield* Effect.die(`Tool input end before start: ${callID}`)
       yield* events.publish(SessionEvent.Tool.Input.Ended, {
         sessionID: input.sessionID,
+        ...toolIdentity,
         timestamp: yield* timestamp,
         assistantMessageID: tool.assistantMessageID,
         callID,
@@ -171,11 +176,13 @@ export const createLLMEventPublisher = (events: EventV2.Interface, input: Input)
       inputEnded: false,
       called: false,
       settled: false,
+      succeeded: false,
       providerExecuted: false,
     })
     yield* toolInput.start(event.id)
     yield* events.publish(SessionEvent.Tool.Input.Started, {
       sessionID: input.sessionID,
+      ...toolIdentity,
       timestamp: yield* timestamp,
       assistantMessageID,
       callID: event.id,
@@ -216,6 +223,7 @@ export const createLLMEventPublisher = (events: EventV2.Interface, input: Input)
       tool.settled = true
       yield* events.publish(SessionEvent.Tool.Failed, {
         sessionID: input.sessionID,
+        ...toolIdentity,
         timestamp: yield* timestamp,
         assistantMessageID: tool.assistantMessageID,
         callID,
@@ -239,6 +247,7 @@ export const createLLMEventPublisher = (events: EventV2.Interface, input: Input)
     if (tool.settled) return yield* Effect.die(`Tool progress after settlement: ${callID}`)
     yield* events.publish(SessionEvent.Tool.Progress, {
       sessionID: input.sessionID,
+      ...toolIdentity,
       timestamp: yield* timestamp,
       assistantMessageID: tool.assistantMessageID,
       callID,
@@ -311,6 +320,7 @@ export const createLLMEventPublisher = (events: EventV2.Interface, input: Input)
         yield* toolInput.append(event.id, event.text)
         yield* events.publish(SessionEvent.Tool.Input.Delta, {
           sessionID: input.sessionID,
+          ...toolIdentity,
           timestamp: yield* timestamp,
           assistantMessageID: tool.assistantMessageID,
           callID: event.id,
@@ -333,6 +343,7 @@ export const createLLMEventPublisher = (events: EventV2.Interface, input: Input)
         tool.providerMetadata = event.providerMetadata
         yield* events.publish(SessionEvent.Tool.Called, {
           sessionID: input.sessionID,
+          ...toolIdentity,
           timestamp: yield* timestamp,
           assistantMessageID: tool.assistantMessageID,
           callID: event.id,
@@ -363,6 +374,7 @@ export const createLLMEventPublisher = (events: EventV2.Interface, input: Input)
         if ("error" in result) {
           yield* events.publish(SessionEvent.Tool.Failed, {
             sessionID: input.sessionID,
+            ...toolIdentity,
             timestamp: yield* timestamp,
             assistantMessageID: tool.assistantMessageID,
             callID: event.id,
@@ -372,8 +384,10 @@ export const createLLMEventPublisher = (events: EventV2.Interface, input: Input)
           })
           return
         }
+        tool.succeeded = true
         yield* events.publish(SessionEvent.Tool.Success, {
           sessionID: input.sessionID,
+          ...toolIdentity,
           timestamp: yield* timestamp,
           assistantMessageID: tool.assistantMessageID,
           callID: event.id,
@@ -393,6 +407,7 @@ export const createLLMEventPublisher = (events: EventV2.Interface, input: Input)
         tool.settled = true
         yield* events.publish(SessionEvent.Tool.Failed, {
           sessionID: input.sessionID,
+          ...toolIdentity,
           timestamp: yield* timestamp,
           assistantMessageID: tool.assistantMessageID,
           callID: event.id,
@@ -431,5 +446,9 @@ export const createLLMEventPublisher = (events: EventV2.Interface, input: Input)
     startAssistant,
     assistantMessageID: assistantMessageIDForTool,
     progress,
+    successfulLocalTools: () =>
+      Array.from(tools, ([callID, tool]) => ({ callID, tool }))
+        .filter((entry) => entry.tool.succeeded && !entry.tool.providerExecuted)
+        .map((entry) => ({ callID: entry.callID, name: entry.tool.name })),
   }
 }
