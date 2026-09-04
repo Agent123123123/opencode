@@ -1160,7 +1160,7 @@ function SidecarPanel(props: {
           <box minWidth={0} flexGrow={1}>
             <text fg={props.api.theme.current.textMuted} truncate>
               {props.selectedLane
-                ? `${props.selectedLane.name} · ${motryxLaneStatusLabel(props.selectedLane.status)}`
+                ? `${props.selectedLane.name} · ${motryxLaneStatusLabel(props.selectedLane.displayStatus)}`
                 : (props.state.detail ?? "No lane selected")}
             </text>
           </box>
@@ -1282,7 +1282,7 @@ function LaneRow(props: {
   selected: boolean
   onPick: () => void
 }) {
-  const status = () => (props.lane.schedulingPhase ?? props.lane.status).toUpperCase()
+  const status = () => (props.lane.schedulingPhase ?? props.lane.displayStatus).toUpperCase()
   const attention = () => status() === "BLOCKED" || status() === "FAILED" || props.lane.pendingCheckSummary !== undefined
   return (
     <box
@@ -1464,39 +1464,21 @@ function formatRetryTime(timestamp: number): string {
   return `next retry at ${new Date(timestamp).toISOString()}`
 }
 
-function formatRunInspection(run: MotryxControlSnapshot["runs"][number]): string {
+function formatRuntimeExecution(execution: MotryxControlSnapshot["runtimeExecutions"][number]): string {
   const values = [
-    `${run.runKind}:${run.status}`,
-    run.waitingKind ? `waiting ${run.waitingKind}${run.waitingRef ? ` (${run.waitingRef})` : ""}` : undefined,
-    run.retryDisposition ? `disposition ${run.retryDisposition}` : undefined,
+    `${execution.role}:${execution.phase}`,
+    execution.inputID ? `input ${execution.inputID}` : "claim acquired",
+    execution.turnID ? `turn ${execution.turnID}` : undefined,
   ].filter((value): value is string => Boolean(value))
   return values.join(" · ")
 }
 
-function formatAttemptInspection(attempt: MotryxControlSnapshot["attempts"][number]): string {
+function formatExecutionHistory(summary: MotryxControlSnapshot["executionHistory"][number]): string {
   const values = [
-    `Attempt #${attempt.attemptNo} ${attempt.reason}:${attempt.state}`,
-    attempt.hostAttemptCount !== undefined ? `provider attempt ${attempt.hostAttemptCount}` : undefined,
-    attempt.completionCorrectionCount > 0
-      ? `completion correction ${attempt.completionCorrectionCount}/1`
-      : undefined,
-    attempt.failureSafeSummary,
-    attempt.failureKind ? `failure ${attempt.failureKind}` : undefined,
-    attempt.httpStatus !== undefined ? `HTTP ${attempt.httpStatus}` : undefined,
-    attempt.transportCode ? `transport ${attempt.transportCode}` : undefined,
-    attempt.transportKind ? `kind ${attempt.transportKind}` : undefined,
-    attempt.providerID && attempt.modelID ? `${attempt.providerID}/${attempt.modelID}` : undefined,
-  ].filter((value): value is string => Boolean(value))
-  return values.join(" · ")
-}
-
-function formatInputCommandInspection(command: MotryxControlSnapshot["inputCommands"][number]): string {
-  const values = [
-    `Input #${command.commandNo} ${command.reason}:${command.state}`,
-    command.origin,
-    command.submitCount > 0 ? `delivery submissions ${command.submitCount}` : undefined,
-    command.lastSubmitError ? `delivery ${command.lastSubmitError}` : undefined,
-    command.dispatchNotBefore !== undefined ? formatRetryTime(command.dispatchNotBefore) : undefined,
+    `${summary.role}:${summary.terminalKind}`,
+    summary.failureKind ? `failure ${summary.failureKind}` : undefined,
+    summary.safeSummary,
+    `input ${summary.inputID}`,
   ].filter((value): value is string => Boolean(value))
   return values.join(" · ")
 }
@@ -1515,14 +1497,10 @@ function InspectPanel(props: {
   const artifacts = createMemo(() =>
     props.snapshot.artifacts.filter((artifact) => artifact.producedByLaneID === props.lane?.id),
   )
-  const runs = createMemo(() => props.snapshot.runs.filter((run) =>
-    run.laneID === props.lane?.id || run.relatedLaneID === props.lane?.id,
-  ))
-  const runIDs = createMemo(() => new Set(runs().map((run) => run.runID)))
-  const inputCommands = createMemo(() =>
-    props.snapshot.inputCommands.filter((command) => runIDs().has(command.runID)),
-  )
-  const attempts = createMemo(() => props.snapshot.attempts.filter((attempt) => runIDs().has(attempt.runID)))
+  const runtimeExecutions = createMemo(() => props.snapshot.runtimeExecutions
+    .filter((execution) => execution.laneID === props.lane?.id))
+  const executionHistory = createMemo(() => props.snapshot.executionHistory
+    .filter((summary) => summary.laneID === props.lane?.id))
   const attentionItems = createMemo(() => props.snapshot.attentionItems
     .filter((attention) => attention.laneID === props.lane?.id && attention.presentationState === "VISIBLE")
     .sort(compareRuntimeAttention))
@@ -1562,7 +1540,7 @@ function InspectPanel(props: {
         {(lane) => (
           <box flexDirection="column" gap={1}>
             <text fg={props.api.theme.current.text}>{lane().name}</text>
-            <text fg={laneColor(props.api, lane().status.toUpperCase())}>{motryxLaneStatusLabel(lane().status)}</text>
+            <text fg={laneColor(props.api, lane().displayStatus.toUpperCase())}>{motryxLaneStatusLabel(lane().displayStatus)}</text>
             <Show when={props.debugView}>
               <text fg={props.api.theme.current.warning}>DEBUG conversation</text>
               <box flexDirection="row" flexWrap="wrap" gap={1}>
@@ -1654,28 +1632,19 @@ function InspectPanel(props: {
             />
             <InspectValue
               api={props.api}
-              label="runs"
+              label="runtime execution"
               value={
-                runs()
-                  .map(formatRunInspection)
+                runtimeExecutions()
+                  .map(formatRuntimeExecution)
                   .join(", ") || "none"
               }
             />
             <InspectValue
               api={props.api}
-              label="input commands"
+              label="execution history"
               value={
-                inputCommands()
-                  .map(formatInputCommandInspection)
-                  .join(", ") || "none"
-              }
-            />
-            <InspectValue
-              api={props.api}
-              label="attempts"
-              value={
-                attempts()
-                  .map(formatAttemptInspection)
+                executionHistory()
+                  .map(formatExecutionHistory)
                   .join(", ") || "none"
               }
             />

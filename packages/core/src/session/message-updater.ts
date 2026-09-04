@@ -126,6 +126,8 @@ export function update(adapter: Adapter, event: SessionEvent.Event) {
       "session.next.title.changed": () => Effect.void,
       "session.next.moved": () => Effect.void,
       "session.next.execution_gate.changed": () => Effect.void,
+      "session.next.execution.reset.started": () => Effect.void,
+      "session.next.execution.reset": () => Effect.void,
       "session.next.prompted": (event) => {
         return adapter.appendMessage(
           SessionMessage.User.make({

@@ -5,6 +5,7 @@ import { ModelV2 } from "../../model"
 import { SessionEvent } from "../event"
 import { SessionMessage } from "../message"
 import { SessionSchema } from "../schema"
+import { SessionInput } from "../input"
 
 type Input = {
   readonly sessionID: SessionSchema.ID
@@ -13,6 +14,7 @@ type Input = {
   readonly agent: string
   readonly model: ModelV2.Ref
   readonly snapshot?: string
+  readonly managedExecution?: SessionInput.ManagedExecutionRef
 }
 
 const safe = (value: number | undefined) => Math.max(0, Number.isFinite(value) ? (value ?? 0) : 0)
@@ -54,7 +56,11 @@ const settledOutput = (value: ToolOutput | undefined, result: ToolResultValue): 
 
 /** Persist one provider turn without executing tools or starting a continuation turn. */
 export const createLLMEventPublisher = (events: EventV2.Interface, input: Input) => {
-  const toolIdentity = { turnID: input.turnID, activityInputIDs: input.activityInputIDs }
+  const toolIdentity = {
+    turnID: input.turnID,
+    activityInputIDs: input.activityInputIDs,
+    managedExecution: input.managedExecution,
+  }
   const tools = new Map<
     string,
     {

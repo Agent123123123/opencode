@@ -34,10 +34,12 @@ test("Motryx plugin route composes the standard session surface with the Flow/In
   const checkerDetail =
     "CHECKER_DETAIL_INSPECT_ONLY registered snapshot evidence implementation showing recommended_skills"
   const snapshot: MotryxControlSnapshot = {
-    schemaVersion: 7,
+    schemaVersion: 8,
     projectID,
     orchestratorSessionID: config.orchestratorSessionID,
     projectionRevision: "server-generation:ic:route",
+    runtimeCellEpoch: "host-generation:sidecar-generation",
+    runtimeOverlayRevision: 1,
     route: {
       state: "ROUTABLE",
       serverGeneration: "server-generation",
@@ -70,7 +72,9 @@ test("Motryx plugin route composes the standard session surface with the Flow/In
     lanes: Array.from({ length: 20 }, (_, index) => ({
       id: `lane_tui_${index + 1}`,
       name: index === 0 ? "TUI migration" : index === 19 ? "Final lane 20" : `Migration lane ${index + 1}`,
-      status: index === 0 ? "DONE" : "WORKING",
+      status: index === 0 ? "DONE" : "OPEN",
+      stableStatus: index === 0 ? "DONE" : "OPEN",
+      displayStatus: index === 0 ? "DONE" : "WORKING",
       updatedAt: now,
       reopenCount: 0,
       repairCycle: 0,
@@ -84,9 +88,8 @@ test("Motryx plugin route composes the standard session surface with the Flow/In
     resourceBlocks: [],
     incidents: [],
     functionSlots: [],
-    runs: [],
-    inputCommands: [],
-    attempts: [],
+    runtimeExecutions: [],
+    executionHistory: [],
     attentionItems: [],
     runtimeWarnings: [{
       warningID: "runtime_health_warning_route",
@@ -335,8 +338,8 @@ test("Motryx runtime error card can be dismissed without resolving the incident"
       severity: "ERROR" as const,
       scopeKind: "SESSION" as const,
       role: "orchestrator",
-      runID: "run_orchestrator_failure",
-      attemptID: "attempt_orchestrator_failure",
+      inputID: "input_orchestrator_failure",
+      summaryID: "summary_orchestrator_failure",
       incidentID: incident.incidentID,
       summary: incident.safeSummary,
       reasonCode: "retry_exhausted_transport",
@@ -372,7 +375,7 @@ test("Motryx runtime error card can be dismissed without resolving the incident"
               attention: { visibleOpenIncidentCount: 0, failedLaneCount: 0, activeAttentionCount: 0, userActionRequiredCount: 0, retryingCount: 0 },
             }
             return Response.json({
-              schemaVersion: 7,
+              schemaVersion: 8,
               incidentID: incident.incidentID,
               status: "OPEN",
               presentationState: "DISMISSED",
@@ -407,7 +410,7 @@ test("Motryx runtime error card can be dismissed without resolving the incident"
   }
 })
 
-test("Motryx v7 separates input delivery from OpenCode provider retry and reconciliation attention", async () => {
+test("Motryx v8 separates runtime retry from stable reconciliation attention", async () => {
   const projectID = path.resolve("/tmp/motryx-route-attention-project")
   const sessionID = "ses_route_attention"
   const config: MotryxControlConfig = {
@@ -430,8 +433,8 @@ test("Motryx v7 separates input delivery from OpenCode provider retry and reconc
     severity: "WARNING" as const,
     scopeKind: "SESSION" as const,
     role: "orchestrator",
-    runID: "run_session_retry",
-    attemptID: "attempt_session_retry_2",
+    claimID: "claim_session_retry",
+    inputID: "input_session_retry_2",
     summary: "OpenCode is retrying the current provider request inside this Turn.",
     reasonCode: "transport",
     nextAction: "wait_for_retry",
@@ -566,68 +569,45 @@ test("Motryx v7 separates input delivery from OpenCode provider retry and reconc
       scopeKind: "LANE" as const,
       role: "coordinator",
       laneID: "lane_debug",
-      runID: "run_lane_reconciliation",
-      attemptID: "attempt_lane_reconciliation",
+      inputID: "input_lane_reconciliation",
+      recoveryDecisionID: "decision_lane_reconciliation",
       summary: "Lane decision is waiting for authoritative effect reconciliation.",
       reasonCode: "effect_unknown",
     }
     currentSnapshot = {
       ...laneSnapshot,
       projectionRevision: "server:attention-reconciliation",
-      lanes: laneSnapshot.lanes.map((lane) => ({ ...lane, status: "PENDING" })),
-      runs: [{
-        runID: "run_lane_reconciliation",
-        scopeKind: "LANE_PRIMARY",
-        runKind: "LANE_DECISION",
-        status: "WAITING",
+      lanes: laneSnapshot.lanes.map((lane) => ({
+        ...lane,
+        status: "PENDING",
+        stableStatus: "PENDING",
+        displayStatus: "PENDING",
+      })),
+      runtimeExecutions: [],
+      executionHistory: [{
+        summaryID: "summary_lane_reconciliation",
+        evidenceKey: "evidence_lane_reconciliation",
+        origin: "FRAMEWORK",
+        productSessionID: sessionID,
+        ownerKind: "FUNCTION_SLOT",
+        ownerID: "slot_debug_coordinator",
+        ownerGeneration: 1,
+        workflowID: "workflow",
         laneID: "lane_debug",
-        logicalOwnerKind: "CONTROL_ROLE",
-        logicalOwnerID: "owner_orchestrator",
-        waitingKind: "reconciliation",
-        waitingRef: "effect_unknown",
-        sourceKind: "lane_decision",
-        sourceID: "lane_debug:decision",
-        revision: 2,
-        retryDisposition: "RECONCILIATION_REQUIRED",
-        createdAt: Date.now() - 5_000,
-      }],
-      inputCommands: [{
-        inputCommandID: "command_lane_reconciliation",
-        runID: "run_lane_reconciliation",
-        commandNo: 1,
-        reason: "INITIAL",
-        origin: "FRAMEWORK_SUBMITTED",
-        instanceID: "inst_coordinator",
+        role: "coordinator",
+        checkpointKind: "LANE",
+        checkpointID: "lane_debug",
+        checkpointRevision: 1,
         sessionID: "ses_coordinator",
-        stableInputID: "msg_lane_reconciliation",
-        state: "CONSUMED",
-        submitCount: 1,
-        createdAt: Date.now() - 4_500,
-        consumedAt: Date.now() - 4_000,
-      }],
-      attempts: [{
-        attemptID: "attempt_lane_reconciliation",
-        runID: "run_lane_reconciliation",
-        attemptNo: 1,
-        reason: "INITIAL",
-        instanceID: "inst_coordinator",
-        sessionID: "ses_coordinator",
-        stableInputID: "msg_lane_reconciliation",
-        state: "TERMINAL",
+        inputID: "msg_lane_reconciliation",
+        turnID: "turn_lane_reconciliation",
         terminalKind: "FAILED",
-        failureKind: "provider_internal",
-        failureSafeSummary: "Provider returned an ambiguous response after the tool effect.",
-        providerID: "zai",
-        modelID: "glm-5.2",
-        httpStatus: 503,
-        transportKind: "http-sse",
-        transportCode: "UND_ERR_HEADERS_TIMEOUT",
-        hostRetryable: true,
-        hostRetryExhausted: true,
-        hostAttemptCount: 3,
-        completionCorrectionCount: 0,
-        createdAt: Date.now() - 4_000,
+        terminalEventID: "event_lane_reconciliation",
+        terminalProofRef: "proof_lane_reconciliation",
         terminalAt: Date.now() - 1_000,
+        failureKind: "provider_internal",
+        safeSummary: "Provider returned an ambiguous response after the tool effect.",
+        createdAt: Date.now() - 4_000,
       }],
       attentionItems: [waitingAttention],
       attention: {
@@ -644,11 +624,10 @@ test("Motryx v7 separates input delivery from OpenCode provider retry and reconc
     frame = await renderUntil(app, (value) => value.includes("Waiting for reconciliation"))
     expect(frame).toContain("next action")
     expect(frame).toContain("reconcile_outcome")
-    expect(frame).toContain("reconciliation (effect_unknown)")
     expect(frame).toContain("effect_unknown")
-    expect(frame).toContain("Input #1 INITIAL:CONSUMED")
-    expect(frame).toContain("submissions 1")
-    expect(frame).toContain("HTTP 503")
+    expect(frame).toContain("coordinator:FAILED")
+    expect(frame).toContain("provider_internal")
+    expect(frame).toContain("input msg_lane_reconciliation")
     expect(frame).not.toContain("repair runtime/provider, then retry_failed_lane")
   } finally {
     lifecycle.abort()
@@ -741,10 +720,12 @@ test("/sessions switches the exact Motryx Orchestrator and rebinds conversation 
   } as unknown as TuiPluginApi
   const now = "2026-07-19T00:00:00.000Z"
   const routeSnapshot = (sessionID: string, bindingGeneration: number): MotryxControlSnapshot => ({
-    schemaVersion: 7,
+    schemaVersion: 8,
     projectID,
     orchestratorSessionID: sessionID,
     projectionRevision: `server-generation:ic:${sessionID}`,
+    runtimeCellEpoch: `host-generation:sidecar-generation`,
+    runtimeOverlayRevision: 1,
     route: {
       state: "ROUTABLE",
       serverGeneration: "server-generation",
@@ -780,16 +761,15 @@ test("/sessions switches the exact Motryx Orchestrator and rebinds conversation 
     resourceBlocks: [],
     incidents: [],
     functionSlots: [],
-    runs: [],
-    inputCommands: [],
-    attempts: [],
+    runtimeExecutions: [],
+    executionHistory: [],
     attentionItems: [],
     runtimeWarnings: [],
     attention: { visibleOpenIncidentCount: 0, failedLaneCount: 0, activeAttentionCount: 0, userActionRequiredCount: 0, retryingCount: 0 },
     diagnostics: [],
   })
   const sessionList = (currentID: string, bindingGeneration: number) => ({
-    schemaVersion: 7,
+    schemaVersion: 8,
     projectID,
     status: "ROUTABLE",
     current: {
@@ -1221,10 +1201,12 @@ async function clickFrameText(app: Awaited<ReturnType<typeof testRender>>, frame
 function debugRouteSnapshot(projectID: string, orchestratorSessionID: string, generation = 7, server = "server") {
   const now = "2026-07-19T00:00:00.000Z"
   return {
-    schemaVersion: 7,
+    schemaVersion: 8,
     projectID,
     orchestratorSessionID,
     projectionRevision: `${server}:revision`,
+    runtimeCellEpoch: `${server}-host:${server}-sidecar`,
+    runtimeOverlayRevision: 1,
     route: {
       state: "ROUTABLE",
       serverGeneration: server,
@@ -1258,7 +1240,9 @@ function debugRouteSnapshot(projectID: string, orchestratorSessionID: string, ge
       {
         id: "lane_debug",
         name: "Debug lane",
-        status: "WORKING",
+        status: "OPEN",
+        stableStatus: "OPEN",
+        displayStatus: "WORKING",
         updatedAt: now,
         reopenCount: 0,
         repairCycle: 0,
@@ -1287,9 +1271,8 @@ function debugRouteSnapshot(projectID: string, orchestratorSessionID: string, ge
     resourceBlocks: [],
     incidents: [],
     functionSlots: [],
-    runs: [],
-    inputCommands: [],
-    attempts: [],
+    runtimeExecutions: [],
+    executionHistory: [],
     attentionItems: [],
     runtimeWarnings: [],
     attention: { visibleOpenIncidentCount: 0, failedLaneCount: 0, activeAttentionCount: 0, userActionRequiredCount: 0, retryingCount: 0 },

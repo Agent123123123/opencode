@@ -40,6 +40,8 @@ import { SessionDurable } from "@opencode-ai/schema/durable-event-manifest"
 import { SessionSelection } from "./session/selection"
 import { SessionModelSwitch } from "./session/model-switch"
 import { ProviderV2 } from "./provider"
+import { SessionReset } from "./session/reset"
+import { ManagedSessionAuthority } from "./session/authority"
 
 export const RevertState = Revert.State
 export type RevertState = Revert.State
@@ -131,7 +133,13 @@ export class ProviderConnectionRequiredError extends Schema.TaggedErrorClass<Pro
   }
 }
 export class ManagedInputError extends Schema.TaggedErrorClass<ManagedInputError>()("Session.ManagedInputError", {
-  reason: Schema.Literals(["steer_not_allowed", "completion_not_allowed"]),
+  reason: Schema.Literals([
+    "steer_not_allowed",
+    "completion_not_allowed",
+    "execution_ref_required",
+    "execution_ref_invalid",
+    "direct_user_not_allowed",
+  ]),
 }) {}
 export const MessageNotFoundError = SessionRevert.MessageNotFoundError
 export type MessageNotFoundError = SessionRevert.MessageNotFoundError
@@ -145,6 +153,7 @@ export type Error =
   | ManagedSelectionRequiredError
   | ProviderConnectionRequiredError
   | ManagedInputError
+  | SessionReset.Conflict
   | SessionSelection.Error
 
 export interface Interface {
@@ -193,6 +202,7 @@ export interface Interface {
     prompt: PromptInput.Prompt
     delivery?: SessionInput.Delivery
     completionContract?: SessionInput.CompletionContract
+    managedExecution?: SessionInput.ManagedExecutionRef
     resume?: boolean
   }) => Effect.Effect<
     SessionInput.Admitted,
@@ -214,6 +224,10 @@ export interface Interface {
     open: boolean
     reason: string
   }) => Effect.Effect<SessionSchema.ExecutionGate, NotFoundError>
+  readonly resetExecution: (input: {
+    sessionID: SessionSchema.ID
+    request: SessionReset.Contract.Request
+  }) => Effect.Effect<SessionReset.Contract.Receipt, NotFoundError | SessionReset.Conflict>
   readonly shell: (input: {
     id?: EventV2.ID
     sessionID: SessionSchema.ID
@@ -513,10 +527,29 @@ const layer = Layer.effect(
             if (!session.execution.managed && input.completionContract) {
               return yield* new ManagedInputError({ reason: "completion_not_allowed" })
             }
+            if (session.execution.managed && input.completionContract && !input.managedExecution) {
+              return yield* new ManagedInputError({ reason: "execution_ref_required" })
+            }
+            if (input.managedExecution && !input.completionContract) {
+              return yield* new ManagedInputError({ reason: "execution_ref_invalid" })
+            }
+            if (
+              input.managedExecution && (
+                input.managedExecution.origin !== "FRAMEWORK"
+              )
+            ) return yield* new ManagedInputError({ reason: "execution_ref_invalid" })
+            if (
+              session.execution.managed && !input.completionContract &&
+              (session.agent === "analyst" || session.agent === "coordinator" || session.agent === "checker")
+            ) return yield* new ManagedInputError({ reason: "direct_user_not_allowed" })
             const completion = session.execution.managed
               ? input.completionContract
-                ? SessionInput.makeCompletion("controller", input.completionContract)
-                : SessionInput.ordinaryCompletion()
+                ? SessionInput.makeCompletion("controller", input.completionContract, input.managedExecution)
+                : SessionInput.ordinaryCompletion(SessionInput.ManagedExecutionRef.make({
+                    schema: "motryx.managed_execution.v2",
+                    productSessionID: input.sessionID,
+                    origin: "DIRECT_USER",
+                  }))
               : undefined
             const expected = { sessionID: input.sessionID, messageID, prompt, delivery, completion }
             const admitted = yield* SessionInput.admit(db, events, {
@@ -525,6 +558,7 @@ const layer = Layer.effect(
               prompt,
               delivery,
               completion,
+              resumeRequested: input.resume !== false,
             }).pipe(
               Effect.catchDefect((defect) =>
                 defect instanceof SessionInput.LifecycleConflict
@@ -596,6 +630,20 @@ const layer = Layer.effect(
           }),
         ),
       ),
+      resetExecution: Effect.fn("V2Session.resetExecution")(function* (input) {
+        yield* result.get(input.sessionID)
+        ManagedSessionAuthority.revoke(input.sessionID)
+        yield* execution.interrupt(input.sessionID)
+        yield* SessionModelSwitch.applyPending(db, events, input.sessionID)
+        return yield* SessionReset.run(db, events, store, input.sessionID, input.request).pipe(
+          Effect.catchTag("Session.MessageDecodeError", () =>
+            Effect.fail(new SessionReset.Conflict({
+              sessionID: input.sessionID,
+              reason: "Session history cannot be decoded for managed reset",
+            })),
+          ),
+        )
+      }),
       shell: Effect.fn("V2Session.shell")(function* () {
         return yield* new OperationUnavailableError({ operation: "shell" })
       }),

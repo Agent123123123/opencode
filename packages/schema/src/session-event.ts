@@ -5,13 +5,14 @@ import { optional } from "./schema"
 import { Event } from "./event"
 import { ProviderMetadata, ToolContent } from "./llm"
 import { Delivery } from "./session-delivery"
-import { Completion, CompletionContractDigest } from "./session-input"
+import { Completion, CompletionContractDigest, ManagedExecutionRef } from "./session-input"
 import { Model } from "./model"
 import { DateTimeUtcFromMillis, NonNegativeInt, RelativePath } from "./schema"
 import { FileAttachment, Prompt } from "./prompt"
 import { SessionID } from "./session-id"
 import { Location } from "./location"
 import { SessionMessage } from "./session-message"
+import { SessionReset } from "./session-reset"
 import { Title } from "./session-title"
 import { Revert } from "./revert"
 
@@ -149,6 +150,20 @@ export const ExecutionGateChanged = Event.define({
 })
 export type ExecutionGateChanged = typeof ExecutionGateChanged.Type
 
+export const ExecutionResetStarted = Event.define({
+  type: "session.next.execution.reset.started",
+  ...options,
+  schema: SessionReset.Plan.fields,
+})
+export type ExecutionResetStarted = typeof ExecutionResetStarted.Type
+
+export const ExecutionReset = Event.define({
+  type: "session.next.execution.reset",
+  ...options,
+  schema: SessionReset.Outcome.fields,
+})
+export type ExecutionReset = typeof ExecutionReset.Type
+
 export const Prompted = Event.define({
   type: "session.next.prompted",
   ...promptOptions,
@@ -159,7 +174,10 @@ export type Prompted = typeof Prompted.Type
 export const PromptAdmitted = Event.define({
   type: "session.next.prompt.admitted",
   ...promptOptions,
-  schema: PromptFields,
+  schema: {
+    ...PromptFields,
+    resumeRequested: Schema.Boolean.pipe(optional),
+  },
 })
 export type PromptAdmitted = typeof PromptAdmitted.Type
 
@@ -172,6 +190,7 @@ export const PromptCanceled = Event.define({
     origin: Schema.Literals(["user", "framework", "runtime_shutdown", "stale", "business"]),
     reason: Schema.String,
     inputVisibility: Schema.Literals(["missing", "admitted_unpromoted"]),
+    executionReset: SessionReset.Reference.pipe(optional),
   },
 })
 export type PromptCanceled = typeof PromptCanceled.Type
@@ -223,6 +242,7 @@ export namespace Turn {
       turnStartedAt: DateTimeUtcFromMillis,
       activityInputIDs: Schema.Array(SessionMessage.ID),
       completionContractDigest: CompletionContractDigest.pipe(optional),
+      managedExecution: ManagedExecutionRef.pipe(optional),
     },
   })
   export type Started = typeof Started.Type
@@ -243,6 +263,8 @@ export namespace Turn {
       reason: Schema.String,
       errorClass: Schema.Literals(["transport", "resource", "protocol", "tool_unknown", "interrupt", "unknown"]),
       failure: Failure.pipe(optional),
+      managedExecution: ManagedExecutionRef.pipe(optional),
+      executionReset: SessionReset.Reference.pipe(optional),
     },
   })
   export type NotStarted = typeof NotStarted.Type
@@ -294,6 +316,8 @@ export namespace Turn {
       failure: Failure.pipe(optional),
       completion: Completion.pipe(optional),
       providerWarning: Failure.pipe(optional),
+      managedExecution: ManagedExecutionRef.pipe(optional),
+      executionReset: SessionReset.Reference.pipe(optional),
     },
   })
   export type Settled = typeof Settled.Type
@@ -465,6 +489,7 @@ export namespace Tool {
     ...Base,
     assistantMessageID: SessionMessage.ID,
     callID: Schema.String,
+    managedExecution: ManagedExecutionRef.pipe(optional),
   }
   const ToolIdentity = {
     turnID: SessionMessage.ID,
@@ -657,6 +682,8 @@ export const DurableDefinitions = Event.inventory(
   PromptAdmitted,
   PromptCanceled,
   ExecutionGateChanged,
+  ExecutionResetStarted,
+  ExecutionReset,
   ContextUpdated,
   Turn.Started,
   Turn.NotStarted,
@@ -696,6 +723,8 @@ export const Definitions = Event.inventory(
   PromptAdmitted,
   PromptCanceled,
   ExecutionGateChanged,
+  ExecutionResetStarted,
+  ExecutionReset,
   ContextUpdated,
   Turn.Started,
   Turn.NotStarted,

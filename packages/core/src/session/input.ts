@@ -1,6 +1,6 @@
 export * as SessionInput from "./input"
 
-import { and, asc, eq, isNotNull, isNull, lte, notExists } from "drizzle-orm"
+import { and, asc, eq, gt, isNotNull, isNull, lte, notExists } from "drizzle-orm"
 import { DateTime, Effect, Schema } from "effect"
 import {
   Admitted,
@@ -10,6 +10,11 @@ import {
   CompletionContract,
   CompletionContractDigest,
   CompletionContractOrigin,
+  DirectUserManagedExecutionRef,
+  ExecutionCellRef,
+  FrameworkManagedExecutionRef,
+  ManagedInputAuthorization,
+  ManagedExecutionRef,
   Delivery,
   OrdinaryStopCompletionContract,
   RequiredTerminalToolCompletionContract,
@@ -23,6 +28,7 @@ import { Prompt } from "./prompt"
 import { SessionSchema } from "./schema"
 import { SessionInputCancellationTable, SessionInputTable, SessionMessageTable, SessionTable } from "./sql"
 import { Hash } from "../util/hash"
+import { ManagedSessionAuthority } from "./authority"
 
 type DatabaseService = Database.Interface["db"]
 
@@ -34,6 +40,11 @@ export {
   CompletionContract,
   CompletionContractDigest,
   CompletionContractOrigin,
+  DirectUserManagedExecutionRef,
+  ExecutionCellRef,
+  FrameworkManagedExecutionRef,
+  ManagedInputAuthorization,
+  ManagedExecutionRef,
   Delivery,
   OrdinaryStopCompletionContract,
   RequiredTerminalToolCompletionContract,
@@ -49,6 +60,7 @@ const encodeCompletionContract = Schema.encodeSync(CompletionContract)
 export const makeCompletion = (
   origin: CompletionContractOrigin,
   contract: CompletionContract,
+  managedExecution?: ManagedExecutionRef,
 ): Completion => {
   const canonical = contract.mode === "ordinary_stop"
     ? OrdinaryStopCompletionContract.make(contract)
@@ -60,14 +72,15 @@ export const makeCompletion = (
     origin,
     contract: canonical,
     digest: CompletionContractDigest.make(Hash.sha256(JSON.stringify(encodeCompletionContract(canonical)))),
+    ...(managedExecution ? { managedExecution } : {}),
   })
 }
 
-export const ordinaryCompletion = () =>
+export const ordinaryCompletion = (managedExecution?: ManagedExecutionRef) =>
   makeCompletion("builtin", OrdinaryStopCompletionContract.make({
     schema: "opencode.managed_completion.v1",
     mode: "ordinary_stop",
-  }))
+  }), managedExecution)
 
 const fromRow = (row: typeof SessionInputTable.$inferSelect): Admitted =>
   Admitted.make({
@@ -118,6 +131,25 @@ const executionAllowed = (db: DatabaseService) =>
       )),
   )
 
+const processExecutionAllowed = Effect.fn("SessionInput.processExecutionAllowed")(function* (
+  db: DatabaseService,
+  row: Pick<typeof SessionInputTable.$inferSelect, "id" | "session_id" | "completion">,
+) {
+  const session = yield* db
+    .select({ managed: SessionTable.execution_managed })
+    .from(SessionTable)
+    .where(eq(SessionTable.id, row.session_id))
+    .get()
+    .pipe(Effect.orDie)
+  if (!session?.managed) return true
+  const completion = row.completion === null ? undefined : decodeCompletion(row.completion)
+  return ManagedSessionAuthority.allowsInput({
+    sessionID: SessionSchema.ID.make(row.session_id),
+    inputID: row.id,
+    managedExecutionRef: completion?.managedExecution,
+  })
+})
+
 export class LifecycleConflict extends Schema.TaggedErrorClass<LifecycleConflict>()("SessionInput.LifecycleConflict", {
   id: SessionMessage.ID,
 }) {}
@@ -156,6 +188,8 @@ export const cancel = Effect.fn("SessionInput.cancel")(function* (
     readonly sessionID: SessionSchema.ID
     readonly origin: CancelOrigin
     readonly reason: string
+    readonly eventID?: EventV2.ID
+    readonly executionReset?: import("@opencode-ai/schema/session-reset").SessionReset.Reference
   },
 ) {
   const current = yield* query(db, input)
@@ -175,7 +209,8 @@ export const cancel = Effect.fn("SessionInput.cancel")(function* (
       origin: input.origin,
       reason: input.reason,
       inputVisibility: current.state === "admitted" ? "admitted_unpromoted" : "missing",
-    })
+      ...(input.executionReset ? { executionReset: input.executionReset } : {}),
+    }, input.eventID ? { id: input.eventID } : undefined)
     .pipe(
       Effect.catchDefect((defect) =>
         query(db, input).pipe(
@@ -201,6 +236,7 @@ export const admit = Effect.fn("SessionInput.admit")(function* (
     readonly prompt: Prompt
     readonly delivery: Delivery
     readonly completion?: Completion
+    readonly resumeRequested?: boolean
   },
 ) {
   if (yield* findCancellation(db, input.id)) return yield* Effect.die(new LifecycleConflict({ id: input.id }))
@@ -215,6 +251,7 @@ export const admit = Effect.fn("SessionInput.admit")(function* (
       prompt: input.prompt,
       delivery: input.delivery,
       completion: input.completion,
+      resumeRequested: input.resumeRequested,
     })
     .pipe(
       Effect.flatMap((event) =>
@@ -391,7 +428,7 @@ export const hasPending = Effect.fn("SessionInput.hasPending")(function* (
   delivery: Delivery,
 ) {
   const row = yield* db
-    .select({ id: SessionInputTable.id })
+    .select()
     .from(SessionInputTable)
     .where(
       and(
@@ -402,22 +439,37 @@ export const hasPending = Effect.fn("SessionInput.hasPending")(function* (
         executionAllowed(db),
       ),
     )
+    .orderBy(asc(SessionInputTable.admitted_seq))
     .limit(1)
     .get()
     .pipe(Effect.orDie)
-  return row !== undefined
+  return row !== undefined && (yield* processExecutionAllowed(db, row))
 })
 
 /** Sessions whose durable inbox still contains work that has not been claimed by a runner. */
 export const pendingSessionIDs = Effect.fn("SessionInput.pendingSessionIDs")(function* (db: DatabaseService) {
   const rows = yield* db
-    .selectDistinct({ sessionID: SessionInputTable.session_id })
+    .select({
+      id: SessionInputTable.id,
+      sessionID: SessionInputTable.session_id,
+      completion: SessionInputTable.completion,
+    })
     .from(SessionInputTable)
     .where(and(isNull(SessionInputTable.promoted_seq), uncanceled(db), executionAllowed(db)))
-    .orderBy(asc(SessionInputTable.session_id))
+    .orderBy(asc(SessionInputTable.session_id), asc(SessionInputTable.admitted_seq))
     .all()
     .pipe(Effect.orDie)
-  return rows.map((row) => SessionSchema.ID.make(row.sessionID))
+  const firstBySession = new Map<string, typeof rows[number]>()
+  for (const row of rows) if (!firstBySession.has(row.sessionID)) firstBySession.set(row.sessionID, row)
+  const allowed: SessionSchema.ID[] = []
+  for (const row of firstBySession.values()) {
+    if (yield* processExecutionAllowed(db, {
+      id: row.id,
+      session_id: row.sessionID,
+      completion: row.completion,
+    })) allowed.push(SessionSchema.ID.make(row.sessionID))
+  }
+  return allowed
 })
 
 /** Promoted input whose owning process died before durable Turn.Started. */
@@ -426,7 +478,7 @@ export const hasOrphanedPromoted = Effect.fn("SessionInput.hasOrphanedPromoted")
   sessionID: SessionSchema.ID,
 ) {
   const row = yield* db
-    .select({ id: SessionInputTable.id })
+    .select()
     .from(SessionInputTable)
     .where(and(
       eq(SessionInputTable.session_id, sessionID),
@@ -434,17 +486,22 @@ export const hasOrphanedPromoted = Effect.fn("SessionInput.hasOrphanedPromoted")
       isNull(SessionInputTable.turn_id),
       executionAllowed(db),
     ))
+    .orderBy(asc(SessionInputTable.admitted_seq))
     .limit(1)
     .get()
     .pipe(Effect.orDie)
-  return row !== undefined
+  return row !== undefined && (yield* processExecutionAllowed(db, row))
 })
 
 export const orphanedPromotedSessionIDs = Effect.fn("SessionInput.orphanedPromotedSessionIDs")(function* (
   db: DatabaseService,
 ) {
   const rows = yield* db
-    .selectDistinct({ sessionID: SessionInputTable.session_id })
+    .select({
+      id: SessionInputTable.id,
+      sessionID: SessionInputTable.session_id,
+      completion: SessionInputTable.completion,
+    })
     .from(SessionInputTable)
     .where(and(
       isNotNull(SessionInputTable.promoted_seq),
@@ -454,7 +511,73 @@ export const orphanedPromotedSessionIDs = Effect.fn("SessionInput.orphanedPromot
     .orderBy(asc(SessionInputTable.session_id))
     .all()
     .pipe(Effect.orDie)
-  return rows.map((row) => SessionSchema.ID.make(row.sessionID))
+  const allowed = new Set<SessionSchema.ID>()
+  for (const row of rows) {
+    if (yield* processExecutionAllowed(db, {
+      id: row.id,
+      session_id: row.sessionID,
+      completion: row.completion,
+    })) allowed.add(SessionSchema.ID.make(row.sessionID))
+  }
+  return [...allowed]
+})
+
+export const unpromotedThrough = Effect.fn("SessionInput.unpromotedThrough")(function* (
+  db: DatabaseService,
+  sessionID: SessionSchema.ID,
+  throughEventSeq: number,
+) {
+  const rows = yield* db
+    .select()
+    .from(SessionInputTable)
+    .where(and(
+      eq(SessionInputTable.session_id, sessionID),
+      isNull(SessionInputTable.promoted_seq),
+      lte(SessionInputTable.admitted_seq, throughEventSeq),
+      uncanceled(db),
+    ))
+    .orderBy(asc(SessionInputTable.admitted_seq))
+    .all()
+    .pipe(Effect.orDie)
+  return rows.map(fromRow)
+})
+
+export const orphanedPromotedThrough = Effect.fn("SessionInput.orphanedPromotedThrough")(function* (
+  db: DatabaseService,
+  sessionID: SessionSchema.ID,
+  throughEventSeq: number,
+) {
+  const rows = yield* db
+    .select()
+    .from(SessionInputTable)
+    .where(and(
+      eq(SessionInputTable.session_id, sessionID),
+      isNotNull(SessionInputTable.promoted_seq),
+      isNull(SessionInputTable.turn_id),
+      lte(SessionInputTable.admitted_seq, throughEventSeq),
+    ))
+    .orderBy(asc(SessionInputTable.admitted_seq))
+    .all()
+    .pipe(Effect.orDie)
+  return rows.map(fromRow)
+})
+
+export const admittedAfter = Effect.fn("SessionInput.admittedAfter")(function* (
+  db: DatabaseService,
+  sessionID: SessionSchema.ID,
+  throughEventSeq: number,
+) {
+  const row = yield* db
+    .select({ id: SessionInputTable.id })
+    .from(SessionInputTable)
+    .where(and(
+      eq(SessionInputTable.session_id, sessionID),
+      gt(SessionInputTable.admitted_seq, throughEventSeq),
+    ))
+    .limit(1)
+    .get()
+    .pipe(Effect.orDie)
+  return row !== undefined
 })
 
 /** Read the exact pending inputs that the next promotion will publish, without mutating inbox state. */
@@ -471,16 +594,21 @@ export const pendingActivityIDs = Effect.fn("SessionInput.pendingActivityIDs")(f
     executionAllowed(db),
   )
   if (delivery === "steer") {
-    return (yield* db
-      .select({ id: SessionInputTable.id })
+    const rows = yield* db
+      .select()
       .from(SessionInputTable)
       .where(and(pending, eq(SessionInputTable.delivery, "steer"), lte(SessionInputTable.admitted_seq, cutoff)))
       .orderBy(asc(SessionInputTable.admitted_seq))
       .all()
-      .pipe(Effect.orDie)).map((row) => SessionMessage.ID.make(row.id))
+      .pipe(Effect.orDie)
+    const allowed: SessionMessage.ID[] = []
+    for (const row of rows) {
+      if (yield* processExecutionAllowed(db, row)) allowed.push(SessionMessage.ID.make(row.id))
+    }
+    return allowed
   }
   const queued = yield* db
-    .select({ id: SessionInputTable.id })
+    .select()
     .from(SessionInputTable)
     .where(and(pending, eq(SessionInputTable.delivery, "queue")))
     .orderBy(asc(SessionInputTable.admitted_seq))
@@ -488,16 +616,18 @@ export const pendingActivityIDs = Effect.fn("SessionInput.pendingActivityIDs")(f
     .get()
     .pipe(Effect.orDie)
   const steers = yield* db
-    .select({ id: SessionInputTable.id })
+    .select()
     .from(SessionInputTable)
     .where(and(pending, eq(SessionInputTable.delivery, "steer"), lte(SessionInputTable.admitted_seq, cutoff)))
     .orderBy(asc(SessionInputTable.admitted_seq))
     .all()
     .pipe(Effect.orDie)
-  return [
-    ...(queued ? [SessionMessage.ID.make(queued.id)] : []),
-    ...steers.map((row) => SessionMessage.ID.make(row.id)),
-  ]
+  const candidates = [...(queued ? [queued] : []), ...steers]
+  const allowed: SessionMessage.ID[] = []
+  for (const row of candidates) {
+    if (yield* processExecutionAllowed(db, row)) allowed.push(SessionMessage.ID.make(row.id))
+  }
+  return allowed
 })
 
 export const equivalent = (
@@ -582,7 +712,9 @@ export const promoteSteers = Effect.fn("SessionInput.promoteSteers")(function* (
     .orderBy(asc(SessionInputTable.admitted_seq))
     .all()
     .pipe(Effect.orDie)
-  return yield* publish(db, events, sessionID, rows)
+  const allowed = []
+  for (const row of rows) if (yield* processExecutionAllowed(db, row)) allowed.push(row)
+  return yield* publish(db, events, sessionID, allowed)
 })
 
 export const promoteNextQueued = Effect.fn("SessionInput.promoteNextQueued")(function* (
@@ -606,5 +738,6 @@ export const promoteNextQueued = Effect.fn("SessionInput.promoteNextQueued")(fun
     .limit(1)
     .get()
     .pipe(Effect.orDie)
-  return row === undefined ? false : yield* publish(db, events, sessionID, [row]).pipe(Effect.as(true))
+  if (row === undefined || !(yield* processExecutionAllowed(db, row))) return false
+  return yield* publish(db, events, sessionID, [row]).pipe(Effect.as(true))
 })

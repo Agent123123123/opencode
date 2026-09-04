@@ -21,6 +21,8 @@ import type {
   SessionsExecutionGateOutput,
   SessionsSetInput,
   SessionsSetOutput,
+  SessionsExecutionResetInput,
+  SessionsExecutionResetOutput,
   SessionsPromptInput,
   SessionsPromptOutput,
   SessionsInputInput,
@@ -47,6 +49,10 @@ import type {
   SessionsInterruptOutput,
   SessionsMessageInput,
   SessionsMessageOutput,
+  SessionsAuthorizeInput,
+  SessionsAuthorizeOutput,
+  SessionsUnauthorizeInput,
+  SessionsUnauthorizeOutput,
   MessagesListInput,
   MessagesListOutput,
   ModelsListInput,
@@ -413,6 +419,25 @@ export function make(options: ClientOptions) {
           },
           requestOptions,
         ).then((value) => value.data),
+      executionReset: (input: SessionsExecutionResetInput, requestOptions?: RequestOptions) =>
+        request<{ readonly data: SessionsExecutionResetOutput }>(
+          {
+            method: "POST",
+            path: `/api/session/${encodeURIComponent(input.sessionID)}/execution-reset`,
+            body: {
+              schema: input["schema"],
+              resetID: input["resetID"],
+              recoveryCellIncarnationID: input["recoveryCellIncarnationID"],
+              throughEventSeq: input["throughEventSeq"],
+              policy: input["policy"],
+              reason: input["reason"],
+            },
+            successStatus: 200,
+            declaredStatuses: [409, 404, 400, 401],
+            empty: false,
+          },
+          requestOptions,
+        ).then((value) => value.data),
       prompt: (input: SessionsPromptInput, requestOptions?: RequestOptions) =>
         request<{ readonly data: SessionsPromptOutput }>(
           {
@@ -423,6 +448,7 @@ export function make(options: ClientOptions) {
               prompt: input["prompt"],
               delivery: input["delivery"],
               completionContract: input["completionContract"],
+              managedExecution: input["managedExecution"],
               resume: input["resume"],
             },
             successStatus: 200,
@@ -568,6 +594,30 @@ export function make(options: ClientOptions) {
           },
           requestOptions,
         ).then((value) => value.data),
+      authorize: (input: SessionsAuthorizeInput, requestOptions?: RequestOptions) =>
+        request<SessionsAuthorizeOutput>(
+          {
+            method: "POST",
+            path: `/api/session/${encodeURIComponent(input.sessionID)}/input/${encodeURIComponent(input.inputID)}/authorization`,
+            body: { claimID: input["claimID"], cell: input["cell"], managedExecutionRef: input["managedExecutionRef"] },
+            successStatus: 204,
+            declaredStatuses: [409, 400, 404, 401],
+            empty: true,
+          },
+          requestOptions,
+        ),
+      unauthorize: (input: SessionsUnauthorizeInput, requestOptions?: RequestOptions) =>
+        request<SessionsUnauthorizeOutput>(
+          {
+            method: "DELETE",
+            path: `/api/session/${encodeURIComponent(input.sessionID)}/input/${encodeURIComponent(input.inputID)}/authorization`,
+            body: { claimID: input["claimID"], cell: input["cell"] },
+            successStatus: 204,
+            declaredStatuses: [409, 404, 400, 401],
+            empty: true,
+          },
+          requestOptions,
+        ),
     },
     messages: {
       list: (input: MessagesListInput, requestOptions?: RequestOptions) =>

@@ -33,6 +33,7 @@ import { SessionInput } from "../input"
 import { SessionMessage } from "../message"
 import { SessionModelContext } from "../model-context"
 import { SessionSchema } from "../schema"
+import { ManagedSessionAuthority } from "../authority"
 import { SessionStore } from "../store"
 import { ManagedTurnError, type RunError, Service } from "./index"
 import { SessionRunnerModel } from "./model"
@@ -177,6 +178,7 @@ const layer = Layer.effect(
       providerWarning?: SessionEvent.Turn.Failure
       managed: boolean
       completion?: SessionInput.Completion
+      managedExecution?: SessionInput.ManagedExecutionRef
       correctionActive: boolean
       correctionUsed: boolean
       terminalTool?: { readonly callID: string; readonly name: string }
@@ -285,6 +287,10 @@ const layer = Layer.effect(
           })
         }
         activity.completion = root.completion
+        const execution = root.completion.managedExecution
+        activity.managedExecution = execution?.origin === "DIRECT_USER"
+          ? ManagedSessionAuthority.executionRef(session.id, activityInputIDs[0]!) ?? execution
+          : execution
       }
       const system = initialized ?? (yield* SessionContextEpoch.prepare(db, events, contextSource, session.id))
       const entries = yield* SessionHistory.entriesForRunner(db, session.id, system.baselineSeq)
@@ -337,6 +343,7 @@ const layer = Layer.effect(
           turnStartedAt,
           activityInputIDs,
           completionContractDigest: activity.completion?.digest,
+          managedExecution: activity.managedExecution,
         })
         activity.started = true
       }
@@ -351,6 +358,7 @@ const layer = Layer.effect(
           ...(session.model?.variant === undefined ? {} : { variant: session.model.variant }),
         },
         snapshot: startSnapshot,
+        managedExecution: activity.managedExecution,
       })
       const withPublication = Semaphore.makeUnsafe(1).withPermit
       const publish = (event: LLMEvent, outputPaths: ReadonlyArray<string> = []) =>
@@ -660,6 +668,7 @@ const layer = Layer.effect(
                     outcome: interrupted ? "interrupted" : "failed",
                     reason: failureReason,
                     errorClass: interrupted ? "interrupt" : runtimeErrorClass(error),
+                    managedExecution: activity.managedExecution,
                     ...(!interrupted
                       ? {
                           failure: {
@@ -671,6 +680,7 @@ const layer = Layer.effect(
                         }
                       : {}),
                   })
+                  revokeActivityInputGrants(input.sessionID, promotedInputIDs, activity.managedExecution)
                   return
                 }
 
@@ -684,6 +694,7 @@ const layer = Layer.effect(
                   turnStartedAt,
                   activityInputIDs: activity.activityInputIDs,
                   outcome: interrupted ? "aborted" : Exit.isFailure(exit) ? "error" : "completed",
+                  managedExecution: activity.managedExecution,
                   ...(activity.terminalTool
                     ? {
                         completion: {
@@ -707,6 +718,7 @@ const layer = Layer.effect(
                       }
                     : {}),
                 })
+                revokeActivityInputGrants(input.sessionID, activity.activityInputIDs, activity.managedExecution)
               }),
             ),
           ),
@@ -723,6 +735,22 @@ const layer = Layer.effect(
     })
   }),
 )
+
+function revokeActivityInputGrants(
+  sessionID: SessionSchema.ID,
+  inputIDs: readonly SessionMessage.ID[],
+  execution: SessionInput.ManagedExecutionRef | undefined,
+): void {
+  if (!execution?.claimID || !execution.cell) return
+  for (const inputID of inputIDs) {
+    ManagedSessionAuthority.revokeInput({
+      sessionID,
+      inputID,
+      claimID: execution.claimID,
+      cell: execution.cell,
+    })
+  }
+}
 
 export const node = makeLocationNode({
   service: Service,

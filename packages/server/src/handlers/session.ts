@@ -128,9 +128,7 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
                   ),
               }),
             )
-          const data = yield* create
-          if (data.execution.managed) yield* ManagedSessionAuthority.grant(data.id)
-          return { data }
+          return { data: yield* create }
         }),
       )
       .handle(
@@ -151,10 +149,13 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
       .handle(
         "session.executionGate.set",
         Effect.fn(function* (ctx) {
-          if (ctx.payload.open) yield* ManagedSessionAuthority.assertWrite(session, ctx.params.sessionID)
-          else yield* ManagedSessionAuthority.grant(ctx.params.sessionID)
-          return {
-            data: yield* session.setExecutionGate({
+          if (ctx.payload.open) {
+            yield* ManagedSessionAuthority.grant(ctx.params.sessionID)
+          } else {
+            yield* ManagedSessionAuthority.assertController()
+            ManagedSessionAuthority.revoke(ctx.params.sessionID)
+          }
+          const data = yield* session.setExecutionGate({
               sessionID: ctx.params.sessionID,
               open: ctx.payload.open,
               reason: ctx.payload.reason,
@@ -165,8 +166,108 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
                   message: `Session not found: ${error.sessionID}`,
                 })),
               ),
+            )
+          return { data }
+        }),
+      )
+      .handle(
+        "session.executionReset",
+        Effect.fn(function* (ctx) {
+          yield* ManagedSessionAuthority.assertController()
+          ManagedSessionAuthority.revoke(ctx.params.sessionID)
+          return {
+            data: yield* session.resetExecution({
+              sessionID: ctx.params.sessionID,
+              request: ctx.payload,
+            }).pipe(
+              Effect.catchTag("Session.NotFoundError", (error) =>
+                Effect.fail(new SessionNotFoundError({
+                  sessionID: error.sessionID,
+                  message: `Session not found: ${error.sessionID}`,
+                })),
+              ),
+              Effect.catchTag("SessionReset.Conflict", (error) =>
+                Effect.fail(new ConflictError({ message: error.reason, resource: error.sessionID })),
+              ),
             ),
           }
+        }),
+      )
+      .handle(
+        "session.inputAuthorization.authorize",
+        Effect.fn(function* (ctx) {
+          const info = yield* session.get(ctx.params.sessionID).pipe(
+            Effect.catchTag("Session.NotFoundError", (error) =>
+              Effect.fail(new SessionNotFoundError({
+                sessionID: error.sessionID,
+                message: `Session not found: ${error.sessionID}`,
+              })),
+            ),
+          )
+          if (!info.execution.managed) {
+            return yield* new InvalidRequestError({
+              message: "Input-scoped execution grants require a managed Session",
+              field: "sessionID",
+            })
+          }
+          const outcome = yield* ManagedSessionAuthority.authorizeInput({
+            sessionID: ctx.params.sessionID,
+            inputID: ctx.params.inputID,
+            claimID: ctx.payload.claimID,
+            cell: ctx.payload.cell,
+            managedExecutionRef: ctx.payload.managedExecutionRef,
+          })
+          if (outcome === "session_unauthorized") {
+            return yield* new InvalidRequestError({
+              message: "Managed Session must be reset and opened before an input can be authorized",
+              field: "sessionID",
+            })
+          }
+          if (outcome === "conflict") {
+            return yield* new ConflictError({
+              message: "Managed input authorization conflicts with the existing process-local grant",
+              resource: ctx.params.inputID,
+            })
+          }
+          yield* session.setExecutionGate({
+            sessionID: ctx.params.sessionID,
+            open: true,
+            reason: `managed_input_authorized:${ctx.payload.claimID}`,
+          }).pipe(
+            Effect.catchTag("Session.NotFoundError", (error) =>
+              Effect.fail(new SessionNotFoundError({
+                sessionID: error.sessionID,
+                message: `Session not found: ${error.sessionID}`,
+              })),
+            ),
+          )
+          return HttpApiSchema.NoContent.make()
+        }),
+      )
+      .handle(
+        "session.inputAuthorization.unauthorize",
+        Effect.fn(function* (ctx) {
+          yield* session.get(ctx.params.sessionID).pipe(
+            Effect.catchTag("Session.NotFoundError", (error) =>
+              Effect.fail(new SessionNotFoundError({
+                sessionID: error.sessionID,
+                message: `Session not found: ${error.sessionID}`,
+              })),
+            ),
+          )
+          const outcome = yield* ManagedSessionAuthority.revokeInput({
+            sessionID: ctx.params.sessionID,
+            inputID: ctx.params.inputID,
+            claimID: ctx.payload.claimID,
+            cell: ctx.payload.cell,
+          })
+          if (outcome === "conflict") {
+            return yield* new ConflictError({
+              message: "Managed input revocation conflicts with the existing process-local grant",
+              resource: ctx.params.inputID,
+            })
+          }
+          return HttpApiSchema.NoContent.make()
         }),
       )
       .handle(
@@ -277,7 +378,6 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
       .handle(
         "session.prompt",
         Effect.fn(function* (ctx) {
-          yield* ManagedSessionAuthority.assertWrite(session, ctx.params.sessionID)
           const info = yield* session.get(ctx.params.sessionID).pipe(
             Effect.catchTag("Session.NotFoundError", (error) =>
               Effect.fail(
@@ -289,6 +389,19 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
             ),
           )
           const controller = yield* ManagedSessionAuthority.isController()
+          if (
+            info.execution.managed && !controller &&
+            (info.agent === "analyst" || info.agent === "coordinator" || info.agent === "checker")
+          ) {
+            return yield* new InvalidRequestError({
+              message: "Direct user input is allowed only on the primary managed Session",
+              field: "sessionID",
+            })
+          }
+          if (info.execution.managed && controller) yield* ManagedSessionAuthority.assertController()
+          if (!info.execution.managed) {
+            yield* ManagedSessionAuthority.assertWrite(session, ctx.params.sessionID)
+          }
           if (ctx.payload.completionContract && !info.execution.managed) {
             return yield* new InvalidRequestError({
               message: "Completion contracts require a managed session",
@@ -296,10 +409,52 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
             })
           }
           if (ctx.payload.completionContract) yield* ManagedSessionAuthority.assertController()
+          if (ctx.payload.completionContract && !ctx.payload.managedExecution) {
+            return yield* new InvalidRequestError({
+              message: "Managed controller input requires a managed execution reference",
+              field: "managedExecution",
+            })
+          }
+          if (ctx.payload.managedExecution) {
+            const execution = ctx.payload.managedExecution
+            if (
+              execution.origin !== "FRAMEWORK"
+            ) {
+              return yield* new InvalidRequestError({
+                message: "Managed controller input requires a complete FRAMEWORK execution reference",
+                field: "managedExecution",
+              })
+            }
+          }
+          if (ctx.payload.managedExecution && !ctx.payload.completionContract) {
+            return yield* new InvalidRequestError({
+              message: "Managed execution reference requires a controller completion contract",
+              field: "managedExecution",
+            })
+          }
           if (info.execution.managed && controller && !ctx.payload.completionContract) {
             return yield* new InvalidRequestError({
               message: "Managed controller input requires an explicit completion contract",
               field: "completionContract",
+            })
+          }
+          if (info.execution.managed && controller && ctx.payload.id === undefined) {
+            return yield* new InvalidRequestError({
+              message: "Managed controller input requires an explicit input ID",
+              field: "id",
+            })
+          }
+          if (
+            info.execution.managed && controller && ctx.payload.managedExecution &&
+            !ManagedSessionAuthority.hasInput({
+              sessionID: ctx.params.sessionID,
+              inputID: ctx.payload.id!,
+              managedExecutionRef: ctx.payload.managedExecution,
+            })
+          ) {
+            return yield* new InvalidRequestError({
+              message: "Managed controller input lacks an exact current-process input grant",
+              field: "id",
             })
           }
           return {
@@ -310,6 +465,7 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
                 prompt: ctx.payload.prompt,
                 delivery: ctx.payload.delivery,
                 completionContract: ctx.payload.completionContract,
+                managedExecution: ctx.payload.managedExecution,
                 resume: ctx.payload.resume,
               })
               .pipe(

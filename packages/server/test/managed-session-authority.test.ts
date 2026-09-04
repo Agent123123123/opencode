@@ -4,6 +4,7 @@ import { HttpServerRequest } from "effect/unstable/http"
 import type { SessionV2 } from "@opencode-ai/core/session"
 import { SessionSchema } from "@opencode-ai/core/session/schema"
 import { ManagedSessionAuthority as ProcessAuthority } from "@opencode-ai/core/session/authority"
+import { SessionInput } from "@opencode-ai/core/session/input"
 import { ManagedSessionAuthority } from "../src/managed-session-authority"
 
 const sessionID = SessionSchema.ID.make("ses_server_managed_authority")
@@ -20,6 +21,55 @@ afterEach(() => {
 })
 
 describe("managed session service write authority", () => {
+  test("authorizes only one exact Input, claim, cell, and immutable execution reference", () => {
+    const inputID = "msg_exact_input_grant"
+    const cell = {
+      supervisorIncarnationID: "supervisor_exact",
+      hostIncarnationID: "host_exact",
+      sidecarIncarnationID: "sidecar_exact",
+    }
+    const managedExecutionRef = SessionInput.ManagedExecutionRef.make({
+      schema: "motryx.managed_execution.v2",
+      origin: "FRAMEWORK",
+      productSessionID: sessionID,
+      owner: { kind: "CONTROL_ROLE", id: "owner_exact", generation: 2 },
+      checkpoint: { kind: "CONTROL", id: "owner_exact", revision: 2 },
+      cell,
+      claimID: "claim_exact",
+    })
+
+    expect(ProcessAuthority.authorizeInput({
+      sessionID,
+      inputID,
+      claimID: "claim_exact",
+      cell,
+      managedExecutionRef,
+    })).toBe("session_unauthorized")
+    ProcessAuthority.grant(sessionID)
+    expect(ProcessAuthority.authorizeInput({
+      sessionID,
+      inputID,
+      claimID: "claim_exact",
+      cell,
+      managedExecutionRef,
+    })).toBe("authorized")
+    expect(ProcessAuthority.allowsInput({ sessionID, inputID, managedExecutionRef })).toBe(true)
+    expect(ProcessAuthority.authorizeInput({
+      sessionID,
+      inputID,
+      claimID: "claim_conflict",
+      cell,
+      managedExecutionRef,
+    })).toBe("conflict")
+    expect(ProcessAuthority.revokeInput({
+      sessionID,
+      inputID,
+      claimID: "claim_exact",
+      cell,
+    })).toBe("revoked")
+    expect(ProcessAuthority.allowsInput({ sessionID, inputID, managedExecutionRef })).toBe(false)
+  })
+
   test("fails closed when the host has no controller token", async () => {
     delete process.env.MOTRYX_CONTROLLER_TOKEN
     const denied = await Effect.runPromiseExit(

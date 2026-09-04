@@ -6,6 +6,7 @@ import { HttpServerRequest } from "effect/unstable/http"
 import { UnauthorizedError } from "@opencode-ai/protocol/errors"
 import type { SessionV2 } from "@opencode-ai/core/session"
 import { SessionSchema } from "@opencode-ai/core/session/schema"
+import type { SessionInput } from "@opencode-ai/core/session/input"
 import { ManagedSessionAuthority as ProcessAuthority } from "@opencode-ai/core/session/authority"
 
 export const HEADER = "x-motryx-controller-token"
@@ -53,3 +54,30 @@ export const assertWrite = Effect.fn("ManagedSessionAuthority.assertWrite")(func
 export const revoke = (sessionID: string) => {
   ProcessAuthority.revoke(SessionSchema.ID.make(sessionID))
 }
+
+export const authorizeInput = Effect.fn("ManagedSessionAuthority.authorizeInput")(function* (input: {
+  sessionID: SessionSchema.ID
+  inputID: string
+  claimID: string
+  cell: SessionInput.ExecutionCellRef
+  managedExecutionRef: SessionInput.ManagedExecutionRef
+}) {
+  yield* assertController()
+  return ProcessAuthority.authorizeInput(input)
+})
+
+export const revokeInput = Effect.fn("ManagedSessionAuthority.revokeInput")(function* (input: {
+  sessionID: SessionSchema.ID
+  inputID: string
+  claimID: string
+  cell: SessionInput.ExecutionCellRef
+}) {
+  yield* assertController()
+  return ProcessAuthority.revokeInput(input)
+})
+
+export const hasInput = (input: {
+  sessionID: SessionSchema.ID
+  inputID: string
+  managedExecutionRef?: SessionInput.ManagedExecutionRef
+}) => ProcessAuthority.allowsInput(input)

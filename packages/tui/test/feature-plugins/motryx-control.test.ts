@@ -25,10 +25,12 @@ const config: MotryxControlConfig = {
 function snapshot(overrides: Record<string, unknown> = {}) {
   const now = "2026-07-19T00:00:00.000Z"
   return {
-    schemaVersion: 7,
+    schemaVersion: 8,
     projectID,
     orchestratorSessionID: config.orchestratorSessionID,
     projectionRevision: "server-generation:ic:revision",
+    runtimeCellEpoch: "host-generation:sidecar-generation",
+    runtimeOverlayRevision: 1,
     route: {
       state: "ROUTABLE",
       serverGeneration: "server-generation",
@@ -75,9 +77,8 @@ function snapshot(overrides: Record<string, unknown> = {}) {
     runtimeWarnings: [],
     attention: { visibleOpenIncidentCount: 0, failedLaneCount: 0, activeAttentionCount: 0, userActionRequiredCount: 0, retryingCount: 0 },
     functionSlots: [],
-    runs: [],
-    inputCommands: [],
-    attempts: [],
+    runtimeExecutions: [],
+    executionHistory: [],
     diagnostics: [],
     ...overrides,
   }
@@ -104,12 +105,14 @@ describe("Motryx typed control snapshot", () => {
     ).toEqual({ ok: false, error: "Motryx control API must use http or https" })
   })
 
-  test("accepts an exact schema-v7 ROUTABLE/binding/reconcile proof", () => {
+  test("accepts an exact schema-v8 ROUTABLE/binding/reconcile proof", () => {
     expect(parseMotryxControlSnapshot(snapshot(), config)).toMatchObject({
-      schemaVersion: 7,
+      schemaVersion: 8,
       projectID,
       orchestratorSessionID: config.orchestratorSessionID,
       projectionRevision: "server-generation:ic:revision",
+      runtimeCellEpoch: "host-generation:sidecar-generation",
+      runtimeOverlayRevision: 1,
       route: {
         state: "ROUTABLE",
         bindingGeneration: 7,
@@ -120,14 +123,16 @@ describe("Motryx typed control snapshot", () => {
     })
   })
 
-  test("accepts the slot-runtime Run/Attempt workflow projection wire shape", () => {
+  test("accepts runtime claims and terminal-only execution history", () => {
     const value = parseMotryxControlSnapshot(
       snapshot({
         lanes: [
           {
             id: "lane_1",
             name: "Implement",
-            status: "WORKING",
+            status: "OPEN",
+            stableStatus: "OPEN",
+            displayStatus: "WORKING",
             updatedAt: "2026-07-19T00:00:00.000Z",
             reopenCount: 0,
             repairCycle: 0,
@@ -150,52 +155,45 @@ describe("Motryx typed control snapshot", () => {
             runtimeReadiness: "ready",
           },
         ],
-        runs: [
-          {
-            runID: "run_1",
-            scopeKind: "LANE_PRIMARY",
-            runKind: "COORDINATOR",
-            status: "OPEN",
-            laneID: "lane_1",
-            logicalOwnerKind: "FUNCTION_SLOT",
-            logicalOwnerID: "slot_coordinator",
-            sourceKind: "lane_command",
-            sourceID: "lane_1:1",
-            revision: 0,
-            createdAt: 1_786_510_000_000,
-            currentAttemptID: "attempt_1",
-          },
-        ],
-        inputCommands: [
-          {
-            inputCommandID: "command_1",
-            runID: "run_1",
-            commandNo: 1,
-            reason: "INITIAL",
-            origin: "FRAMEWORK_SUBMITTED",
-            instanceID: "inst_coordinator",
-            sessionID: "ses_coordinator",
-            stableInputID: "input_1",
-            state: "CONSUMED",
-            submitCount: 1,
-            createdAt: 1_786_510_000_000,
-            consumedAt: 1_786_510_000_001,
-          },
-        ],
-        attempts: [
-          {
-            attemptID: "attempt_1",
-            runID: "run_1",
-            attemptNo: 1,
-            reason: "INITIAL",
-            instanceID: "inst_coordinator",
-            sessionID: "ses_coordinator",
-            stableInputID: "input_1",
-            state: "RUNNING",
-            completionCorrectionCount: 0,
-            createdAt: 1_786_510_000_000,
-          },
-        ],
+        runtimeExecutions: [{
+          claimID: "claim_1",
+          cellEpoch: "host_1:sidecar_1",
+          workflowID: "wf_1",
+          laneID: "lane_1",
+          ownerID: "slot_coordinator",
+          ownerGeneration: 1,
+          bindingID: "binding_1",
+          sessionID: "ses_coordinator",
+          inputID: "input_1",
+          turnID: "turn_1",
+          role: "coordinator",
+          phase: "WORKING",
+          checkpointRevision: 0,
+          createdAt: 1_786_510_000_000,
+        }],
+        executionHistory: [{
+          summaryID: "summary_1",
+          evidenceKey: "evidence_1",
+          origin: "FRAMEWORK",
+          productSessionID: "ses_orchestrator",
+          ownerKind: "FUNCTION_SLOT",
+          ownerID: "slot_coordinator",
+          ownerGeneration: 1,
+          workflowID: "wf_1",
+          laneID: "lane_1",
+          role: "coordinator",
+          checkpointKind: "LANE",
+          checkpointID: "lane_1",
+          checkpointRevision: 0,
+          sessionID: "ses_coordinator",
+          inputID: "input_0",
+          turnID: "turn_0",
+          terminalKind: "COMPLETED",
+          terminalEventID: "event_0",
+          terminalProofRef: "proof_0",
+          terminalAt: 1_786_509_999_999,
+          createdAt: 1_786_510_000_000,
+        }],
       }),
       config,
     )
@@ -211,12 +209,11 @@ describe("Motryx typed control snapshot", () => {
       },
     })
     expect(value.functionSlots[0]).toMatchObject({ runtimeReadiness: "ready" })
-    expect(value.runs[0]).toMatchObject({ runKind: "COORDINATOR", logicalOwnerID: "slot_coordinator" })
-    expect(value.inputCommands[0]).toMatchObject({ runID: "run_1", state: "CONSUMED" })
-    expect(value.attempts[0]).toMatchObject({ runID: "run_1", state: "RUNNING" })
+    expect(value.runtimeExecutions[0]).toMatchObject({ claimID: "claim_1", phase: "WORKING" })
+    expect(value.executionHistory[0]).toMatchObject({ summaryID: "summary_1", terminalKind: "COMPLETED" })
   })
 
-  test("strictly parses v7 runtime attention and retry diagnostics", () => {
+  test("strictly parses v8 runtime attention and retry diagnostics", () => {
     const value = parseMotryxControlSnapshot(snapshot({
       attentionItems: [{
         attentionID: "attention_provider_retry",
@@ -224,8 +221,8 @@ describe("Motryx typed control snapshot", () => {
         severity: "WARNING",
         scopeKind: "SESSION",
         role: "orchestrator",
-        runID: "run_control",
-        attemptID: "attempt_control",
+        claimID: "claim_control",
+        inputID: "input_control",
         summary: "Provider request failed with HTTP 503 and will retry.",
         reasonCode: "provider_internal",
         nextAction: "wait_for_provider_retry",
@@ -342,7 +339,7 @@ describe("Motryx typed control snapshot", () => {
       fetcher: async (input, init) => {
         request = new Request(input, init)
         return Response.json({
-          schemaVersion: 7,
+          schemaVersion: 8,
           incidentID: "incident_1",
           status: "OPEN",
           presentationState: "DISMISSED",
@@ -365,7 +362,7 @@ describe("Motryx typed control snapshot", () => {
 
 describe("Motryx typed Orchestrator sessions", () => {
   const sessions = () => ({
-    schemaVersion: 7,
+    schemaVersion: 8,
     projectID,
     status: "ROUTABLE",
     current: {

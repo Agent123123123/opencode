@@ -22,6 +22,7 @@ import { Model } from "@opencode-ai/schema/model"
 import { Location } from "@opencode-ai/schema/location"
 import { Revert } from "@opencode-ai/schema/revert"
 import { SessionEvent } from "@opencode-ai/schema/session-event"
+import { SessionReset } from "@opencode-ai/schema/session-reset"
 
 const SessionsQueryFields = {
   workspace: Workspace.ID.pipe(Schema.optional),
@@ -252,6 +253,22 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
         ),
     )
     .add(
+      HttpApiEndpoint.post("session.executionReset", "/api/session/:sessionID/execution-reset", {
+        params: { sessionID: Session.ID },
+        payload: SessionReset.Request,
+        success: Schema.Struct({ data: SessionReset.Receipt }),
+        error: [ConflictError, SessionNotFoundError],
+      })
+        .middleware(sessionLocationMiddleware)
+        .annotateMerge(
+          OpenApi.annotations({
+            identifier: "v2.session.executionReset",
+            summary: "Reset managed session execution",
+            description: "Durably terminalize old managed execution through an exact Session event cut.",
+          }),
+        ),
+    )
+    .add(
       HttpApiEndpoint.post("session.prompt", "/api/session/:sessionID/prompt", {
         params: { sessionID: Session.ID },
         payload: Schema.Struct({
@@ -259,6 +276,7 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
           prompt: PromptInput.Prompt,
           delivery: SessionInput.Delivery.pipe(Schema.optional),
           completionContract: SessionInput.CompletionContract.pipe(Schema.optional),
+          managedExecution: SessionInput.ManagedExecutionRef.pipe(Schema.optional),
           resume: Schema.Boolean.pipe(Schema.optional),
         }),
         success: Schema.Struct({ data: SessionInput.Admitted }),
@@ -459,4 +477,39 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
         title: "sessions",
         description: "Experimental session routes.",
       }),
+    )
+    .add(
+      HttpApiEndpoint.post("session.inputAuthorization.authorize", "/api/session/:sessionID/input/:inputID/authorization", {
+        params: { sessionID: Session.ID, inputID: SessionMessage.ID },
+        payload: SessionInput.ManagedInputAuthorization,
+        success: HttpApiSchema.NoContent,
+        error: [ConflictError, InvalidRequestError, SessionNotFoundError],
+      })
+        .middleware(sessionLocationMiddleware)
+        .annotateMerge(
+          OpenApi.annotations({
+            identifier: "v2.session.inputAuthorization.set",
+            summary: "Authorize one managed input",
+            description: "Install a process-local execution grant for one managed Session input and execution cell.",
+          }),
+        ),
+    )
+    .add(
+      HttpApiEndpoint.delete("session.inputAuthorization.unauthorize", "/api/session/:sessionID/input/:inputID/authorization", {
+        params: { sessionID: Session.ID, inputID: SessionMessage.ID },
+        payload: Schema.Struct({
+          claimID: Schema.String.check(Schema.isTrimmed(), Schema.isNonEmpty()),
+          cell: SessionInput.ExecutionCellRef,
+        }),
+        success: HttpApiSchema.NoContent,
+        error: [ConflictError, SessionNotFoundError],
+      })
+        .middleware(sessionLocationMiddleware)
+        .annotateMerge(
+          OpenApi.annotations({
+            identifier: "v2.session.inputAuthorization.revoke",
+            summary: "Revoke one managed input",
+            description: "Remove the exact process-local managed input execution grant.",
+          }),
+        ),
     )

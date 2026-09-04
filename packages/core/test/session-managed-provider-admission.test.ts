@@ -17,6 +17,7 @@ import { AbsolutePath } from "@opencode-ai/core/schema"
 import { SessionV2 } from "@opencode-ai/core/session"
 import { SessionEvent } from "@opencode-ai/core/session/event"
 import { SessionExecution } from "@opencode-ai/core/session/execution"
+import { SessionInput } from "@opencode-ai/core/session/input"
 import { SessionMessage } from "@opencode-ai/core/session/message"
 import { SessionModelSwitch } from "@opencode-ai/core/session/model-switch"
 import { Prompt } from "@opencode-ai/core/session/prompt"
@@ -195,11 +196,35 @@ describe("managed session provider admission", () => {
         terminalTools: ["submit_lane", "submit_pending"],
         correction: { maxSteps: 1 as const, instruction: "Call exactly one terminal submission tool now." },
       }
+      const managedExecution = SessionInput.ManagedExecutionRef.make({
+        schema: "motryx.managed_execution.v2",
+        origin: "FRAMEWORK",
+        productSessionID: created.id,
+        owner: { kind: "CONTROL_ROLE", id: "control_owner_test", generation: 1 },
+        checkpoint: { kind: "CONTROL", id: "control_owner_test", revision: 1 },
+        cell: {
+          supervisorIncarnationID: "supervisor_test",
+          hostIncarnationID: "host_test",
+          sidecarIncarnationID: "sidecar_test",
+        },
+        claimID: "run_test",
+      })
+      const missingReference = yield* session.prompt({
+        sessionID: created.id,
+        prompt: Prompt.make({ text: "controller input without execution identity" }),
+        completionContract: contract,
+        resume: false,
+      }).pipe(Effect.flip)
+      expect(missingReference).toMatchObject({
+        _tag: "Session.ManagedInputError",
+        reason: "execution_ref_required",
+      })
       const admitted = yield* session.prompt({
         id: inputID,
         sessionID: created.id,
         prompt: Prompt.make({ text: "complete the lane" }),
         completionContract: contract,
+        managedExecution,
         resume: false,
       })
       expect(admitted).toMatchObject({
@@ -215,6 +240,7 @@ describe("managed session provider admission", () => {
           sessionID: created.id,
           prompt: Prompt.make({ text: "complete the lane" }),
           completionContract: { ...contract, terminalTools: [...contract.terminalTools].reverse() },
+          managedExecution,
           resume: false,
         }),
       ).toEqual(admitted)
@@ -228,10 +254,27 @@ describe("managed session provider admission", () => {
             ...contract,
             correction: { maxSteps: 1, instruction: "Use another instruction." },
           },
+          managedExecution,
           resume: false,
         })
         .pipe(Effect.flip)
       expect(conflict).toMatchObject({ _tag: "Session.PromptConflictError", messageID: inputID })
+
+      const worker = yield* session.create({
+        location: Location.Ref.make({ directory: AbsolutePath.make("/managed-worker-direct-user") }),
+        agent: AgentV2.ID.make("coordinator"),
+        model: exactModel,
+        executionManaged: true,
+      })
+      const directWorker = yield* session.prompt({
+        sessionID: worker.id,
+        prompt: Prompt.make({ text: "direct user work must not enter a worker queue" }),
+        resume: false,
+      }).pipe(Effect.flip)
+      expect(directWorker).toMatchObject({
+        _tag: "Session.ManagedInputError",
+        reason: "direct_user_not_allowed",
+      })
     }),
   )
 })

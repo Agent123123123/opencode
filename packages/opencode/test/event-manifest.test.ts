@@ -9,10 +9,17 @@ describe("public event manifest", () => {
     expect(EventManifest.Definitions).toBe(SchemaEventManifest.Definitions)
     expect(EventManifest.Latest).toBe(SchemaEventManifest.Latest)
     expect(EventManifest.Durable).toBe(SchemaEventManifest.Durable)
-    expect(EventManifest.Latest.size).toBe(95)
+    expect(EventManifest.Latest.size).toBe(98)
     expect(EventManifest.Latest.get("session.turn.started")).toBe(SessionEvent.Turn.Started)
     expect(EventManifest.Latest.get("session.turn.not_started")).toBe(SessionEvent.Turn.NotStarted)
     expect(EventManifest.Latest.get("session.turn.settled")).toBe(SessionEvent.Turn.Settled)
+    expect(EventManifest.Latest.get("session.next.execution.reset.started")).toBe(
+      SessionEvent.ExecutionResetStarted,
+    )
+    expect(EventManifest.Latest.get("session.next.execution.reset")).toBe(SessionEvent.ExecutionReset)
+    expect(EventManifest.Latest.get("session.next.execution_gate.changed")).toBe(
+      SessionEvent.ExecutionGateChanged,
+    )
     expect(EventManifest.Latest.get("session.next.step.ended")).toBe(SessionEvent.Step.Ended)
     expect(EventManifest.Latest.get("todo.updated")).toBe(Todo.Event.Updated)
     expect(EventManifest.Latest.has("ide.installed")).toBe(false)

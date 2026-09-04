@@ -81,10 +81,12 @@ describe("Motryx product TUI", () => {
 function debugSnapshot(): MotryxControlSnapshot {
   const now = "2026-07-19T00:00:00.000Z"
   return {
-    schemaVersion: 7,
+    schemaVersion: 8,
     projectID: "/tmp/project",
     orchestratorSessionID: "ses_orch",
     projectionRevision: "server:revision",
+    runtimeCellEpoch: "host:sidecar",
+    runtimeOverlayRevision: 1,
     route: {
       state: "ROUTABLE",
       serverGeneration: "server",
@@ -118,7 +120,9 @@ function debugSnapshot(): MotryxControlSnapshot {
       {
         id: "lane_1",
         name: "Lane one",
-        status: "WORKING",
+        status: "OPEN",
+        stableStatus: "OPEN",
+        displayStatus: "WORKING",
         updatedAt: now,
         reopenCount: 0,
         repairCycle: 0,
@@ -147,9 +151,8 @@ function debugSnapshot(): MotryxControlSnapshot {
     resourceBlocks: [],
     incidents: [],
     functionSlots: [],
-    runs: [],
-    inputCommands: [],
-    attempts: [],
+    runtimeExecutions: [],
+    executionHistory: [],
     attentionItems: [],
     runtimeWarnings: [],
     attention: { visibleOpenIncidentCount: 0, failedLaneCount: 0, activeAttentionCount: 0, userActionRequiredCount: 0, retryingCount: 0 },

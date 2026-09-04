@@ -59,10 +59,66 @@ export const CompletionContractDigest = Schema.String.pipe(
 )
 export type CompletionContractDigest = typeof CompletionContractDigest.Type
 
+const ManagedExecutionID = Schema.String.check(Schema.isTrimmed(), Schema.isNonEmpty())
+
+export const ExecutionCellRef = Schema.Struct({
+  supervisorIncarnationID: ManagedExecutionID,
+  hostIncarnationID: ManagedExecutionID,
+  sidecarIncarnationID: ManagedExecutionID,
+}).annotate({ identifier: "SessionInput.ExecutionCellRef" })
+export interface ExecutionCellRef extends Schema.Schema.Type<typeof ExecutionCellRef> {}
+
+export const FrameworkManagedExecutionRef = Schema.Struct({
+  schema: Schema.Literal("motryx.managed_execution.v2"),
+  origin: Schema.Literal("FRAMEWORK"),
+  productSessionID: SessionID,
+  owner: Schema.Struct({
+    kind: Schema.Literals(["FUNCTION_SLOT", "CONTROL_ROLE"]),
+    id: ManagedExecutionID,
+    generation: NonNegativeInt,
+  }),
+  checkpoint: Schema.Struct({
+    kind: Schema.Literals(["LANE", "CONTROL"]),
+    id: ManagedExecutionID,
+    revision: NonNegativeInt,
+  }),
+  cell: ExecutionCellRef,
+  claimID: ManagedExecutionID,
+}).annotate({ identifier: "SessionInput.FrameworkManagedExecutionRef" })
+export interface FrameworkManagedExecutionRef
+  extends Schema.Schema.Type<typeof FrameworkManagedExecutionRef> {}
+
+export const DirectUserManagedExecutionRef = Schema.Struct({
+  schema: Schema.Literal("motryx.managed_execution.v2"),
+  origin: Schema.Literal("DIRECT_USER"),
+  productSessionID: SessionID,
+  owner: FrameworkManagedExecutionRef.fields.owner.pipe(optional),
+  checkpoint: FrameworkManagedExecutionRef.fields.checkpoint.pipe(optional),
+  cell: ExecutionCellRef.pipe(optional),
+  claimID: ManagedExecutionID.pipe(optional),
+}).annotate({ identifier: "SessionInput.DirectUserManagedExecutionRef" })
+export interface DirectUserManagedExecutionRef
+  extends Schema.Schema.Type<typeof DirectUserManagedExecutionRef> {}
+
+export const ManagedExecutionRef = Schema.Union([
+  FrameworkManagedExecutionRef,
+  DirectUserManagedExecutionRef,
+]).annotate({ identifier: "SessionInput.ManagedExecutionRef" })
+export type ManagedExecutionRef = Schema.Schema.Type<typeof ManagedExecutionRef>
+
+export const ManagedInputAuthorization = Schema.Struct({
+  claimID: ManagedExecutionID,
+  cell: ExecutionCellRef,
+  managedExecutionRef: ManagedExecutionRef,
+}).annotate({ identifier: "SessionInput.ManagedInputAuthorization" })
+export interface ManagedInputAuthorization
+  extends Schema.Schema.Type<typeof ManagedInputAuthorization> {}
+
 export const Completion = Schema.Struct({
   origin: CompletionContractOrigin,
   contract: CompletionContract,
   digest: CompletionContractDigest,
+  managedExecution: ManagedExecutionRef.pipe(optional),
 }).annotate({ identifier: "SessionInput.Completion" })
 export interface Completion extends Schema.Schema.Type<typeof Completion> {}
 

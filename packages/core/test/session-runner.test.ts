@@ -28,6 +28,7 @@ import { Snapshot } from "@opencode-ai/core/snapshot"
 import { ContextSnapshotDecodeError } from "@opencode-ai/core/session/error"
 import { SessionEvent } from "@opencode-ai/core/session/event"
 import { SessionInput } from "@opencode-ai/core/session/input"
+import { ManagedSessionAuthority } from "@opencode-ai/core/session/authority"
 import { SessionMessage } from "@opencode-ai/core/session/message"
 import { Prompt } from "@opencode-ai/core/session/prompt"
 import { SessionProjector } from "@opencode-ai/core/session/projector"
@@ -378,6 +379,33 @@ const requiredCompletion = (instruction = "Call echo now.") =>
     correction: { maxSteps: 1, instruction },
   })
 
+const managedExecutionRef = (id: SessionMessage.ID) => SessionInput.ManagedExecutionRef.make({
+  schema: "motryx.managed_execution.v2",
+  origin: "FRAMEWORK",
+  productSessionID: sessionID,
+  owner: { kind: "CONTROL_ROLE", id: "runner_test_owner", generation: 1 },
+  checkpoint: { kind: "CONTROL", id: "runner_test_owner", revision: 1 },
+  cell: {
+    supervisorIncarnationID: "runner_test_supervisor",
+    hostIncarnationID: "runner_test_host",
+    sidecarIncarnationID: "runner_test_sidecar",
+  },
+  claimID: `claim_${id}`,
+})
+
+const authorizeManagedInput = (id: SessionMessage.ID, ref: SessionInput.ManagedExecutionRef) => {
+  if (ref.origin !== "FRAMEWORK") throw new Error("runner fixture requires a framework reference")
+  ManagedSessionAuthority.grant(sessionID)
+  const result = ManagedSessionAuthority.authorizeInput({
+    sessionID,
+    inputID: id,
+    claimID: ref.claimID,
+    cell: ref.cell,
+    managedExecutionRef: ref,
+  })
+  if (result !== "authorized") throw new Error(`runner fixture input authorization failed: ${result}`)
+}
+
 const admitManagedInput = (text: string, instruction?: string) =>
   Effect.gen(function* () {
     const { db } = yield* Database.Service
@@ -395,13 +423,15 @@ const admitManagedInput = (text: string, instruction?: string) =>
       .run()
       .pipe(Effect.orDie)
     const id = SessionMessage.ID.create()
+    const managedExecution = managedExecutionRef(id)
     yield* SessionInput.admit(db, events, {
       id,
       sessionID,
       prompt: Prompt.make({ text }),
       delivery: "queue",
-      completion: SessionInput.makeCompletion("controller", requiredCompletion(instruction)),
+      completion: SessionInput.makeCompletion("controller", requiredCompletion(instruction), managedExecution),
     })
+    authorizeManagedInput(id, managedExecution)
     return id
   })
 
@@ -4176,13 +4206,18 @@ describe("SessionRunnerLLM", () => {
       const { db } = yield* Database.Service
       const events = yield* EventV2.Service
       const nextInputID = SessionMessage.ID.create()
+      const nextManagedExecution = managedExecutionRef(nextInputID)
       yield* SessionInput.admit(db, events, {
         id: nextInputID,
         sessionID,
         prompt: Prompt.make({ text: "Run after correction" }),
         delivery: "queue",
-        completion: SessionInput.ordinaryCompletion(),
+        completion: SessionInput.makeCompletion("controller", {
+          schema: "opencode.managed_completion.v1",
+          mode: "ordinary_stop",
+        }, nextManagedExecution),
       })
+      authorizeManagedInput(nextInputID, nextManagedExecution)
       responses = [
         fragmentFixture("text", "premature-stop", ["Done without tool"]).completeEvents,
         [

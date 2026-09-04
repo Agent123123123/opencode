@@ -461,6 +461,84 @@ export type SessionsSetOutput = {
   readonly data: { readonly managed: boolean; readonly open: boolean; readonly reason: string }
 }["data"]
 
+export type SessionsExecutionResetInput = {
+  readonly sessionID: { readonly sessionID: string }["sessionID"]
+  readonly schema: {
+    readonly schema: "opencode.managed_execution_reset.v1"
+    readonly resetID: string
+    readonly recoveryCellIncarnationID: string
+    readonly throughEventSeq: number
+    readonly policy: "worker_flush" | "primary_preserve_user"
+    readonly reason: "runtime_shutdown" | "process_lost"
+  }["schema"]
+  readonly resetID: {
+    readonly schema: "opencode.managed_execution_reset.v1"
+    readonly resetID: string
+    readonly recoveryCellIncarnationID: string
+    readonly throughEventSeq: number
+    readonly policy: "worker_flush" | "primary_preserve_user"
+    readonly reason: "runtime_shutdown" | "process_lost"
+  }["resetID"]
+  readonly recoveryCellIncarnationID: {
+    readonly schema: "opencode.managed_execution_reset.v1"
+    readonly resetID: string
+    readonly recoveryCellIncarnationID: string
+    readonly throughEventSeq: number
+    readonly policy: "worker_flush" | "primary_preserve_user"
+    readonly reason: "runtime_shutdown" | "process_lost"
+  }["recoveryCellIncarnationID"]
+  readonly throughEventSeq: {
+    readonly schema: "opencode.managed_execution_reset.v1"
+    readonly resetID: string
+    readonly recoveryCellIncarnationID: string
+    readonly throughEventSeq: number
+    readonly policy: "worker_flush" | "primary_preserve_user"
+    readonly reason: "runtime_shutdown" | "process_lost"
+  }["throughEventSeq"]
+  readonly policy: {
+    readonly schema: "opencode.managed_execution_reset.v1"
+    readonly resetID: string
+    readonly recoveryCellIncarnationID: string
+    readonly throughEventSeq: number
+    readonly policy: "worker_flush" | "primary_preserve_user"
+    readonly reason: "runtime_shutdown" | "process_lost"
+  }["policy"]
+  readonly reason: {
+    readonly schema: "opencode.managed_execution_reset.v1"
+    readonly resetID: string
+    readonly recoveryCellIncarnationID: string
+    readonly throughEventSeq: number
+    readonly policy: "worker_flush" | "primary_preserve_user"
+    readonly reason: "runtime_shutdown" | "process_lost"
+  }["reason"]
+}
+
+export type SessionsExecutionResetOutput = {
+  readonly data: {
+    readonly schema: "opencode.managed_execution_reset.v1"
+    readonly sessionID: string
+    readonly resetID: string
+    readonly recoveryCellIncarnationID: string
+    readonly throughEventSeq: number
+    readonly policy: "worker_flush" | "primary_preserve_user"
+    readonly reason: "runtime_shutdown" | "process_lost"
+    readonly canceledInputIDs: ReadonlyArray<string>
+    readonly notStarted: ReadonlyArray<{ readonly inputID: string; readonly turnID: string; readonly eventSeq: number }>
+    readonly tools: ReadonlyArray<{
+      readonly assistantMessageID: string
+      readonly callID: string
+      readonly outcome: "interrupted" | "outcome_unknown"
+      readonly eventSeq: number
+    }>
+    readonly turn?:
+      | { readonly turnID: string; readonly outcome: "interrupted" | "outcome_unknown"; readonly eventSeq: number }
+      | undefined
+    readonly preservedInputIDs: ReadonlyArray<string>
+    readonly idle: boolean
+    readonly resetSeq: number
+  }
+}["data"]
+
 export type SessionsPromptInput = {
   readonly sessionID: { readonly sessionID: string }["sessionID"]
   readonly id?: {
@@ -487,6 +565,48 @@ export type SessionsPromptInput = {
               readonly mode: "required_terminal_tool"
               readonly terminalTools: ReadonlyArray<string>
               readonly correction: { readonly maxSteps: 1; readonly instruction: string }
+            }
+        )
+      | null
+    readonly managedExecution?:
+      | (
+          | {
+              readonly schema: "motryx.managed_execution.v2"
+              readonly origin: "FRAMEWORK"
+              readonly productSessionID: string
+              readonly owner: {
+                readonly kind: "FUNCTION_SLOT" | "CONTROL_ROLE"
+                readonly id: string
+                readonly generation: number
+              }
+              readonly checkpoint: { readonly kind: "LANE" | "CONTROL"; readonly id: string; readonly revision: number }
+              readonly cell: {
+                readonly supervisorIncarnationID: string
+                readonly hostIncarnationID: string
+                readonly sidecarIncarnationID: string
+              }
+              readonly claimID: string
+            }
+          | {
+              readonly schema: "motryx.managed_execution.v2"
+              readonly origin: "DIRECT_USER"
+              readonly productSessionID: string
+              readonly owner?: {
+                readonly kind: "FUNCTION_SLOT" | "CONTROL_ROLE"
+                readonly id: string
+                readonly generation: number
+              }
+              readonly checkpoint?: {
+                readonly kind: "LANE" | "CONTROL"
+                readonly id: string
+                readonly revision: number
+              }
+              readonly cell?: {
+                readonly supervisorIncarnationID: string
+                readonly hostIncarnationID: string
+                readonly sidecarIncarnationID: string
+              }
+              readonly claimID?: string
             }
         )
       | null
@@ -519,6 +639,48 @@ export type SessionsPromptInput = {
             }
         )
       | null
+    readonly managedExecution?:
+      | (
+          | {
+              readonly schema: "motryx.managed_execution.v2"
+              readonly origin: "FRAMEWORK"
+              readonly productSessionID: string
+              readonly owner: {
+                readonly kind: "FUNCTION_SLOT" | "CONTROL_ROLE"
+                readonly id: string
+                readonly generation: number
+              }
+              readonly checkpoint: { readonly kind: "LANE" | "CONTROL"; readonly id: string; readonly revision: number }
+              readonly cell: {
+                readonly supervisorIncarnationID: string
+                readonly hostIncarnationID: string
+                readonly sidecarIncarnationID: string
+              }
+              readonly claimID: string
+            }
+          | {
+              readonly schema: "motryx.managed_execution.v2"
+              readonly origin: "DIRECT_USER"
+              readonly productSessionID: string
+              readonly owner?: {
+                readonly kind: "FUNCTION_SLOT" | "CONTROL_ROLE"
+                readonly id: string
+                readonly generation: number
+              }
+              readonly checkpoint?: {
+                readonly kind: "LANE" | "CONTROL"
+                readonly id: string
+                readonly revision: number
+              }
+              readonly cell?: {
+                readonly supervisorIncarnationID: string
+                readonly hostIncarnationID: string
+                readonly sidecarIncarnationID: string
+              }
+              readonly claimID?: string
+            }
+        )
+      | null
     readonly resume?: boolean | null
   }["prompt"]
   readonly delivery?: {
@@ -545,6 +707,48 @@ export type SessionsPromptInput = {
               readonly mode: "required_terminal_tool"
               readonly terminalTools: ReadonlyArray<string>
               readonly correction: { readonly maxSteps: 1; readonly instruction: string }
+            }
+        )
+      | null
+    readonly managedExecution?:
+      | (
+          | {
+              readonly schema: "motryx.managed_execution.v2"
+              readonly origin: "FRAMEWORK"
+              readonly productSessionID: string
+              readonly owner: {
+                readonly kind: "FUNCTION_SLOT" | "CONTROL_ROLE"
+                readonly id: string
+                readonly generation: number
+              }
+              readonly checkpoint: { readonly kind: "LANE" | "CONTROL"; readonly id: string; readonly revision: number }
+              readonly cell: {
+                readonly supervisorIncarnationID: string
+                readonly hostIncarnationID: string
+                readonly sidecarIncarnationID: string
+              }
+              readonly claimID: string
+            }
+          | {
+              readonly schema: "motryx.managed_execution.v2"
+              readonly origin: "DIRECT_USER"
+              readonly productSessionID: string
+              readonly owner?: {
+                readonly kind: "FUNCTION_SLOT" | "CONTROL_ROLE"
+                readonly id: string
+                readonly generation: number
+              }
+              readonly checkpoint?: {
+                readonly kind: "LANE" | "CONTROL"
+                readonly id: string
+                readonly revision: number
+              }
+              readonly cell?: {
+                readonly supervisorIncarnationID: string
+                readonly hostIncarnationID: string
+                readonly sidecarIncarnationID: string
+              }
+              readonly claimID?: string
             }
         )
       | null
@@ -577,8 +781,121 @@ export type SessionsPromptInput = {
             }
         )
       | null
+    readonly managedExecution?:
+      | (
+          | {
+              readonly schema: "motryx.managed_execution.v2"
+              readonly origin: "FRAMEWORK"
+              readonly productSessionID: string
+              readonly owner: {
+                readonly kind: "FUNCTION_SLOT" | "CONTROL_ROLE"
+                readonly id: string
+                readonly generation: number
+              }
+              readonly checkpoint: { readonly kind: "LANE" | "CONTROL"; readonly id: string; readonly revision: number }
+              readonly cell: {
+                readonly supervisorIncarnationID: string
+                readonly hostIncarnationID: string
+                readonly sidecarIncarnationID: string
+              }
+              readonly claimID: string
+            }
+          | {
+              readonly schema: "motryx.managed_execution.v2"
+              readonly origin: "DIRECT_USER"
+              readonly productSessionID: string
+              readonly owner?: {
+                readonly kind: "FUNCTION_SLOT" | "CONTROL_ROLE"
+                readonly id: string
+                readonly generation: number
+              }
+              readonly checkpoint?: {
+                readonly kind: "LANE" | "CONTROL"
+                readonly id: string
+                readonly revision: number
+              }
+              readonly cell?: {
+                readonly supervisorIncarnationID: string
+                readonly hostIncarnationID: string
+                readonly sidecarIncarnationID: string
+              }
+              readonly claimID?: string
+            }
+        )
+      | null
     readonly resume?: boolean | null
   }["completionContract"]
+  readonly managedExecution?: {
+    readonly id?: string | null
+    readonly prompt: {
+      readonly text: string
+      readonly files?: ReadonlyArray<{
+        readonly uri: string
+        readonly name?: string
+        readonly description?: string
+        readonly source?: { readonly start: number; readonly end: number; readonly text: string }
+      }>
+      readonly agents?: ReadonlyArray<{
+        readonly name: string
+        readonly source?: { readonly start: number; readonly end: number; readonly text: string }
+      }>
+    }
+    readonly delivery?: "steer" | "queue" | null
+    readonly completionContract?:
+      | (
+          | { readonly schema: "opencode.managed_completion.v1"; readonly mode: "ordinary_stop" }
+          | {
+              readonly schema: "opencode.managed_completion.v1"
+              readonly mode: "required_terminal_tool"
+              readonly terminalTools: ReadonlyArray<string>
+              readonly correction: { readonly maxSteps: 1; readonly instruction: string }
+            }
+        )
+      | null
+    readonly managedExecution?:
+      | (
+          | {
+              readonly schema: "motryx.managed_execution.v2"
+              readonly origin: "FRAMEWORK"
+              readonly productSessionID: string
+              readonly owner: {
+                readonly kind: "FUNCTION_SLOT" | "CONTROL_ROLE"
+                readonly id: string
+                readonly generation: number
+              }
+              readonly checkpoint: { readonly kind: "LANE" | "CONTROL"; readonly id: string; readonly revision: number }
+              readonly cell: {
+                readonly supervisorIncarnationID: string
+                readonly hostIncarnationID: string
+                readonly sidecarIncarnationID: string
+              }
+              readonly claimID: string
+            }
+          | {
+              readonly schema: "motryx.managed_execution.v2"
+              readonly origin: "DIRECT_USER"
+              readonly productSessionID: string
+              readonly owner?: {
+                readonly kind: "FUNCTION_SLOT" | "CONTROL_ROLE"
+                readonly id: string
+                readonly generation: number
+              }
+              readonly checkpoint?: {
+                readonly kind: "LANE" | "CONTROL"
+                readonly id: string
+                readonly revision: number
+              }
+              readonly cell?: {
+                readonly supervisorIncarnationID: string
+                readonly hostIncarnationID: string
+                readonly sidecarIncarnationID: string
+              }
+              readonly claimID?: string
+            }
+        )
+      | null
+    readonly resume?: boolean | null
+  }["managedExecution"]
   readonly resume?: {
     readonly id?: string | null
     readonly prompt: {
@@ -603,6 +920,48 @@ export type SessionsPromptInput = {
               readonly mode: "required_terminal_tool"
               readonly terminalTools: ReadonlyArray<string>
               readonly correction: { readonly maxSteps: 1; readonly instruction: string }
+            }
+        )
+      | null
+    readonly managedExecution?:
+      | (
+          | {
+              readonly schema: "motryx.managed_execution.v2"
+              readonly origin: "FRAMEWORK"
+              readonly productSessionID: string
+              readonly owner: {
+                readonly kind: "FUNCTION_SLOT" | "CONTROL_ROLE"
+                readonly id: string
+                readonly generation: number
+              }
+              readonly checkpoint: { readonly kind: "LANE" | "CONTROL"; readonly id: string; readonly revision: number }
+              readonly cell: {
+                readonly supervisorIncarnationID: string
+                readonly hostIncarnationID: string
+                readonly sidecarIncarnationID: string
+              }
+              readonly claimID: string
+            }
+          | {
+              readonly schema: "motryx.managed_execution.v2"
+              readonly origin: "DIRECT_USER"
+              readonly productSessionID: string
+              readonly owner?: {
+                readonly kind: "FUNCTION_SLOT" | "CONTROL_ROLE"
+                readonly id: string
+                readonly generation: number
+              }
+              readonly checkpoint?: {
+                readonly kind: "LANE" | "CONTROL"
+                readonly id: string
+                readonly revision: number
+              }
+              readonly cell?: {
+                readonly supervisorIncarnationID: string
+                readonly hostIncarnationID: string
+                readonly sidecarIncarnationID: string
+              }
+              readonly claimID?: string
             }
         )
       | null
@@ -641,6 +1000,41 @@ export type SessionsPromptOutput = {
             readonly correction: { readonly maxSteps: 1; readonly instruction: string }
           }
       readonly digest: string
+      readonly managedExecution?:
+        | {
+            readonly schema: "motryx.managed_execution.v2"
+            readonly origin: "FRAMEWORK"
+            readonly productSessionID: string
+            readonly owner: {
+              readonly kind: "FUNCTION_SLOT" | "CONTROL_ROLE"
+              readonly id: string
+              readonly generation: number
+            }
+            readonly checkpoint: { readonly kind: "LANE" | "CONTROL"; readonly id: string; readonly revision: number }
+            readonly cell: {
+              readonly supervisorIncarnationID: string
+              readonly hostIncarnationID: string
+              readonly sidecarIncarnationID: string
+            }
+            readonly claimID: string
+          }
+        | {
+            readonly schema: "motryx.managed_execution.v2"
+            readonly origin: "DIRECT_USER"
+            readonly productSessionID: string
+            readonly owner?: {
+              readonly kind: "FUNCTION_SLOT" | "CONTROL_ROLE"
+              readonly id: string
+              readonly generation: number
+            }
+            readonly checkpoint?: { readonly kind: "LANE" | "CONTROL"; readonly id: string; readonly revision: number }
+            readonly cell?: {
+              readonly supervisorIncarnationID: string
+              readonly hostIncarnationID: string
+              readonly sidecarIncarnationID: string
+            }
+            readonly claimID?: string
+          }
     }
     readonly timeCreated: number
     readonly promotedSeq?: number
@@ -687,6 +1081,49 @@ export type SessionsInputOutput = {
                   readonly correction: { readonly maxSteps: 1; readonly instruction: string }
                 }
             readonly digest: string
+            readonly managedExecution?:
+              | {
+                  readonly schema: "motryx.managed_execution.v2"
+                  readonly origin: "FRAMEWORK"
+                  readonly productSessionID: string
+                  readonly owner: {
+                    readonly kind: "FUNCTION_SLOT" | "CONTROL_ROLE"
+                    readonly id: string
+                    readonly generation: number
+                  }
+                  readonly checkpoint: {
+                    readonly kind: "LANE" | "CONTROL"
+                    readonly id: string
+                    readonly revision: number
+                  }
+                  readonly cell: {
+                    readonly supervisorIncarnationID: string
+                    readonly hostIncarnationID: string
+                    readonly sidecarIncarnationID: string
+                  }
+                  readonly claimID: string
+                }
+              | {
+                  readonly schema: "motryx.managed_execution.v2"
+                  readonly origin: "DIRECT_USER"
+                  readonly productSessionID: string
+                  readonly owner?: {
+                    readonly kind: "FUNCTION_SLOT" | "CONTROL_ROLE"
+                    readonly id: string
+                    readonly generation: number
+                  }
+                  readonly checkpoint?: {
+                    readonly kind: "LANE" | "CONTROL"
+                    readonly id: string
+                    readonly revision: number
+                  }
+                  readonly cell?: {
+                    readonly supervisorIncarnationID: string
+                    readonly hostIncarnationID: string
+                    readonly sidecarIncarnationID: string
+                  }
+                  readonly claimID?: string
+                }
           }
           readonly timeCreated: number
           readonly promotedSeq?: number
@@ -724,6 +1161,49 @@ export type SessionsInputOutput = {
                   readonly correction: { readonly maxSteps: 1; readonly instruction: string }
                 }
             readonly digest: string
+            readonly managedExecution?:
+              | {
+                  readonly schema: "motryx.managed_execution.v2"
+                  readonly origin: "FRAMEWORK"
+                  readonly productSessionID: string
+                  readonly owner: {
+                    readonly kind: "FUNCTION_SLOT" | "CONTROL_ROLE"
+                    readonly id: string
+                    readonly generation: number
+                  }
+                  readonly checkpoint: {
+                    readonly kind: "LANE" | "CONTROL"
+                    readonly id: string
+                    readonly revision: number
+                  }
+                  readonly cell: {
+                    readonly supervisorIncarnationID: string
+                    readonly hostIncarnationID: string
+                    readonly sidecarIncarnationID: string
+                  }
+                  readonly claimID: string
+                }
+              | {
+                  readonly schema: "motryx.managed_execution.v2"
+                  readonly origin: "DIRECT_USER"
+                  readonly productSessionID: string
+                  readonly owner?: {
+                    readonly kind: "FUNCTION_SLOT" | "CONTROL_ROLE"
+                    readonly id: string
+                    readonly generation: number
+                  }
+                  readonly checkpoint?: {
+                    readonly kind: "LANE" | "CONTROL"
+                    readonly id: string
+                    readonly revision: number
+                  }
+                  readonly cell?: {
+                    readonly supervisorIncarnationID: string
+                    readonly hostIncarnationID: string
+                    readonly sidecarIncarnationID: string
+                  }
+                  readonly claimID?: string
+                }
           }
           readonly timeCreated: number
           readonly promotedSeq?: number
@@ -792,6 +1272,49 @@ export type SessionsCancelOutput = {
                         readonly correction: { readonly maxSteps: 1; readonly instruction: string }
                       }
                   readonly digest: string
+                  readonly managedExecution?:
+                    | {
+                        readonly schema: "motryx.managed_execution.v2"
+                        readonly origin: "FRAMEWORK"
+                        readonly productSessionID: string
+                        readonly owner: {
+                          readonly kind: "FUNCTION_SLOT" | "CONTROL_ROLE"
+                          readonly id: string
+                          readonly generation: number
+                        }
+                        readonly checkpoint: {
+                          readonly kind: "LANE" | "CONTROL"
+                          readonly id: string
+                          readonly revision: number
+                        }
+                        readonly cell: {
+                          readonly supervisorIncarnationID: string
+                          readonly hostIncarnationID: string
+                          readonly sidecarIncarnationID: string
+                        }
+                        readonly claimID: string
+                      }
+                    | {
+                        readonly schema: "motryx.managed_execution.v2"
+                        readonly origin: "DIRECT_USER"
+                        readonly productSessionID: string
+                        readonly owner?: {
+                          readonly kind: "FUNCTION_SLOT" | "CONTROL_ROLE"
+                          readonly id: string
+                          readonly generation: number
+                        }
+                        readonly checkpoint?: {
+                          readonly kind: "LANE" | "CONTROL"
+                          readonly id: string
+                          readonly revision: number
+                        }
+                        readonly cell?: {
+                          readonly supervisorIncarnationID: string
+                          readonly hostIncarnationID: string
+                          readonly sidecarIncarnationID: string
+                        }
+                        readonly claimID?: string
+                      }
                 }
                 readonly timeCreated: number
                 readonly promotedSeq?: number
@@ -829,6 +1352,49 @@ export type SessionsCancelOutput = {
                         readonly correction: { readonly maxSteps: 1; readonly instruction: string }
                       }
                   readonly digest: string
+                  readonly managedExecution?:
+                    | {
+                        readonly schema: "motryx.managed_execution.v2"
+                        readonly origin: "FRAMEWORK"
+                        readonly productSessionID: string
+                        readonly owner: {
+                          readonly kind: "FUNCTION_SLOT" | "CONTROL_ROLE"
+                          readonly id: string
+                          readonly generation: number
+                        }
+                        readonly checkpoint: {
+                          readonly kind: "LANE" | "CONTROL"
+                          readonly id: string
+                          readonly revision: number
+                        }
+                        readonly cell: {
+                          readonly supervisorIncarnationID: string
+                          readonly hostIncarnationID: string
+                          readonly sidecarIncarnationID: string
+                        }
+                        readonly claimID: string
+                      }
+                    | {
+                        readonly schema: "motryx.managed_execution.v2"
+                        readonly origin: "DIRECT_USER"
+                        readonly productSessionID: string
+                        readonly owner?: {
+                          readonly kind: "FUNCTION_SLOT" | "CONTROL_ROLE"
+                          readonly id: string
+                          readonly generation: number
+                        }
+                        readonly checkpoint?: {
+                          readonly kind: "LANE" | "CONTROL"
+                          readonly id: string
+                          readonly revision: number
+                        }
+                        readonly cell?: {
+                          readonly supervisorIncarnationID: string
+                          readonly hostIncarnationID: string
+                          readonly sidecarIncarnationID: string
+                        }
+                        readonly claimID?: string
+                      }
                 }
                 readonly timeCreated: number
                 readonly promotedSeq?: number
@@ -881,6 +1447,49 @@ export type SessionsCancelOutput = {
                         readonly correction: { readonly maxSteps: 1; readonly instruction: string }
                       }
                   readonly digest: string
+                  readonly managedExecution?:
+                    | {
+                        readonly schema: "motryx.managed_execution.v2"
+                        readonly origin: "FRAMEWORK"
+                        readonly productSessionID: string
+                        readonly owner: {
+                          readonly kind: "FUNCTION_SLOT" | "CONTROL_ROLE"
+                          readonly id: string
+                          readonly generation: number
+                        }
+                        readonly checkpoint: {
+                          readonly kind: "LANE" | "CONTROL"
+                          readonly id: string
+                          readonly revision: number
+                        }
+                        readonly cell: {
+                          readonly supervisorIncarnationID: string
+                          readonly hostIncarnationID: string
+                          readonly sidecarIncarnationID: string
+                        }
+                        readonly claimID: string
+                      }
+                    | {
+                        readonly schema: "motryx.managed_execution.v2"
+                        readonly origin: "DIRECT_USER"
+                        readonly productSessionID: string
+                        readonly owner?: {
+                          readonly kind: "FUNCTION_SLOT" | "CONTROL_ROLE"
+                          readonly id: string
+                          readonly generation: number
+                        }
+                        readonly checkpoint?: {
+                          readonly kind: "LANE" | "CONTROL"
+                          readonly id: string
+                          readonly revision: number
+                        }
+                        readonly cell?: {
+                          readonly supervisorIncarnationID: string
+                          readonly hostIncarnationID: string
+                          readonly sidecarIncarnationID: string
+                        }
+                        readonly claimID?: string
+                      }
                 }
                 readonly timeCreated: number
                 readonly promotedSeq?: number
@@ -918,6 +1527,49 @@ export type SessionsCancelOutput = {
                         readonly correction: { readonly maxSteps: 1; readonly instruction: string }
                       }
                   readonly digest: string
+                  readonly managedExecution?:
+                    | {
+                        readonly schema: "motryx.managed_execution.v2"
+                        readonly origin: "FRAMEWORK"
+                        readonly productSessionID: string
+                        readonly owner: {
+                          readonly kind: "FUNCTION_SLOT" | "CONTROL_ROLE"
+                          readonly id: string
+                          readonly generation: number
+                        }
+                        readonly checkpoint: {
+                          readonly kind: "LANE" | "CONTROL"
+                          readonly id: string
+                          readonly revision: number
+                        }
+                        readonly cell: {
+                          readonly supervisorIncarnationID: string
+                          readonly hostIncarnationID: string
+                          readonly sidecarIncarnationID: string
+                        }
+                        readonly claimID: string
+                      }
+                    | {
+                        readonly schema: "motryx.managed_execution.v2"
+                        readonly origin: "DIRECT_USER"
+                        readonly productSessionID: string
+                        readonly owner?: {
+                          readonly kind: "FUNCTION_SLOT" | "CONTROL_ROLE"
+                          readonly id: string
+                          readonly generation: number
+                        }
+                        readonly checkpoint?: {
+                          readonly kind: "LANE" | "CONTROL"
+                          readonly id: string
+                          readonly revision: number
+                        }
+                        readonly cell?: {
+                          readonly supervisorIncarnationID: string
+                          readonly hostIncarnationID: string
+                          readonly sidecarIncarnationID: string
+                        }
+                        readonly claimID?: string
+                      }
                 }
                 readonly timeCreated: number
                 readonly promotedSeq?: number
@@ -1233,6 +1885,49 @@ export type SessionsHistoryOutput = {
                   readonly correction: { readonly maxSteps: 1; readonly instruction: string }
                 }
             readonly digest: string
+            readonly managedExecution?:
+              | {
+                  readonly schema: "motryx.managed_execution.v2"
+                  readonly origin: "FRAMEWORK"
+                  readonly productSessionID: string
+                  readonly owner: {
+                    readonly kind: "FUNCTION_SLOT" | "CONTROL_ROLE"
+                    readonly id: string
+                    readonly generation: number
+                  }
+                  readonly checkpoint: {
+                    readonly kind: "LANE" | "CONTROL"
+                    readonly id: string
+                    readonly revision: number
+                  }
+                  readonly cell: {
+                    readonly supervisorIncarnationID: string
+                    readonly hostIncarnationID: string
+                    readonly sidecarIncarnationID: string
+                  }
+                  readonly claimID: string
+                }
+              | {
+                  readonly schema: "motryx.managed_execution.v2"
+                  readonly origin: "DIRECT_USER"
+                  readonly productSessionID: string
+                  readonly owner?: {
+                    readonly kind: "FUNCTION_SLOT" | "CONTROL_ROLE"
+                    readonly id: string
+                    readonly generation: number
+                  }
+                  readonly checkpoint?: {
+                    readonly kind: "LANE" | "CONTROL"
+                    readonly id: string
+                    readonly revision: number
+                  }
+                  readonly cell?: {
+                    readonly supervisorIncarnationID: string
+                    readonly hostIncarnationID: string
+                    readonly sidecarIncarnationID: string
+                  }
+                  readonly claimID?: string
+                }
           }
         }
       }
@@ -1272,7 +1967,51 @@ export type SessionsHistoryOutput = {
                   readonly correction: { readonly maxSteps: 1; readonly instruction: string }
                 }
             readonly digest: string
+            readonly managedExecution?:
+              | {
+                  readonly schema: "motryx.managed_execution.v2"
+                  readonly origin: "FRAMEWORK"
+                  readonly productSessionID: string
+                  readonly owner: {
+                    readonly kind: "FUNCTION_SLOT" | "CONTROL_ROLE"
+                    readonly id: string
+                    readonly generation: number
+                  }
+                  readonly checkpoint: {
+                    readonly kind: "LANE" | "CONTROL"
+                    readonly id: string
+                    readonly revision: number
+                  }
+                  readonly cell: {
+                    readonly supervisorIncarnationID: string
+                    readonly hostIncarnationID: string
+                    readonly sidecarIncarnationID: string
+                  }
+                  readonly claimID: string
+                }
+              | {
+                  readonly schema: "motryx.managed_execution.v2"
+                  readonly origin: "DIRECT_USER"
+                  readonly productSessionID: string
+                  readonly owner?: {
+                    readonly kind: "FUNCTION_SLOT" | "CONTROL_ROLE"
+                    readonly id: string
+                    readonly generation: number
+                  }
+                  readonly checkpoint?: {
+                    readonly kind: "LANE" | "CONTROL"
+                    readonly id: string
+                    readonly revision: number
+                  }
+                  readonly cell?: {
+                    readonly supervisorIncarnationID: string
+                    readonly hostIncarnationID: string
+                    readonly sidecarIncarnationID: string
+                  }
+                  readonly claimID?: string
+                }
           }
+          readonly resumeRequested?: boolean
         }
       }
     | {
@@ -1288,6 +2027,11 @@ export type SessionsHistoryOutput = {
           readonly origin: "user" | "framework" | "runtime_shutdown" | "stale" | "business"
           readonly reason: string
           readonly inputVisibility: "missing" | "admitted_unpromoted"
+          readonly executionReset?: {
+            readonly resetID: string
+            readonly recoveryCellIncarnationID: string
+            readonly reason: "runtime_shutdown" | "process_lost"
+          }
         }
       }
     | {
@@ -1301,6 +2045,115 @@ export type SessionsHistoryOutput = {
           readonly sessionID: string
           readonly open: boolean
           readonly reason: string
+        }
+      }
+    | {
+        readonly id: string
+        readonly metadata?: { readonly [x: string]: JsonValue }
+        readonly type: "session.next.execution.reset.started"
+        readonly durable?: { readonly aggregateID: string; readonly seq: number; readonly version: number }
+        readonly location?: { readonly directory: string; readonly workspaceID?: string }
+        readonly data: {
+          readonly schema: "opencode.managed_execution_reset.v1"
+          readonly sessionID: string
+          readonly resetID: string
+          readonly recoveryCellIncarnationID: string
+          readonly throughEventSeq: number
+          readonly policy: "worker_flush" | "primary_preserve_user"
+          readonly reason: "runtime_shutdown" | "process_lost"
+          readonly cancelInputIDs: ReadonlyArray<string>
+          readonly notStartedInputIDs: ReadonlyArray<string>
+          readonly tools: ReadonlyArray<{
+            readonly assistantMessageID: string
+            readonly callID: string
+            readonly outcome: "interrupted" | "outcome_unknown"
+            readonly providerExecuted: boolean
+          }>
+          readonly turn?: {
+            readonly turnID: string
+            readonly turnStartedAt: number
+            readonly activityInputIDs: ReadonlyArray<string>
+            readonly outcome: "interrupted" | "outcome_unknown"
+            readonly managedExecution?:
+              | {
+                  readonly schema: "motryx.managed_execution.v2"
+                  readonly origin: "FRAMEWORK"
+                  readonly productSessionID: string
+                  readonly owner: {
+                    readonly kind: "FUNCTION_SLOT" | "CONTROL_ROLE"
+                    readonly id: string
+                    readonly generation: number
+                  }
+                  readonly checkpoint: {
+                    readonly kind: "LANE" | "CONTROL"
+                    readonly id: string
+                    readonly revision: number
+                  }
+                  readonly cell: {
+                    readonly supervisorIncarnationID: string
+                    readonly hostIncarnationID: string
+                    readonly sidecarIncarnationID: string
+                  }
+                  readonly claimID: string
+                }
+              | {
+                  readonly schema: "motryx.managed_execution.v2"
+                  readonly origin: "DIRECT_USER"
+                  readonly productSessionID: string
+                  readonly owner?: {
+                    readonly kind: "FUNCTION_SLOT" | "CONTROL_ROLE"
+                    readonly id: string
+                    readonly generation: number
+                  }
+                  readonly checkpoint?: {
+                    readonly kind: "LANE" | "CONTROL"
+                    readonly id: string
+                    readonly revision: number
+                  }
+                  readonly cell?: {
+                    readonly supervisorIncarnationID: string
+                    readonly hostIncarnationID: string
+                    readonly sidecarIncarnationID: string
+                  }
+                  readonly claimID?: string
+                }
+          }
+          readonly preservedInputIDs: ReadonlyArray<string>
+        }
+      }
+    | {
+        readonly id: string
+        readonly metadata?: { readonly [x: string]: JsonValue }
+        readonly type: "session.next.execution.reset"
+        readonly durable?: { readonly aggregateID: string; readonly seq: number; readonly version: number }
+        readonly location?: { readonly directory: string; readonly workspaceID?: string }
+        readonly data: {
+          readonly schema: "opencode.managed_execution_reset.v1"
+          readonly sessionID: string
+          readonly resetID: string
+          readonly recoveryCellIncarnationID: string
+          readonly throughEventSeq: number
+          readonly policy: "worker_flush" | "primary_preserve_user"
+          readonly reason: "runtime_shutdown" | "process_lost"
+          readonly canceledInputIDs: ReadonlyArray<string>
+          readonly notStarted: ReadonlyArray<{
+            readonly inputID: string
+            readonly turnID: string
+            readonly eventSeq: number
+          }>
+          readonly tools: ReadonlyArray<{
+            readonly assistantMessageID: string
+            readonly callID: string
+            readonly outcome: "interrupted" | "outcome_unknown"
+            readonly eventSeq: number
+          }>
+          readonly turn?: {
+            readonly turnID: string
+            readonly outcome: "interrupted" | "outcome_unknown"
+            readonly eventSeq: number
+          } | null
+          readonly preservedInputIDs: ReadonlyArray<string>
+          readonly idle: boolean
         }
       }
     | {
@@ -1329,6 +2182,49 @@ export type SessionsHistoryOutput = {
           readonly turnStartedAt: number
           readonly activityInputIDs: ReadonlyArray<string>
           readonly completionContractDigest?: string
+          readonly managedExecution?:
+            | {
+                readonly schema: "motryx.managed_execution.v2"
+                readonly origin: "FRAMEWORK"
+                readonly productSessionID: string
+                readonly owner: {
+                  readonly kind: "FUNCTION_SLOT" | "CONTROL_ROLE"
+                  readonly id: string
+                  readonly generation: number
+                }
+                readonly checkpoint: {
+                  readonly kind: "LANE" | "CONTROL"
+                  readonly id: string
+                  readonly revision: number
+                }
+                readonly cell: {
+                  readonly supervisorIncarnationID: string
+                  readonly hostIncarnationID: string
+                  readonly sidecarIncarnationID: string
+                }
+                readonly claimID: string
+              }
+            | {
+                readonly schema: "motryx.managed_execution.v2"
+                readonly origin: "DIRECT_USER"
+                readonly productSessionID: string
+                readonly owner?: {
+                  readonly kind: "FUNCTION_SLOT" | "CONTROL_ROLE"
+                  readonly id: string
+                  readonly generation: number
+                }
+                readonly checkpoint?: {
+                  readonly kind: "LANE" | "CONTROL"
+                  readonly id: string
+                  readonly revision: number
+                }
+                readonly cell?: {
+                  readonly supervisorIncarnationID: string
+                  readonly hostIncarnationID: string
+                  readonly sidecarIncarnationID: string
+                }
+                readonly claimID?: string
+              }
         }
       }
     | {
@@ -1368,6 +2264,54 @@ export type SessionsHistoryOutput = {
             readonly attemptCount: number | "Infinity" | "-Infinity" | "NaN"
             readonly providerID?: string
             readonly modelID?: string
+          }
+          readonly managedExecution?:
+            | {
+                readonly schema: "motryx.managed_execution.v2"
+                readonly origin: "FRAMEWORK"
+                readonly productSessionID: string
+                readonly owner: {
+                  readonly kind: "FUNCTION_SLOT" | "CONTROL_ROLE"
+                  readonly id: string
+                  readonly generation: number
+                }
+                readonly checkpoint: {
+                  readonly kind: "LANE" | "CONTROL"
+                  readonly id: string
+                  readonly revision: number
+                }
+                readonly cell: {
+                  readonly supervisorIncarnationID: string
+                  readonly hostIncarnationID: string
+                  readonly sidecarIncarnationID: string
+                }
+                readonly claimID: string
+              }
+            | {
+                readonly schema: "motryx.managed_execution.v2"
+                readonly origin: "DIRECT_USER"
+                readonly productSessionID: string
+                readonly owner?: {
+                  readonly kind: "FUNCTION_SLOT" | "CONTROL_ROLE"
+                  readonly id: string
+                  readonly generation: number
+                }
+                readonly checkpoint?: {
+                  readonly kind: "LANE" | "CONTROL"
+                  readonly id: string
+                  readonly revision: number
+                }
+                readonly cell?: {
+                  readonly supervisorIncarnationID: string
+                  readonly hostIncarnationID: string
+                  readonly sidecarIncarnationID: string
+                }
+                readonly claimID?: string
+              }
+          readonly executionReset?: {
+            readonly resetID: string
+            readonly recoveryCellIncarnationID: string
+            readonly reason: "runtime_shutdown" | "process_lost"
           }
         }
       }
@@ -1457,6 +2401,54 @@ export type SessionsHistoryOutput = {
             readonly attemptCount: number | "Infinity" | "-Infinity" | "NaN"
             readonly providerID?: string
             readonly modelID?: string
+          }
+          readonly managedExecution?:
+            | {
+                readonly schema: "motryx.managed_execution.v2"
+                readonly origin: "FRAMEWORK"
+                readonly productSessionID: string
+                readonly owner: {
+                  readonly kind: "FUNCTION_SLOT" | "CONTROL_ROLE"
+                  readonly id: string
+                  readonly generation: number
+                }
+                readonly checkpoint: {
+                  readonly kind: "LANE" | "CONTROL"
+                  readonly id: string
+                  readonly revision: number
+                }
+                readonly cell: {
+                  readonly supervisorIncarnationID: string
+                  readonly hostIncarnationID: string
+                  readonly sidecarIncarnationID: string
+                }
+                readonly claimID: string
+              }
+            | {
+                readonly schema: "motryx.managed_execution.v2"
+                readonly origin: "DIRECT_USER"
+                readonly productSessionID: string
+                readonly owner?: {
+                  readonly kind: "FUNCTION_SLOT" | "CONTROL_ROLE"
+                  readonly id: string
+                  readonly generation: number
+                }
+                readonly checkpoint?: {
+                  readonly kind: "LANE" | "CONTROL"
+                  readonly id: string
+                  readonly revision: number
+                }
+                readonly cell?: {
+                  readonly supervisorIncarnationID: string
+                  readonly hostIncarnationID: string
+                  readonly sidecarIncarnationID: string
+                }
+                readonly claimID?: string
+              }
+          readonly executionReset?: {
+            readonly resetID: string
+            readonly recoveryCellIncarnationID: string
+            readonly reason: "runtime_shutdown" | "process_lost"
           }
         }
       }
@@ -1588,6 +2580,49 @@ export type SessionsHistoryOutput = {
           readonly sessionID: string
           readonly assistantMessageID: string
           readonly callID: string
+          readonly managedExecution?:
+            | {
+                readonly schema: "motryx.managed_execution.v2"
+                readonly origin: "FRAMEWORK"
+                readonly productSessionID: string
+                readonly owner: {
+                  readonly kind: "FUNCTION_SLOT" | "CONTROL_ROLE"
+                  readonly id: string
+                  readonly generation: number
+                }
+                readonly checkpoint: {
+                  readonly kind: "LANE" | "CONTROL"
+                  readonly id: string
+                  readonly revision: number
+                }
+                readonly cell: {
+                  readonly supervisorIncarnationID: string
+                  readonly hostIncarnationID: string
+                  readonly sidecarIncarnationID: string
+                }
+                readonly claimID: string
+              }
+            | {
+                readonly schema: "motryx.managed_execution.v2"
+                readonly origin: "DIRECT_USER"
+                readonly productSessionID: string
+                readonly owner?: {
+                  readonly kind: "FUNCTION_SLOT" | "CONTROL_ROLE"
+                  readonly id: string
+                  readonly generation: number
+                }
+                readonly checkpoint?: {
+                  readonly kind: "LANE" | "CONTROL"
+                  readonly id: string
+                  readonly revision: number
+                }
+                readonly cell?: {
+                  readonly supervisorIncarnationID: string
+                  readonly hostIncarnationID: string
+                  readonly sidecarIncarnationID: string
+                }
+                readonly claimID?: string
+              }
           readonly turnID: string
           readonly activityInputIDs: ReadonlyArray<string>
           readonly name: string
@@ -1604,6 +2639,49 @@ export type SessionsHistoryOutput = {
           readonly sessionID: string
           readonly assistantMessageID: string
           readonly callID: string
+          readonly managedExecution?:
+            | {
+                readonly schema: "motryx.managed_execution.v2"
+                readonly origin: "FRAMEWORK"
+                readonly productSessionID: string
+                readonly owner: {
+                  readonly kind: "FUNCTION_SLOT" | "CONTROL_ROLE"
+                  readonly id: string
+                  readonly generation: number
+                }
+                readonly checkpoint: {
+                  readonly kind: "LANE" | "CONTROL"
+                  readonly id: string
+                  readonly revision: number
+                }
+                readonly cell: {
+                  readonly supervisorIncarnationID: string
+                  readonly hostIncarnationID: string
+                  readonly sidecarIncarnationID: string
+                }
+                readonly claimID: string
+              }
+            | {
+                readonly schema: "motryx.managed_execution.v2"
+                readonly origin: "DIRECT_USER"
+                readonly productSessionID: string
+                readonly owner?: {
+                  readonly kind: "FUNCTION_SLOT" | "CONTROL_ROLE"
+                  readonly id: string
+                  readonly generation: number
+                }
+                readonly checkpoint?: {
+                  readonly kind: "LANE" | "CONTROL"
+                  readonly id: string
+                  readonly revision: number
+                }
+                readonly cell?: {
+                  readonly supervisorIncarnationID: string
+                  readonly hostIncarnationID: string
+                  readonly sidecarIncarnationID: string
+                }
+                readonly claimID?: string
+              }
           readonly turnID: string
           readonly activityInputIDs: ReadonlyArray<string>
           readonly text: string
@@ -1620,6 +2698,49 @@ export type SessionsHistoryOutput = {
           readonly sessionID: string
           readonly assistantMessageID: string
           readonly callID: string
+          readonly managedExecution?:
+            | {
+                readonly schema: "motryx.managed_execution.v2"
+                readonly origin: "FRAMEWORK"
+                readonly productSessionID: string
+                readonly owner: {
+                  readonly kind: "FUNCTION_SLOT" | "CONTROL_ROLE"
+                  readonly id: string
+                  readonly generation: number
+                }
+                readonly checkpoint: {
+                  readonly kind: "LANE" | "CONTROL"
+                  readonly id: string
+                  readonly revision: number
+                }
+                readonly cell: {
+                  readonly supervisorIncarnationID: string
+                  readonly hostIncarnationID: string
+                  readonly sidecarIncarnationID: string
+                }
+                readonly claimID: string
+              }
+            | {
+                readonly schema: "motryx.managed_execution.v2"
+                readonly origin: "DIRECT_USER"
+                readonly productSessionID: string
+                readonly owner?: {
+                  readonly kind: "FUNCTION_SLOT" | "CONTROL_ROLE"
+                  readonly id: string
+                  readonly generation: number
+                }
+                readonly checkpoint?: {
+                  readonly kind: "LANE" | "CONTROL"
+                  readonly id: string
+                  readonly revision: number
+                }
+                readonly cell?: {
+                  readonly supervisorIncarnationID: string
+                  readonly hostIncarnationID: string
+                  readonly sidecarIncarnationID: string
+                }
+                readonly claimID?: string
+              }
           readonly turnID: string
           readonly activityInputIDs: ReadonlyArray<string>
           readonly tool: string
@@ -1641,6 +2762,49 @@ export type SessionsHistoryOutput = {
           readonly sessionID: string
           readonly assistantMessageID: string
           readonly callID: string
+          readonly managedExecution?:
+            | {
+                readonly schema: "motryx.managed_execution.v2"
+                readonly origin: "FRAMEWORK"
+                readonly productSessionID: string
+                readonly owner: {
+                  readonly kind: "FUNCTION_SLOT" | "CONTROL_ROLE"
+                  readonly id: string
+                  readonly generation: number
+                }
+                readonly checkpoint: {
+                  readonly kind: "LANE" | "CONTROL"
+                  readonly id: string
+                  readonly revision: number
+                }
+                readonly cell: {
+                  readonly supervisorIncarnationID: string
+                  readonly hostIncarnationID: string
+                  readonly sidecarIncarnationID: string
+                }
+                readonly claimID: string
+              }
+            | {
+                readonly schema: "motryx.managed_execution.v2"
+                readonly origin: "DIRECT_USER"
+                readonly productSessionID: string
+                readonly owner?: {
+                  readonly kind: "FUNCTION_SLOT" | "CONTROL_ROLE"
+                  readonly id: string
+                  readonly generation: number
+                }
+                readonly checkpoint?: {
+                  readonly kind: "LANE" | "CONTROL"
+                  readonly id: string
+                  readonly revision: number
+                }
+                readonly cell?: {
+                  readonly supervisorIncarnationID: string
+                  readonly hostIncarnationID: string
+                  readonly sidecarIncarnationID: string
+                }
+                readonly claimID?: string
+              }
           readonly turnID: string
           readonly activityInputIDs: ReadonlyArray<string>
           readonly structured: { readonly [x: string]: JsonValue }
@@ -1661,6 +2825,49 @@ export type SessionsHistoryOutput = {
           readonly sessionID: string
           readonly assistantMessageID: string
           readonly callID: string
+          readonly managedExecution?:
+            | {
+                readonly schema: "motryx.managed_execution.v2"
+                readonly origin: "FRAMEWORK"
+                readonly productSessionID: string
+                readonly owner: {
+                  readonly kind: "FUNCTION_SLOT" | "CONTROL_ROLE"
+                  readonly id: string
+                  readonly generation: number
+                }
+                readonly checkpoint: {
+                  readonly kind: "LANE" | "CONTROL"
+                  readonly id: string
+                  readonly revision: number
+                }
+                readonly cell: {
+                  readonly supervisorIncarnationID: string
+                  readonly hostIncarnationID: string
+                  readonly sidecarIncarnationID: string
+                }
+                readonly claimID: string
+              }
+            | {
+                readonly schema: "motryx.managed_execution.v2"
+                readonly origin: "DIRECT_USER"
+                readonly productSessionID: string
+                readonly owner?: {
+                  readonly kind: "FUNCTION_SLOT" | "CONTROL_ROLE"
+                  readonly id: string
+                  readonly generation: number
+                }
+                readonly checkpoint?: {
+                  readonly kind: "LANE" | "CONTROL"
+                  readonly id: string
+                  readonly revision: number
+                }
+                readonly cell?: {
+                  readonly supervisorIncarnationID: string
+                  readonly hostIncarnationID: string
+                  readonly sidecarIncarnationID: string
+                }
+                readonly claimID?: string
+              }
           readonly turnID: string
           readonly activityInputIDs: ReadonlyArray<string>
           readonly structured: { readonly [x: string]: JsonValue }
@@ -1687,6 +2894,49 @@ export type SessionsHistoryOutput = {
           readonly sessionID: string
           readonly assistantMessageID: string
           readonly callID: string
+          readonly managedExecution?:
+            | {
+                readonly schema: "motryx.managed_execution.v2"
+                readonly origin: "FRAMEWORK"
+                readonly productSessionID: string
+                readonly owner: {
+                  readonly kind: "FUNCTION_SLOT" | "CONTROL_ROLE"
+                  readonly id: string
+                  readonly generation: number
+                }
+                readonly checkpoint: {
+                  readonly kind: "LANE" | "CONTROL"
+                  readonly id: string
+                  readonly revision: number
+                }
+                readonly cell: {
+                  readonly supervisorIncarnationID: string
+                  readonly hostIncarnationID: string
+                  readonly sidecarIncarnationID: string
+                }
+                readonly claimID: string
+              }
+            | {
+                readonly schema: "motryx.managed_execution.v2"
+                readonly origin: "DIRECT_USER"
+                readonly productSessionID: string
+                readonly owner?: {
+                  readonly kind: "FUNCTION_SLOT" | "CONTROL_ROLE"
+                  readonly id: string
+                  readonly generation: number
+                }
+                readonly checkpoint?: {
+                  readonly kind: "LANE" | "CONTROL"
+                  readonly id: string
+                  readonly revision: number
+                }
+                readonly cell?: {
+                  readonly supervisorIncarnationID: string
+                  readonly hostIncarnationID: string
+                  readonly sidecarIncarnationID: string
+                }
+                readonly claimID?: string
+              }
           readonly turnID?: string
           readonly activityInputIDs?: ReadonlyArray<string>
           readonly error: { readonly type: "unknown"; readonly message: string }
@@ -1919,6 +3169,49 @@ export type SessionsEventsOutput =
                 readonly correction: { readonly maxSteps: 1; readonly instruction: string }
               }
           readonly digest: string
+          readonly managedExecution?:
+            | {
+                readonly schema: "motryx.managed_execution.v2"
+                readonly origin: "FRAMEWORK"
+                readonly productSessionID: string
+                readonly owner: {
+                  readonly kind: "FUNCTION_SLOT" | "CONTROL_ROLE"
+                  readonly id: string
+                  readonly generation: number
+                }
+                readonly checkpoint: {
+                  readonly kind: "LANE" | "CONTROL"
+                  readonly id: string
+                  readonly revision: number
+                }
+                readonly cell: {
+                  readonly supervisorIncarnationID: string
+                  readonly hostIncarnationID: string
+                  readonly sidecarIncarnationID: string
+                }
+                readonly claimID: string
+              }
+            | {
+                readonly schema: "motryx.managed_execution.v2"
+                readonly origin: "DIRECT_USER"
+                readonly productSessionID: string
+                readonly owner?: {
+                  readonly kind: "FUNCTION_SLOT" | "CONTROL_ROLE"
+                  readonly id: string
+                  readonly generation: number
+                }
+                readonly checkpoint?: {
+                  readonly kind: "LANE" | "CONTROL"
+                  readonly id: string
+                  readonly revision: number
+                }
+                readonly cell?: {
+                  readonly supervisorIncarnationID: string
+                  readonly hostIncarnationID: string
+                  readonly sidecarIncarnationID: string
+                }
+                readonly claimID?: string
+              }
         }
       }
     }
@@ -1958,7 +3251,51 @@ export type SessionsEventsOutput =
                 readonly correction: { readonly maxSteps: 1; readonly instruction: string }
               }
           readonly digest: string
+          readonly managedExecution?:
+            | {
+                readonly schema: "motryx.managed_execution.v2"
+                readonly origin: "FRAMEWORK"
+                readonly productSessionID: string
+                readonly owner: {
+                  readonly kind: "FUNCTION_SLOT" | "CONTROL_ROLE"
+                  readonly id: string
+                  readonly generation: number
+                }
+                readonly checkpoint: {
+                  readonly kind: "LANE" | "CONTROL"
+                  readonly id: string
+                  readonly revision: number
+                }
+                readonly cell: {
+                  readonly supervisorIncarnationID: string
+                  readonly hostIncarnationID: string
+                  readonly sidecarIncarnationID: string
+                }
+                readonly claimID: string
+              }
+            | {
+                readonly schema: "motryx.managed_execution.v2"
+                readonly origin: "DIRECT_USER"
+                readonly productSessionID: string
+                readonly owner?: {
+                  readonly kind: "FUNCTION_SLOT" | "CONTROL_ROLE"
+                  readonly id: string
+                  readonly generation: number
+                }
+                readonly checkpoint?: {
+                  readonly kind: "LANE" | "CONTROL"
+                  readonly id: string
+                  readonly revision: number
+                }
+                readonly cell?: {
+                  readonly supervisorIncarnationID: string
+                  readonly hostIncarnationID: string
+                  readonly sidecarIncarnationID: string
+                }
+                readonly claimID?: string
+              }
         }
+        readonly resumeRequested?: boolean
       }
     }
   | {
@@ -1974,6 +3311,11 @@ export type SessionsEventsOutput =
         readonly origin: "user" | "framework" | "runtime_shutdown" | "stale" | "business"
         readonly reason: string
         readonly inputVisibility: "missing" | "admitted_unpromoted"
+        readonly executionReset?: {
+          readonly resetID: string
+          readonly recoveryCellIncarnationID: string
+          readonly reason: "runtime_shutdown" | "process_lost"
+        }
       }
     }
   | {
@@ -1987,6 +3329,113 @@ export type SessionsEventsOutput =
         readonly sessionID: string
         readonly open: boolean
         readonly reason: string
+      }
+    }
+  | {
+      readonly id: string
+      readonly metadata?: { readonly [x: string]: unknown }
+      readonly type: "session.next.execution.reset.started"
+      readonly durable?: { readonly aggregateID: string; readonly seq: number; readonly version: number }
+      readonly location?: { readonly directory: string; readonly workspaceID?: string }
+      readonly data: {
+        readonly schema: "opencode.managed_execution_reset.v1"
+        readonly sessionID: string
+        readonly resetID: string
+        readonly recoveryCellIncarnationID: string
+        readonly throughEventSeq: number
+        readonly policy: "worker_flush" | "primary_preserve_user"
+        readonly reason: "runtime_shutdown" | "process_lost"
+        readonly cancelInputIDs: ReadonlyArray<string>
+        readonly notStartedInputIDs: ReadonlyArray<string>
+        readonly tools: ReadonlyArray<{
+          readonly assistantMessageID: string
+          readonly callID: string
+          readonly outcome: "interrupted" | "outcome_unknown"
+          readonly providerExecuted: boolean
+        }>
+        readonly turn?: {
+          readonly turnID: string
+          readonly turnStartedAt: number
+          readonly activityInputIDs: ReadonlyArray<string>
+          readonly outcome: "interrupted" | "outcome_unknown"
+          readonly managedExecution?:
+            | {
+                readonly schema: "motryx.managed_execution.v2"
+                readonly origin: "FRAMEWORK"
+                readonly productSessionID: string
+                readonly owner: {
+                  readonly kind: "FUNCTION_SLOT" | "CONTROL_ROLE"
+                  readonly id: string
+                  readonly generation: number
+                }
+                readonly checkpoint: {
+                  readonly kind: "LANE" | "CONTROL"
+                  readonly id: string
+                  readonly revision: number
+                }
+                readonly cell: {
+                  readonly supervisorIncarnationID: string
+                  readonly hostIncarnationID: string
+                  readonly sidecarIncarnationID: string
+                }
+                readonly claimID: string
+              }
+            | {
+                readonly schema: "motryx.managed_execution.v2"
+                readonly origin: "DIRECT_USER"
+                readonly productSessionID: string
+                readonly owner?: {
+                  readonly kind: "FUNCTION_SLOT" | "CONTROL_ROLE"
+                  readonly id: string
+                  readonly generation: number
+                }
+                readonly checkpoint?: {
+                  readonly kind: "LANE" | "CONTROL"
+                  readonly id: string
+                  readonly revision: number
+                }
+                readonly cell?: {
+                  readonly supervisorIncarnationID: string
+                  readonly hostIncarnationID: string
+                  readonly sidecarIncarnationID: string
+                }
+                readonly claimID?: string
+              }
+        }
+        readonly preservedInputIDs: ReadonlyArray<string>
+      }
+    }
+  | {
+      readonly id: string
+      readonly metadata?: { readonly [x: string]: unknown }
+      readonly type: "session.next.execution.reset"
+      readonly durable?: { readonly aggregateID: string; readonly seq: number; readonly version: number }
+      readonly location?: { readonly directory: string; readonly workspaceID?: string }
+      readonly data: {
+        readonly schema: "opencode.managed_execution_reset.v1"
+        readonly sessionID: string
+        readonly resetID: string
+        readonly recoveryCellIncarnationID: string
+        readonly throughEventSeq: number
+        readonly policy: "worker_flush" | "primary_preserve_user"
+        readonly reason: "runtime_shutdown" | "process_lost"
+        readonly canceledInputIDs: ReadonlyArray<string>
+        readonly notStarted: ReadonlyArray<{
+          readonly inputID: string
+          readonly turnID: string
+          readonly eventSeq: number
+        }>
+        readonly tools: ReadonlyArray<{
+          readonly assistantMessageID: string
+          readonly callID: string
+          readonly outcome: "interrupted" | "outcome_unknown"
+          readonly eventSeq: number
+        }>
+        readonly turn?:
+          | { readonly turnID: string; readonly outcome: "interrupted" | "outcome_unknown"; readonly eventSeq: number }
+          | undefined
+        readonly preservedInputIDs: ReadonlyArray<string>
+        readonly idle: boolean
       }
     }
   | {
@@ -2015,6 +3464,45 @@ export type SessionsEventsOutput =
         readonly turnStartedAt: number
         readonly activityInputIDs: ReadonlyArray<string>
         readonly completionContractDigest?: string
+        readonly managedExecution?:
+          | {
+              readonly schema: "motryx.managed_execution.v2"
+              readonly origin: "FRAMEWORK"
+              readonly productSessionID: string
+              readonly owner: {
+                readonly kind: "FUNCTION_SLOT" | "CONTROL_ROLE"
+                readonly id: string
+                readonly generation: number
+              }
+              readonly checkpoint: { readonly kind: "LANE" | "CONTROL"; readonly id: string; readonly revision: number }
+              readonly cell: {
+                readonly supervisorIncarnationID: string
+                readonly hostIncarnationID: string
+                readonly sidecarIncarnationID: string
+              }
+              readonly claimID: string
+            }
+          | {
+              readonly schema: "motryx.managed_execution.v2"
+              readonly origin: "DIRECT_USER"
+              readonly productSessionID: string
+              readonly owner?: {
+                readonly kind: "FUNCTION_SLOT" | "CONTROL_ROLE"
+                readonly id: string
+                readonly generation: number
+              }
+              readonly checkpoint?: {
+                readonly kind: "LANE" | "CONTROL"
+                readonly id: string
+                readonly revision: number
+              }
+              readonly cell?: {
+                readonly supervisorIncarnationID: string
+                readonly hostIncarnationID: string
+                readonly sidecarIncarnationID: string
+              }
+              readonly claimID?: string
+            }
       }
     }
   | {
@@ -2054,6 +3542,50 @@ export type SessionsEventsOutput =
           readonly attemptCount: number
           readonly providerID?: string
           readonly modelID?: string
+        }
+        readonly managedExecution?:
+          | {
+              readonly schema: "motryx.managed_execution.v2"
+              readonly origin: "FRAMEWORK"
+              readonly productSessionID: string
+              readonly owner: {
+                readonly kind: "FUNCTION_SLOT" | "CONTROL_ROLE"
+                readonly id: string
+                readonly generation: number
+              }
+              readonly checkpoint: { readonly kind: "LANE" | "CONTROL"; readonly id: string; readonly revision: number }
+              readonly cell: {
+                readonly supervisorIncarnationID: string
+                readonly hostIncarnationID: string
+                readonly sidecarIncarnationID: string
+              }
+              readonly claimID: string
+            }
+          | {
+              readonly schema: "motryx.managed_execution.v2"
+              readonly origin: "DIRECT_USER"
+              readonly productSessionID: string
+              readonly owner?: {
+                readonly kind: "FUNCTION_SLOT" | "CONTROL_ROLE"
+                readonly id: string
+                readonly generation: number
+              }
+              readonly checkpoint?: {
+                readonly kind: "LANE" | "CONTROL"
+                readonly id: string
+                readonly revision: number
+              }
+              readonly cell?: {
+                readonly supervisorIncarnationID: string
+                readonly hostIncarnationID: string
+                readonly sidecarIncarnationID: string
+              }
+              readonly claimID?: string
+            }
+        readonly executionReset?: {
+          readonly resetID: string
+          readonly recoveryCellIncarnationID: string
+          readonly reason: "runtime_shutdown" | "process_lost"
         }
       }
     }
@@ -2143,6 +3675,50 @@ export type SessionsEventsOutput =
           readonly attemptCount: number
           readonly providerID?: string
           readonly modelID?: string
+        }
+        readonly managedExecution?:
+          | {
+              readonly schema: "motryx.managed_execution.v2"
+              readonly origin: "FRAMEWORK"
+              readonly productSessionID: string
+              readonly owner: {
+                readonly kind: "FUNCTION_SLOT" | "CONTROL_ROLE"
+                readonly id: string
+                readonly generation: number
+              }
+              readonly checkpoint: { readonly kind: "LANE" | "CONTROL"; readonly id: string; readonly revision: number }
+              readonly cell: {
+                readonly supervisorIncarnationID: string
+                readonly hostIncarnationID: string
+                readonly sidecarIncarnationID: string
+              }
+              readonly claimID: string
+            }
+          | {
+              readonly schema: "motryx.managed_execution.v2"
+              readonly origin: "DIRECT_USER"
+              readonly productSessionID: string
+              readonly owner?: {
+                readonly kind: "FUNCTION_SLOT" | "CONTROL_ROLE"
+                readonly id: string
+                readonly generation: number
+              }
+              readonly checkpoint?: {
+                readonly kind: "LANE" | "CONTROL"
+                readonly id: string
+                readonly revision: number
+              }
+              readonly cell?: {
+                readonly supervisorIncarnationID: string
+                readonly hostIncarnationID: string
+                readonly sidecarIncarnationID: string
+              }
+              readonly claimID?: string
+            }
+        readonly executionReset?: {
+          readonly resetID: string
+          readonly recoveryCellIncarnationID: string
+          readonly reason: "runtime_shutdown" | "process_lost"
         }
       }
     }
@@ -2274,6 +3850,45 @@ export type SessionsEventsOutput =
         readonly sessionID: string
         readonly assistantMessageID: string
         readonly callID: string
+        readonly managedExecution?:
+          | {
+              readonly schema: "motryx.managed_execution.v2"
+              readonly origin: "FRAMEWORK"
+              readonly productSessionID: string
+              readonly owner: {
+                readonly kind: "FUNCTION_SLOT" | "CONTROL_ROLE"
+                readonly id: string
+                readonly generation: number
+              }
+              readonly checkpoint: { readonly kind: "LANE" | "CONTROL"; readonly id: string; readonly revision: number }
+              readonly cell: {
+                readonly supervisorIncarnationID: string
+                readonly hostIncarnationID: string
+                readonly sidecarIncarnationID: string
+              }
+              readonly claimID: string
+            }
+          | {
+              readonly schema: "motryx.managed_execution.v2"
+              readonly origin: "DIRECT_USER"
+              readonly productSessionID: string
+              readonly owner?: {
+                readonly kind: "FUNCTION_SLOT" | "CONTROL_ROLE"
+                readonly id: string
+                readonly generation: number
+              }
+              readonly checkpoint?: {
+                readonly kind: "LANE" | "CONTROL"
+                readonly id: string
+                readonly revision: number
+              }
+              readonly cell?: {
+                readonly supervisorIncarnationID: string
+                readonly hostIncarnationID: string
+                readonly sidecarIncarnationID: string
+              }
+              readonly claimID?: string
+            }
         readonly turnID: string
         readonly activityInputIDs: ReadonlyArray<string>
         readonly name: string
@@ -2290,6 +3905,45 @@ export type SessionsEventsOutput =
         readonly sessionID: string
         readonly assistantMessageID: string
         readonly callID: string
+        readonly managedExecution?:
+          | {
+              readonly schema: "motryx.managed_execution.v2"
+              readonly origin: "FRAMEWORK"
+              readonly productSessionID: string
+              readonly owner: {
+                readonly kind: "FUNCTION_SLOT" | "CONTROL_ROLE"
+                readonly id: string
+                readonly generation: number
+              }
+              readonly checkpoint: { readonly kind: "LANE" | "CONTROL"; readonly id: string; readonly revision: number }
+              readonly cell: {
+                readonly supervisorIncarnationID: string
+                readonly hostIncarnationID: string
+                readonly sidecarIncarnationID: string
+              }
+              readonly claimID: string
+            }
+          | {
+              readonly schema: "motryx.managed_execution.v2"
+              readonly origin: "DIRECT_USER"
+              readonly productSessionID: string
+              readonly owner?: {
+                readonly kind: "FUNCTION_SLOT" | "CONTROL_ROLE"
+                readonly id: string
+                readonly generation: number
+              }
+              readonly checkpoint?: {
+                readonly kind: "LANE" | "CONTROL"
+                readonly id: string
+                readonly revision: number
+              }
+              readonly cell?: {
+                readonly supervisorIncarnationID: string
+                readonly hostIncarnationID: string
+                readonly sidecarIncarnationID: string
+              }
+              readonly claimID?: string
+            }
         readonly turnID: string
         readonly activityInputIDs: ReadonlyArray<string>
         readonly text: string
@@ -2306,6 +3960,45 @@ export type SessionsEventsOutput =
         readonly sessionID: string
         readonly assistantMessageID: string
         readonly callID: string
+        readonly managedExecution?:
+          | {
+              readonly schema: "motryx.managed_execution.v2"
+              readonly origin: "FRAMEWORK"
+              readonly productSessionID: string
+              readonly owner: {
+                readonly kind: "FUNCTION_SLOT" | "CONTROL_ROLE"
+                readonly id: string
+                readonly generation: number
+              }
+              readonly checkpoint: { readonly kind: "LANE" | "CONTROL"; readonly id: string; readonly revision: number }
+              readonly cell: {
+                readonly supervisorIncarnationID: string
+                readonly hostIncarnationID: string
+                readonly sidecarIncarnationID: string
+              }
+              readonly claimID: string
+            }
+          | {
+              readonly schema: "motryx.managed_execution.v2"
+              readonly origin: "DIRECT_USER"
+              readonly productSessionID: string
+              readonly owner?: {
+                readonly kind: "FUNCTION_SLOT" | "CONTROL_ROLE"
+                readonly id: string
+                readonly generation: number
+              }
+              readonly checkpoint?: {
+                readonly kind: "LANE" | "CONTROL"
+                readonly id: string
+                readonly revision: number
+              }
+              readonly cell?: {
+                readonly supervisorIncarnationID: string
+                readonly hostIncarnationID: string
+                readonly sidecarIncarnationID: string
+              }
+              readonly claimID?: string
+            }
         readonly turnID: string
         readonly activityInputIDs: ReadonlyArray<string>
         readonly tool: string
@@ -2327,6 +4020,45 @@ export type SessionsEventsOutput =
         readonly sessionID: string
         readonly assistantMessageID: string
         readonly callID: string
+        readonly managedExecution?:
+          | {
+              readonly schema: "motryx.managed_execution.v2"
+              readonly origin: "FRAMEWORK"
+              readonly productSessionID: string
+              readonly owner: {
+                readonly kind: "FUNCTION_SLOT" | "CONTROL_ROLE"
+                readonly id: string
+                readonly generation: number
+              }
+              readonly checkpoint: { readonly kind: "LANE" | "CONTROL"; readonly id: string; readonly revision: number }
+              readonly cell: {
+                readonly supervisorIncarnationID: string
+                readonly hostIncarnationID: string
+                readonly sidecarIncarnationID: string
+              }
+              readonly claimID: string
+            }
+          | {
+              readonly schema: "motryx.managed_execution.v2"
+              readonly origin: "DIRECT_USER"
+              readonly productSessionID: string
+              readonly owner?: {
+                readonly kind: "FUNCTION_SLOT" | "CONTROL_ROLE"
+                readonly id: string
+                readonly generation: number
+              }
+              readonly checkpoint?: {
+                readonly kind: "LANE" | "CONTROL"
+                readonly id: string
+                readonly revision: number
+              }
+              readonly cell?: {
+                readonly supervisorIncarnationID: string
+                readonly hostIncarnationID: string
+                readonly sidecarIncarnationID: string
+              }
+              readonly claimID?: string
+            }
         readonly turnID: string
         readonly activityInputIDs: ReadonlyArray<string>
         readonly structured: { readonly [x: string]: unknown }
@@ -2347,6 +4079,45 @@ export type SessionsEventsOutput =
         readonly sessionID: string
         readonly assistantMessageID: string
         readonly callID: string
+        readonly managedExecution?:
+          | {
+              readonly schema: "motryx.managed_execution.v2"
+              readonly origin: "FRAMEWORK"
+              readonly productSessionID: string
+              readonly owner: {
+                readonly kind: "FUNCTION_SLOT" | "CONTROL_ROLE"
+                readonly id: string
+                readonly generation: number
+              }
+              readonly checkpoint: { readonly kind: "LANE" | "CONTROL"; readonly id: string; readonly revision: number }
+              readonly cell: {
+                readonly supervisorIncarnationID: string
+                readonly hostIncarnationID: string
+                readonly sidecarIncarnationID: string
+              }
+              readonly claimID: string
+            }
+          | {
+              readonly schema: "motryx.managed_execution.v2"
+              readonly origin: "DIRECT_USER"
+              readonly productSessionID: string
+              readonly owner?: {
+                readonly kind: "FUNCTION_SLOT" | "CONTROL_ROLE"
+                readonly id: string
+                readonly generation: number
+              }
+              readonly checkpoint?: {
+                readonly kind: "LANE" | "CONTROL"
+                readonly id: string
+                readonly revision: number
+              }
+              readonly cell?: {
+                readonly supervisorIncarnationID: string
+                readonly hostIncarnationID: string
+                readonly sidecarIncarnationID: string
+              }
+              readonly claimID?: string
+            }
         readonly turnID: string
         readonly activityInputIDs: ReadonlyArray<string>
         readonly structured: { readonly [x: string]: unknown }
@@ -2373,6 +4144,45 @@ export type SessionsEventsOutput =
         readonly sessionID: string
         readonly assistantMessageID: string
         readonly callID: string
+        readonly managedExecution?:
+          | {
+              readonly schema: "motryx.managed_execution.v2"
+              readonly origin: "FRAMEWORK"
+              readonly productSessionID: string
+              readonly owner: {
+                readonly kind: "FUNCTION_SLOT" | "CONTROL_ROLE"
+                readonly id: string
+                readonly generation: number
+              }
+              readonly checkpoint: { readonly kind: "LANE" | "CONTROL"; readonly id: string; readonly revision: number }
+              readonly cell: {
+                readonly supervisorIncarnationID: string
+                readonly hostIncarnationID: string
+                readonly sidecarIncarnationID: string
+              }
+              readonly claimID: string
+            }
+          | {
+              readonly schema: "motryx.managed_execution.v2"
+              readonly origin: "DIRECT_USER"
+              readonly productSessionID: string
+              readonly owner?: {
+                readonly kind: "FUNCTION_SLOT" | "CONTROL_ROLE"
+                readonly id: string
+                readonly generation: number
+              }
+              readonly checkpoint?: {
+                readonly kind: "LANE" | "CONTROL"
+                readonly id: string
+                readonly revision: number
+              }
+              readonly cell?: {
+                readonly supervisorIncarnationID: string
+                readonly hostIncarnationID: string
+                readonly sidecarIncarnationID: string
+              }
+              readonly claimID?: string
+            }
         readonly turnID?: string
         readonly activityInputIDs?: ReadonlyArray<string>
         readonly error: { readonly type: "unknown"; readonly message: string }
@@ -2665,6 +4475,165 @@ export type SessionsMessageOutput = {
         readonly time: { readonly created: number }
       }
 }["data"]
+
+export type SessionsAuthorizeInput = {
+  readonly sessionID: { readonly sessionID: string; readonly inputID: string }["sessionID"]
+  readonly inputID: { readonly sessionID: string; readonly inputID: string }["inputID"]
+  readonly claimID: {
+    readonly claimID: string
+    readonly cell: {
+      readonly supervisorIncarnationID: string
+      readonly hostIncarnationID: string
+      readonly sidecarIncarnationID: string
+    }
+    readonly managedExecutionRef:
+      | {
+          readonly schema: "motryx.managed_execution.v2"
+          readonly origin: "FRAMEWORK"
+          readonly productSessionID: string
+          readonly owner: {
+            readonly kind: "FUNCTION_SLOT" | "CONTROL_ROLE"
+            readonly id: string
+            readonly generation: number
+          }
+          readonly checkpoint: { readonly kind: "LANE" | "CONTROL"; readonly id: string; readonly revision: number }
+          readonly cell: {
+            readonly supervisorIncarnationID: string
+            readonly hostIncarnationID: string
+            readonly sidecarIncarnationID: string
+          }
+          readonly claimID: string
+        }
+      | {
+          readonly schema: "motryx.managed_execution.v2"
+          readonly origin: "DIRECT_USER"
+          readonly productSessionID: string
+          readonly owner?: {
+            readonly kind: "FUNCTION_SLOT" | "CONTROL_ROLE"
+            readonly id: string
+            readonly generation: number
+          }
+          readonly checkpoint?: { readonly kind: "LANE" | "CONTROL"; readonly id: string; readonly revision: number }
+          readonly cell?: {
+            readonly supervisorIncarnationID: string
+            readonly hostIncarnationID: string
+            readonly sidecarIncarnationID: string
+          }
+          readonly claimID?: string
+        }
+  }["claimID"]
+  readonly cell: {
+    readonly claimID: string
+    readonly cell: {
+      readonly supervisorIncarnationID: string
+      readonly hostIncarnationID: string
+      readonly sidecarIncarnationID: string
+    }
+    readonly managedExecutionRef:
+      | {
+          readonly schema: "motryx.managed_execution.v2"
+          readonly origin: "FRAMEWORK"
+          readonly productSessionID: string
+          readonly owner: {
+            readonly kind: "FUNCTION_SLOT" | "CONTROL_ROLE"
+            readonly id: string
+            readonly generation: number
+          }
+          readonly checkpoint: { readonly kind: "LANE" | "CONTROL"; readonly id: string; readonly revision: number }
+          readonly cell: {
+            readonly supervisorIncarnationID: string
+            readonly hostIncarnationID: string
+            readonly sidecarIncarnationID: string
+          }
+          readonly claimID: string
+        }
+      | {
+          readonly schema: "motryx.managed_execution.v2"
+          readonly origin: "DIRECT_USER"
+          readonly productSessionID: string
+          readonly owner?: {
+            readonly kind: "FUNCTION_SLOT" | "CONTROL_ROLE"
+            readonly id: string
+            readonly generation: number
+          }
+          readonly checkpoint?: { readonly kind: "LANE" | "CONTROL"; readonly id: string; readonly revision: number }
+          readonly cell?: {
+            readonly supervisorIncarnationID: string
+            readonly hostIncarnationID: string
+            readonly sidecarIncarnationID: string
+          }
+          readonly claimID?: string
+        }
+  }["cell"]
+  readonly managedExecutionRef: {
+    readonly claimID: string
+    readonly cell: {
+      readonly supervisorIncarnationID: string
+      readonly hostIncarnationID: string
+      readonly sidecarIncarnationID: string
+    }
+    readonly managedExecutionRef:
+      | {
+          readonly schema: "motryx.managed_execution.v2"
+          readonly origin: "FRAMEWORK"
+          readonly productSessionID: string
+          readonly owner: {
+            readonly kind: "FUNCTION_SLOT" | "CONTROL_ROLE"
+            readonly id: string
+            readonly generation: number
+          }
+          readonly checkpoint: { readonly kind: "LANE" | "CONTROL"; readonly id: string; readonly revision: number }
+          readonly cell: {
+            readonly supervisorIncarnationID: string
+            readonly hostIncarnationID: string
+            readonly sidecarIncarnationID: string
+          }
+          readonly claimID: string
+        }
+      | {
+          readonly schema: "motryx.managed_execution.v2"
+          readonly origin: "DIRECT_USER"
+          readonly productSessionID: string
+          readonly owner?: {
+            readonly kind: "FUNCTION_SLOT" | "CONTROL_ROLE"
+            readonly id: string
+            readonly generation: number
+          }
+          readonly checkpoint?: { readonly kind: "LANE" | "CONTROL"; readonly id: string; readonly revision: number }
+          readonly cell?: {
+            readonly supervisorIncarnationID: string
+            readonly hostIncarnationID: string
+            readonly sidecarIncarnationID: string
+          }
+          readonly claimID?: string
+        }
+  }["managedExecutionRef"]
+}
+
+export type SessionsAuthorizeOutput = void
+
+export type SessionsUnauthorizeInput = {
+  readonly sessionID: { readonly sessionID: string; readonly inputID: string }["sessionID"]
+  readonly inputID: { readonly sessionID: string; readonly inputID: string }["inputID"]
+  readonly claimID: {
+    readonly claimID: string
+    readonly cell: {
+      readonly supervisorIncarnationID: string
+      readonly hostIncarnationID: string
+      readonly sidecarIncarnationID: string
+    }
+  }["claimID"]
+  readonly cell: {
+    readonly claimID: string
+    readonly cell: {
+      readonly supervisorIncarnationID: string
+      readonly hostIncarnationID: string
+      readonly sidecarIncarnationID: string
+    }
+  }["cell"]
+}
+
+export type SessionsUnauthorizeOutput = void
 
 export type MessagesListInput = {
   readonly sessionID: { readonly sessionID: string }["sessionID"]
