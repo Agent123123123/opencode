@@ -410,7 +410,7 @@ test("Motryx runtime error card can be dismissed without resolving the incident"
     expect(frame).not.toContain("Final failure · Orchestrator")
     app.resize(40, 12)
     frame = await renderUntil(app, (value) => value.includes("COMPOSER BOTTOM"))
-    expect(frame).toContain("Runtime error")
+    expect(frame).toContain("transport · Orchestrator")
     expect(frame).toContain("COMPOSER DRAFT")
     expect(frame.split("\n").findIndex((line) => line.includes("COMPOSER BOTTOM")))
       .toBeLessThan(frame.split("\n").findIndex((line) => line.includes("[FLOW]")))

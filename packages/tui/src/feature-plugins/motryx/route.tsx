@@ -830,7 +830,7 @@ function RuntimeIncidentCard(props: {
           fallback={
             <box height={1} flexShrink={0} flexDirection="row" gap={1}>
               <text flexGrow={1} fg={props.api.theme.current.error} truncate>
-                {`Runtime error · ${capitalize(incident().role)}: ${incident().safeSummary}`}
+                  {`${incident().httpStatus ? `HTTP ${incident().httpStatus}` : incident().failureKind} · ${capitalize(incident().role)}: ${incident().safeSummary}`}
               </text>
               <text fg={props.api.theme.current.primary} onMouseUp={() => props.onDismiss(incident().incidentID)}>
                 {props.busyIncidentID === incident().incidentID ? "…" : "[×]"}
