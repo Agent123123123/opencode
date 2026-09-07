@@ -1,6 +1,6 @@
 import path from "node:path"
 
-export const MOTRYX_CONTROL_SCHEMA_VERSION = 8 as const
+export const MOTRYX_CONTROL_SCHEMA_VERSION = 10 as const
 
 export type MotryxControlConfig = {
   apiURL: string
@@ -224,7 +224,6 @@ export type MotryxRuntimeExecutionProjection = {
   turnID?: string
   role: string
   phase: "DISPATCHING" | "WORKING" | "WAITING_A2A" | "CHECKING" | "INTERRUPTING"
-  checkpointRevision: number
   createdAt: number
 }
 
@@ -241,7 +240,6 @@ export type MotryxExecutionHistoryProjection = {
   role: string
   checkpointKind: "LANE" | "CONTROL"
   checkpointID: string
-  checkpointRevision: number
   sessionID: string
   inputID: string
   causalInputID?: string
@@ -405,7 +403,7 @@ export async function fetchMotryxControlHealth(
     throw new MotryxControlSchemaError("Motryx control health did not return JSON")
   }
   const root = requiredRecord(await response.json(), "health")
-  if (root.schemaVersion !== MOTRYX_CONTROL_SCHEMA_VERSION) fail("health.schemaVersion must be 8")
+  if (root.schemaVersion !== MOTRYX_CONTROL_SCHEMA_VERSION) fail("health.schemaVersion must be 10")
   if (root.status !== "ok" && root.status !== "switching" && root.status !== "starting") {
     fail("health.status is invalid")
   }
@@ -494,7 +492,7 @@ async function parseSessionListResponse(response: Response, config: MotryxContro
 
 export function parseMotryxSessionList(value: unknown, expected: MotryxControlConfig): MotryxSessionList {
   const root = requiredRecord(value, "sessions")
-  if (root.schemaVersion !== MOTRYX_CONTROL_SCHEMA_VERSION) fail("sessions.schemaVersion must be 8")
+  if (root.schemaVersion !== MOTRYX_CONTROL_SCHEMA_VERSION) fail("sessions.schemaVersion must be 10")
   const projectID = exactProject(root.projectID, expected.projectID, "sessions.projectID")
   if (root.status !== "ROUTABLE" && root.status !== "SWITCHING" && root.status !== "UNAVAILABLE") {
     fail("sessions.status is invalid")
@@ -625,7 +623,7 @@ export async function dismissMotryxIncident(
     throw new MotryxControlHttpError(response.status, `Motryx incident dismissal returned HTTP ${response.status}${detail}`)
   }
   const result = requiredRecord(value, "incident dismissal")
-  if (result.schemaVersion !== MOTRYX_CONTROL_SCHEMA_VERSION) fail("incident dismissal schemaVersion must be 8")
+  if (result.schemaVersion !== MOTRYX_CONTROL_SCHEMA_VERSION) fail("incident dismissal schemaVersion must be 10")
   if (result.incidentID !== input.incidentID) fail("incident dismissal returned a different incident")
   if (result.presentationState !== "DISMISSED") fail("incident dismissal did not persist DISMISSED")
   return {
@@ -638,7 +636,7 @@ export async function dismissMotryxIncident(
 
 export function parseMotryxControlSnapshot(value: unknown, expected: MotryxControlConfig): MotryxControlSnapshot {
   const root = requiredRecord(value, "snapshot")
-  if (root.schemaVersion !== MOTRYX_CONTROL_SCHEMA_VERSION) fail("snapshot.schemaVersion must be 8")
+  if (root.schemaVersion !== MOTRYX_CONTROL_SCHEMA_VERSION) fail("snapshot.schemaVersion must be 10")
   const projectID = exactProject(root.projectID, expected.projectID, "snapshot.projectID")
   const orchestratorSessionID = exactString(
     root.orchestratorSessionID,
@@ -1051,7 +1049,6 @@ function parseRuntimeExecution(value: unknown, label: string): MotryxRuntimeExec
     phase: exactEnum(item.phase, new Set([
       "DISPATCHING", "WORKING", "WAITING_A2A", "CHECKING", "INTERRUPTING",
     ] as const), `${label}.phase`),
-    checkpointRevision: nonNegativeInteger(item.checkpointRevision, `${label}.checkpointRevision`),
     createdAt: finiteNumber(item.createdAt, `${label}.createdAt`),
   })
 }
@@ -1079,7 +1076,6 @@ function parseExecutionHistory(value: unknown, label: string): MotryxExecutionHi
       `${label}.checkpointKind`,
     ),
     checkpointID: requiredString(item.checkpointID, `${label}.checkpointID`),
-    checkpointRevision: nonNegativeInteger(item.checkpointRevision, `${label}.checkpointRevision`),
     sessionID: requiredString(item.sessionID, `${label}.sessionID`),
     inputID: requiredString(item.inputID, `${label}.inputID`),
     causalInputID: optionalString(item.causalInputID, `${label}.causalInputID`),

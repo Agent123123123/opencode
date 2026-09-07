@@ -25,7 +25,7 @@ const config: MotryxControlConfig = {
 function snapshot(overrides: Record<string, unknown> = {}) {
   const now = "2026-07-19T00:00:00.000Z"
   return {
-    schemaVersion: 8,
+    schemaVersion: 10,
     projectID,
     orchestratorSessionID: config.orchestratorSessionID,
     projectionRevision: "server-generation:ic:revision",
@@ -107,7 +107,7 @@ describe("Motryx typed control snapshot", () => {
 
   test("accepts an exact schema-v8 ROUTABLE/binding/reconcile proof", () => {
     expect(parseMotryxControlSnapshot(snapshot(), config)).toMatchObject({
-      schemaVersion: 8,
+      schemaVersion: 10,
       projectID,
       orchestratorSessionID: config.orchestratorSessionID,
       projectionRevision: "server-generation:ic:revision",
@@ -339,7 +339,7 @@ describe("Motryx typed control snapshot", () => {
       fetcher: async (input, init) => {
         request = new Request(input, init)
         return Response.json({
-          schemaVersion: 8,
+          schemaVersion: 10,
           incidentID: "incident_1",
           status: "OPEN",
           presentationState: "DISMISSED",
@@ -362,7 +362,7 @@ describe("Motryx typed control snapshot", () => {
 
 describe("Motryx typed Orchestrator sessions", () => {
   const sessions = () => ({
-    schemaVersion: 8,
+    schemaVersion: 10,
     projectID,
     status: "ROUTABLE",
     current: {

@@ -34,7 +34,7 @@ test("Motryx plugin route composes the standard session surface with the Flow/In
   const checkerDetail =
     "CHECKER_DETAIL_INSPECT_ONLY registered snapshot evidence implementation showing recommended_skills"
   const snapshot: MotryxControlSnapshot = {
-    schemaVersion: 8,
+    schemaVersion: 10,
     projectID,
     orchestratorSessionID: config.orchestratorSessionID,
     projectionRevision: "server-generation:ic:route",
@@ -375,7 +375,7 @@ test("Motryx runtime error card can be dismissed without resolving the incident"
               attention: { visibleOpenIncidentCount: 0, failedLaneCount: 0, activeAttentionCount: 0, userActionRequiredCount: 0, retryingCount: 0 },
             }
             return Response.json({
-              schemaVersion: 8,
+              schemaVersion: 10,
               incidentID: incident.incidentID,
               status: "OPEN",
               presentationState: "DISMISSED",
@@ -597,7 +597,6 @@ test("Motryx v8 separates runtime retry from stable reconciliation attention", a
         role: "coordinator",
         checkpointKind: "LANE",
         checkpointID: "lane_debug",
-        checkpointRevision: 1,
         sessionID: "ses_coordinator",
         inputID: "msg_lane_reconciliation",
         turnID: "turn_lane_reconciliation",
@@ -720,7 +719,7 @@ test("/sessions switches the exact Motryx Orchestrator and rebinds conversation 
   } as unknown as TuiPluginApi
   const now = "2026-07-19T00:00:00.000Z"
   const routeSnapshot = (sessionID: string, bindingGeneration: number): MotryxControlSnapshot => ({
-    schemaVersion: 8,
+    schemaVersion: 10,
     projectID,
     orchestratorSessionID: sessionID,
     projectionRevision: `server-generation:ic:${sessionID}`,
@@ -769,7 +768,7 @@ test("/sessions switches the exact Motryx Orchestrator and rebinds conversation 
     diagnostics: [],
   })
   const sessionList = (currentID: string, bindingGeneration: number) => ({
-    schemaVersion: 8,
+    schemaVersion: 10,
     projectID,
     status: "ROUTABLE",
     current: {
@@ -1201,7 +1200,7 @@ async function clickFrameText(app: Awaited<ReturnType<typeof testRender>>, frame
 function debugRouteSnapshot(projectID: string, orchestratorSessionID: string, generation = 7, server = "server") {
   const now = "2026-07-19T00:00:00.000Z"
   return {
-    schemaVersion: 8,
+    schemaVersion: 10,
     projectID,
     orchestratorSessionID,
     projectionRevision: `${server}:revision`,
