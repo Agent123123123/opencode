@@ -105,7 +105,6 @@ export function MotryxRoute(props: {
   const sidecarWidth = createMemo<number | "100%">(() =>
     layout().direction === "row" ? (layout().sidecarWidth ?? 46) : "100%",
   )
-  const sidecarHeight = createMemo(() => layout().sidecarHeight)
   const visibleAttentionItems = createMemo(() => {
     const dismissed = locallyDismissedAttentionIDs()
     return (snapshot()?.attentionItems ?? []).filter((item) =>
@@ -114,6 +113,19 @@ export function MotryxRoute(props: {
   const visibleRuntimeWarnings = createMemo(() => {
     const dismissed = locallyDismissedRuntimeWarningIDs()
     return runtimeWarnings().filter((warning) => !dismissed.has(warning.warningID))
+  })
+  const visibleIncidents = createMemo(() => (snapshot()?.incidents ?? []).filter((incident) =>
+    incident.status === "OPEN" && incident.presentationState === "VISIBLE"))
+  const noticeCount = createMemo(() => Number(visibleRuntimeWarnings().length > 0) +
+    Number(visibleIncidents().length > 0) + Number(visibleAttentionItems().length > 0))
+  const compactNotices = createMemo(() => layout().direction === "column" ||
+    dimensions().height < 24 || noticeCount() > 1)
+  const sidecarHeight = createMemo(() => {
+    const height = layout().sidecarHeight
+    if (typeof height !== "number") return height
+    // Reserve the standard composer and each compact notice before assigning panel rows.
+    const available = dimensions().height - 6 - noticeCount() - (layout().collapsedSidecar ? 1 : 3)
+    return Math.min(height, Math.max(2, available))
   })
   const conversationWidth = createMemo(() => {
     if (layout().direction === "column") return Math.max(20, dimensions().width - 2)
@@ -520,7 +532,7 @@ export function MotryxRoute(props: {
       <RuntimeHealthWarningBanner
         api={props.api}
         warnings={visibleRuntimeWarnings()}
-        compact={layout().collapsedSidecar}
+        compact={compactNotices()}
         onDismiss={dismissRuntimeWarningLocally}
       />
 
@@ -556,15 +568,14 @@ export function MotryxRoute(props: {
             />
             <RuntimeIncidentCard
               api={props.api}
-              compact={layout().collapsedSidecar}
-              incidents={(snapshot()?.incidents ?? []).filter((incident) =>
-                incident.status === "OPEN" && incident.presentationState === "VISIBLE")}
+              compact={compactNotices()}
+              incidents={visibleIncidents()}
               busyIncidentID={dismissingIncidentID()}
               onDismiss={(incidentID) => void dismissIncident(incidentID)}
             />
             <RuntimeAttentionBanner
               api={props.api}
-              compact={layout().collapsedSidecar}
+              compact={compactNotices()}
               items={visibleAttentionItems()}
               onDismiss={dismissAttentionLocally}
             />
@@ -830,7 +841,7 @@ function RuntimeIncidentCard(props: {
           fallback={
             <box height={1} flexShrink={0} flexDirection="row" gap={1}>
               <text flexGrow={1} fg={props.api.theme.current.error} truncate>
-                  {`${incident().httpStatus ? `HTTP ${incident().httpStatus}` : incident().failureKind} · ${capitalize(incident().role)}: ${incident().safeSummary}`}
+                {`${incident().httpStatus ? `HTTP ${incident().httpStatus}` : incident().failureKind} · ${capitalize(incident().role)}: ${incident().safeSummary}`}
               </text>
               <text fg={props.api.theme.current.primary} onMouseUp={() => props.onDismiss(incident().incidentID)}>
                 {props.busyIncidentID === incident().incidentID ? "…" : "[×]"}
@@ -862,11 +873,11 @@ function RuntimeIncidentCard(props: {
                 </text>
               </box>
             </box>
-            <text fg={props.api.theme.current.text} wrapMode="word">
+            <text fg={props.api.theme.current.text} wrapMode="word" maxHeight={3}>
               {incident().safeSummary}
             </text>
             <Show when={runtimeIncidentDiagnostic(incident())}>
-              {(detail) => <text fg={props.api.theme.current.textMuted}>{detail()}</text>}
+              {(detail) => <text fg={props.api.theme.current.textMuted} maxHeight={2}>{detail()}</text>}
             </Show>
           </box>
         </Show>
@@ -917,7 +928,7 @@ function RuntimeHealthWarningBanner(props: {
                 <text fg={props.api.theme.current.primary}> [×] </text>
               </box>
             </box>
-            <text fg={props.api.theme.current.text} wrapMode="word">
+            <text fg={props.api.theme.current.text} wrapMode="word" maxHeight={3}>
               {warning().safeSummary}
             </text>
             <text fg={props.api.theme.current.textMuted} wrapMode="word">
@@ -987,11 +998,11 @@ function RuntimeAttentionBanner(props: {
                 </text>
               </box>
             </box>
-            <text fg={props.api.theme.current.text} wrapMode="word">
+            <text fg={props.api.theme.current.text} wrapMode="word" maxHeight={3}>
               {attention().summary}
             </text>
             <Show when={runtimeAttentionDiagnostic(attention())}>
-              {(detail) => <text fg={props.api.theme.current.textMuted}>{detail()}</text>}
+              {(detail) => <text fg={props.api.theme.current.textMuted} maxHeight={5}>{detail()}</text>}
             </Show>
           </box>
         </Show>

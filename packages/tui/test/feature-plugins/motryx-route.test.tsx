@@ -357,6 +357,7 @@ test("Motryx runtime error card can be dismissed without resolving the incident"
     attention: { visibleOpenIncidentCount: 1, failedLaneCount: 0, activeAttentionCount: 1, userActionRequiredCount: 1, retryingCount: 0 },
   } as MotryxControlSnapshot
   let dismissals = 0
+  let actions: MotryxRouteActions | undefined
   const events = new ReadableStream<Uint8Array>()
   const app = await testRender(
     () => (
@@ -394,7 +395,7 @@ test("Motryx runtime error card can be dismissed without resolving the incident"
             <text>COMPOSER BOTTOM</text>
           </box>
         )}
-        onActionsAvailable={() => {}}
+        onActionsAvailable={(next) => (actions = next)}
       />
     ),
     { width: 100, height: 24 },
@@ -408,13 +409,49 @@ test("Motryx runtime error card can be dismissed without resolving the incident"
     expect(frame).toContain("No workflow yet.")
     expect(frame).toContain("! 1")
     expect(frame).not.toContain("Final failure · Orchestrator")
-    app.resize(40, 12)
-    frame = await renderUntil(app, (value) => value.includes("COMPOSER BOTTOM"))
-    expect(frame).toContain("transport · Orchestrator")
-    expect(frame).toContain("COMPOSER DRAFT")
-    expect(frame.split("\n").findIndex((line) => line.includes("COMPOSER BOTTOM")))
-      .toBeLessThan(frame.split("\n").findIndex((line) => line.includes("[FLOW]")))
+    for (const [width, height] of [[40, 12], [60, 17], [80, 21], [60, 24]]) {
+      app.resize(width, height)
+      frame = await renderUntil(app, (value) => value.includes("COMPOSER BOTTOM"))
+      expect(frame).toContain("transport · Orchestrator")
+      expect(frame).toContain("COMPOSER DRAFT")
+      expect(frame.split("\n").findIndex((line) => line.includes("COMPOSER BOTTOM")))
+        .toBeLessThan(frame.split("\n").findIndex((line) => line.includes("[FLOW]")))
+    }
     expect(dismissals).toBe(0)
+    const original = snapshot
+    snapshot = {
+      ...snapshot,
+      runtimeWarnings: [{
+        warningID: "combined_health_warning",
+        kind: "ROUTE_HEALTH_UNCONFIRMED",
+        scope: "SESSION",
+        components: ["OPEN_CODE"],
+        firstObservedAt: "2026-08-17T00:00:00.000Z",
+        lastObservedAt: "2026-08-17T00:00:30.000Z",
+        safeSummary: "OpenCode health could not be confirmed.",
+        dismissible: true,
+      }],
+      attentionItems: [...snapshot.attentionItems, {
+        ...snapshot.attentionItems[0],
+        attentionID: "combined_unknown_outcome",
+        kind: "OUTCOME_UNKNOWN",
+        reasonCode: "unknown",
+        nextAction: "reconcile_outcome",
+      }],
+    }
+    await actions!.refresh()
+    for (const [width, height] of [[40, 12], [60, 17], [80, 21]]) {
+      app.resize(width, height)
+      frame = await renderUntil(app, (value) => value.includes("Runtime health:"))
+      expect(frame).toContain("COMPOSER DRAFT")
+      expect(frame).toContain("COMPOSER BOTTOM")
+      expect(frame).toContain("Outcome unknown")
+      expect(frame.split("\n").findIndex((line) => line.includes("COMPOSER BOTTOM")))
+        .toBeLessThan(frame.split("\n").findIndex((line) => line.includes("[FLOW]")))
+    }
+    snapshot = original
+    await actions!.refresh()
+    frame = await renderUntil(app, (value) => !value.includes("Runtime health:"))
     await clickFrameText(app, frame, "[×]")
     frame = await renderUntil(app, (value) => !value.includes(incident.safeSummary))
     expect(frame).not.toContain("Runtime error · Orchestrator")
