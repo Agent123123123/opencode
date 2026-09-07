@@ -384,7 +384,16 @@ test("Motryx runtime error card can be dismissed without resolving the incident"
           }
           return new Response(events, { headers: { "content-type": "text/event-stream" } })
         }}
-        sessionSurface={() => <text>STANDARD OPENCODE SESSION</text>}
+        sessionSurface={() => (
+          <box height={6} flexShrink={0} flexDirection="column">
+            <text>STANDARD OPENCODE SESSION</text>
+            <text>Conversation history</text>
+            <text>Permission question</text>
+            <text>COMPOSER DRAFT</text>
+            <text>Orchestrator model</text>
+            <text>COMPOSER BOTTOM</text>
+          </box>
+        )}
         onActionsAvailable={() => {}}
       />
     ),
@@ -399,6 +408,13 @@ test("Motryx runtime error card can be dismissed without resolving the incident"
     expect(frame).toContain("No workflow yet.")
     expect(frame).toContain("! 1")
     expect(frame).not.toContain("Final failure · Orchestrator")
+    app.resize(40, 12)
+    frame = await renderUntil(app, (value) => value.includes("COMPOSER BOTTOM"))
+    expect(frame).toContain("Runtime error")
+    expect(frame).toContain("COMPOSER DRAFT")
+    expect(frame.split("\n").findIndex((line) => line.includes("COMPOSER BOTTOM")))
+      .toBeLessThan(frame.split("\n").findIndex((line) => line.includes("[FLOW]")))
+    expect(dismissals).toBe(0)
     await clickFrameText(app, frame, "[×]")
     frame = await renderUntil(app, (value) => !value.includes(incident.safeSummary))
     expect(frame).not.toContain("Runtime error · Orchestrator")

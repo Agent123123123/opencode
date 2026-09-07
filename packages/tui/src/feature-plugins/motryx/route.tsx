@@ -520,6 +520,7 @@ export function MotryxRoute(props: {
       <RuntimeHealthWarningBanner
         api={props.api}
         warnings={visibleRuntimeWarnings()}
+        compact={layout().collapsedSidecar}
         onDismiss={dismissRuntimeWarningLocally}
       />
 
@@ -555,6 +556,7 @@ export function MotryxRoute(props: {
             />
             <RuntimeIncidentCard
               api={props.api}
+              compact={layout().collapsedSidecar}
               incidents={(snapshot()?.incidents ?? []).filter((incident) =>
                 incident.status === "OPEN" && incident.presentationState === "VISIBLE")}
               busyIncidentID={dismissingIncidentID()}
@@ -562,6 +564,7 @@ export function MotryxRoute(props: {
             />
             <RuntimeAttentionBanner
               api={props.api}
+              compact={layout().collapsedSidecar}
               items={visibleAttentionItems()}
               onDismiss={dismissAttentionLocally}
             />
@@ -813,6 +816,7 @@ function MotryxHeader(props: {
 
 function RuntimeIncidentCard(props: {
   api: TuiPluginApi
+  compact: boolean
   incidents: MotryxControlSnapshot["incidents"]
   busyIncidentID?: string
   onDismiss: (incidentID: string) => void
@@ -821,37 +825,51 @@ function RuntimeIncidentCard(props: {
   return (
     <Show when={latest()}>
       {(incident) => (
-        <box
-          flexShrink={0}
-          minHeight={3}
-          flexDirection="column"
-          border={["top", "bottom", "left", "right"]}
-          borderColor={props.api.theme.current.error}
-          paddingLeft={1}
-          paddingRight={1}
-        >
-          <box flexDirection="row" gap={1}>
-            <text fg={props.api.theme.current.error}>Runtime error · {capitalize(incident().role)}</text>
-            <box flexGrow={1} />
-            <Show when={props.incidents.length > 1}>
-              <text fg={props.api.theme.current.textMuted}>{props.incidents.length - 1} more</text>
-            </Show>
-            <box
-              onMouseUp={() => props.onDismiss(incident().incidentID)}
-              backgroundColor={props.api.theme.current.backgroundElement}
-            >
-              <text fg={props.api.theme.current.primary}>
-                {props.busyIncidentID === incident().incidentID ? " … " : " [×] "}
+        <Show
+          when={!props.compact}
+          fallback={
+            <box height={1} flexShrink={0} flexDirection="row" gap={1}>
+              <text flexGrow={1} fg={props.api.theme.current.error} truncate>
+                {`Runtime error · ${capitalize(incident().role)}: ${incident().safeSummary}`}
+              </text>
+              <text fg={props.api.theme.current.primary} onMouseUp={() => props.onDismiss(incident().incidentID)}>
+                {props.busyIncidentID === incident().incidentID ? "…" : "[×]"}
               </text>
             </box>
+          }
+        >
+          <box
+            flexShrink={0}
+            minHeight={3}
+            flexDirection="column"
+            border={["top", "bottom", "left", "right"]}
+            borderColor={props.api.theme.current.error}
+            paddingLeft={1}
+            paddingRight={1}
+          >
+            <box flexDirection="row" gap={1}>
+              <text fg={props.api.theme.current.error}>Runtime error · {capitalize(incident().role)}</text>
+              <box flexGrow={1} />
+              <Show when={props.incidents.length > 1}>
+                <text fg={props.api.theme.current.textMuted}>{props.incidents.length - 1} more</text>
+              </Show>
+              <box
+                onMouseUp={() => props.onDismiss(incident().incidentID)}
+                backgroundColor={props.api.theme.current.backgroundElement}
+              >
+                <text fg={props.api.theme.current.primary}>
+                  {props.busyIncidentID === incident().incidentID ? " … " : " [×] "}
+                </text>
+              </box>
+            </box>
+            <text fg={props.api.theme.current.text} wrapMode="word">
+              {incident().safeSummary}
+            </text>
+            <Show when={runtimeIncidentDiagnostic(incident())}>
+              {(detail) => <text fg={props.api.theme.current.textMuted}>{detail()}</text>}
+            </Show>
           </box>
-          <text fg={props.api.theme.current.text} wrapMode="word">
-            {incident().safeSummary}
-          </text>
-          <Show when={runtimeIncidentDiagnostic(incident())}>
-            {(detail) => <text fg={props.api.theme.current.textMuted}>{detail()}</text>}
-          </Show>
-        </box>
+        </Show>
       )}
     </Show>
   )
@@ -859,6 +877,7 @@ function RuntimeIncidentCard(props: {
 
 function RuntimeHealthWarningBanner(props: {
   api: TuiPluginApi
+  compact: boolean
   warnings: MotryxRuntimeHealthWarning[]
   onDismiss: (warningID: string) => void
 }) {
@@ -866,33 +885,49 @@ function RuntimeHealthWarningBanner(props: {
   return (
     <Show when={current()}>
       {(warning) => (
-        <box
-          flexShrink={0}
-          minHeight={4}
-          flexDirection="column"
-          border={["top", "bottom", "left", "right"]}
-          borderColor={props.api.theme.current.warning}
-          paddingLeft={1}
-          paddingRight={1}
-        >
-          <box flexDirection="row" gap={1}>
-            <text fg={props.api.theme.current.warning}>Runtime health could not be confirmed</text>
-            <box flexGrow={1} />
-            <box
-              onMouseUp={() => props.onDismiss(warning().warningID)}
-              backgroundColor={props.api.theme.current.backgroundElement}
-            >
-              <text fg={props.api.theme.current.primary}> [×] </text>
+        <Show
+          when={!props.compact}
+          fallback={
+            <box height={1} flexShrink={0} flexDirection="row" gap={1}>
+              <text flexGrow={1} fg={props.api.theme.current.warning} truncate>
+                {`Runtime health: ${warning().safeSummary}`}
+              </text>
+              <text fg={props.api.theme.current.primary} onMouseUp={() => props.onDismiss(warning().warningID)}>
+                [×]
+              </text>
             </box>
+          }
+        >
+          <box
+            flexShrink={0}
+            minHeight={4}
+            flexDirection="column"
+            border={["top", "bottom", "left", "right"]}
+            borderColor={props.api.theme.current.warning}
+            paddingLeft={1}
+            paddingRight={1}
+          >
+            <box flexDirection="row" gap={1}>
+              <text fg={props.api.theme.current.warning}>Runtime health could not be confirmed</text>
+              <box flexGrow={1} />
+              <box
+                onMouseUp={() => props.onDismiss(warning().warningID)}
+                backgroundColor={props.api.theme.current.backgroundElement}
+              >
+                <text fg={props.api.theme.current.primary}> [×] </text>
+              </box>
+            </box>
+            <text fg={props.api.theme.current.text} wrapMode="word">
+              {warning().safeSummary}
+            </text>
+            <text fg={props.api.theme.current.textMuted} wrapMode="word">
+              Existing work was not interrupted. A new request can still fail independently.
+            </text>
+            <text fg={props.api.theme.current.textMuted}>
+              First observed {new Date(warning().firstObservedAt).toLocaleString()}
+            </text>
           </box>
-          <text fg={props.api.theme.current.text} wrapMode="word">{warning().safeSummary}</text>
-          <text fg={props.api.theme.current.textMuted} wrapMode="word">
-            Existing work was not interrupted. A new request can still fail independently.
-          </text>
-          <text fg={props.api.theme.current.textMuted}>
-            First observed {new Date(warning().firstObservedAt).toLocaleString()}
-          </text>
-        </box>
+        </Show>
       )}
     </Show>
   )
@@ -900,6 +935,7 @@ function RuntimeHealthWarningBanner(props: {
 
 function RuntimeAttentionBanner(props: {
   api: TuiPluginApi
+  compact: boolean
   items: MotryxAttentionItemProjection[]
   onDismiss: (attentionID: string) => void
 }) {
@@ -908,37 +944,57 @@ function RuntimeAttentionBanner(props: {
   return (
     <Show when={current()}>
       {(attention) => (
-        <box
-          flexShrink={0}
-          minHeight={3}
-          flexDirection="column"
-          border={["top", "bottom", "left", "right"]}
-          borderColor={runtimeAttentionColor(props.api, attention().severity)}
-          paddingLeft={1}
-          paddingRight={1}
-        >
-          <box flexDirection="row" gap={1}>
-            <text fg={runtimeAttentionColor(props.api, attention().severity)}>
-              {runtimeAttentionTitle(attention())} · {capitalize(attention().role)}
-            </text>
-            <box flexGrow={1} />
-            <Show when={ordered().length > 1}>
-              <text fg={props.api.theme.current.textMuted}>{ordered().length - 1} more</text>
-            </Show>
-            <box
-              onMouseUp={attention().dismissible ? () => props.onDismiss(attention().attentionID) : undefined}
-              backgroundColor={props.api.theme.current.backgroundElement}
-            >
-              <text fg={attention().dismissible ? props.api.theme.current.primary : props.api.theme.current.textMuted}>
-                {attention().dismissible ? " [×] " : ""}
+        <Show
+          when={!props.compact}
+          fallback={
+            <box height={1} flexShrink={0} flexDirection="row" gap={1}>
+              <text flexGrow={1} fg={runtimeAttentionColor(props.api, attention().severity)} truncate>
+                {`${runtimeAttentionTitle(attention())}: ${attention().summary}`}
               </text>
+              <Show when={attention().dismissible}>
+                <text fg={props.api.theme.current.primary} onMouseUp={() => props.onDismiss(attention().attentionID)}>
+                  [×]
+                </text>
+              </Show>
             </box>
+          }
+        >
+          <box
+            flexShrink={0}
+            minHeight={3}
+            flexDirection="column"
+            border={["top", "bottom", "left", "right"]}
+            borderColor={runtimeAttentionColor(props.api, attention().severity)}
+            paddingLeft={1}
+            paddingRight={1}
+          >
+            <box flexDirection="row" gap={1}>
+              <text fg={runtimeAttentionColor(props.api, attention().severity)}>
+                {runtimeAttentionTitle(attention())} · {capitalize(attention().role)}
+              </text>
+              <box flexGrow={1} />
+              <Show when={ordered().length > 1}>
+                <text fg={props.api.theme.current.textMuted}>{ordered().length - 1} more</text>
+              </Show>
+              <box
+                onMouseUp={attention().dismissible ? () => props.onDismiss(attention().attentionID) : undefined}
+                backgroundColor={props.api.theme.current.backgroundElement}
+              >
+                <text
+                  fg={attention().dismissible ? props.api.theme.current.primary : props.api.theme.current.textMuted}
+                >
+                  {attention().dismissible ? " [×] " : ""}
+                </text>
+              </box>
+            </box>
+            <text fg={props.api.theme.current.text} wrapMode="word">
+              {attention().summary}
+            </text>
+            <Show when={runtimeAttentionDiagnostic(attention())}>
+              {(detail) => <text fg={props.api.theme.current.textMuted}>{detail()}</text>}
+            </Show>
           </box>
-          <text fg={props.api.theme.current.text} wrapMode="word">{attention().summary}</text>
-          <Show when={runtimeAttentionDiagnostic(attention())}>
-            {(detail) => <text fg={props.api.theme.current.textMuted}>{detail()}</text>}
-          </Show>
-        </box>
+        </Show>
       )}
     </Show>
   )
