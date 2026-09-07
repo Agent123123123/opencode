@@ -12,7 +12,6 @@ import {
   InvalidCursorError,
   InvalidRequestError,
   MessageNotFoundError,
-  ProviderConnectionRequiredError,
   ServiceUnavailableError,
   SessionNotFoundError,
   UnknownError,
@@ -280,7 +279,7 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
           resume: Schema.Boolean.pipe(Schema.optional),
         }),
         success: Schema.Struct({ data: SessionInput.Admitted }),
-        error: [ConflictError, InvalidRequestError, ProviderConnectionRequiredError, ServiceUnavailableError, SessionNotFoundError],
+        error: [ConflictError, InvalidRequestError, ServiceUnavailableError, SessionNotFoundError],
       })
         .middleware(sessionLocationMiddleware)
         .annotateMerge(

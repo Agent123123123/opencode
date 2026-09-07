@@ -53,6 +53,15 @@ export class VariantUnavailableError extends Schema.TaggedErrorClass<VariantUnav
   }
 }
 
+export class ProviderConnectionRequiredError extends Schema.TaggedErrorClass<ProviderConnectionRequiredError>()(
+  "SessionRunnerModel.ProviderConnectionRequiredError",
+  { providerID: ProviderV2.ID, modelID: ModelV2.ID },
+) {
+  override get message() {
+    return `Provider connection required for ${this.providerID}/${this.modelID}`
+  }
+}
+
 export class UnsupportedApiError extends Schema.TaggedErrorClass<UnsupportedApiError>()(
   "SessionRunnerModel.UnsupportedApiError",
   {
@@ -69,6 +78,7 @@ export class UnsupportedApiError extends Schema.TaggedErrorClass<UnsupportedApiE
 export type Error =
   | ModelNotSelectedError
   | ModelUnavailableError
+  | ProviderConnectionRequiredError
   | VariantUnavailableError
   | UnsupportedApiError
   | Integration.AuthorizationError
@@ -201,11 +211,23 @@ export const locationLayer = Layer.effect(
           : defaultModel && supported(defaultModel)
             ? defaultModel
             : (yield* catalog.model.available()).find(supported)
-        if (!selected && session.model)
+        if (!selected && session.model) {
+          if (session.execution.managed) {
+            const provider = yield* catalog.provider.get(session.model.providerID)
+            const configured = yield* catalog.model.get(session.model.providerID, session.model.id)
+            if (provider && !provider.disabled && configured?.enabled && supported(configured)) {
+              yield* withVariant(configured, session.model.variant)
+              return yield* new ProviderConnectionRequiredError({
+                providerID: session.model.providerID,
+                modelID: session.model.id,
+              })
+            }
+          }
           return yield* new ModelUnavailableError({
             providerID: session.model.providerID,
             modelID: session.model.id,
           })
+        }
         if (!selected) return yield* new ModelNotSelectedError({ sessionID: session.id })
         const provider = yield* catalog.provider.get(selected.providerID)
         const connection = yield* integrations.connection.active(

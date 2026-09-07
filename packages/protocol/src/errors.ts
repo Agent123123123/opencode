@@ -34,17 +34,6 @@ export class ServiceUnavailableError extends Schema.TaggedErrorClass<ServiceUnav
   { httpApiStatus: 503 },
 ) {}
 
-export class ProviderConnectionRequiredError extends Schema.TaggedErrorClass<ProviderConnectionRequiredError>()(
-  "ProviderConnectionRequiredError",
-  {
-    providerID: Schema.String,
-    modelID: Schema.String,
-    variant: Schema.String,
-    message: Schema.String,
-  },
-  { httpApiStatus: 503 },
-) {}
-
 export class UnknownError extends Schema.TaggedErrorClass<UnknownError>()(
   "UnknownError",
   {

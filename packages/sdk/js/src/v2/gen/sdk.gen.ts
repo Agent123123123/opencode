@@ -196,6 +196,9 @@ import type {
   SessionInitErrors,
   SessionInitResponses,
   SessionInputCompletionContract,
+  SessionInputExecutionCellRef,
+  SessionInputManagedExecutionRef,
+  SessionInputManagedInputAuthorization,
   SessionListErrors,
   SessionListResponses,
   SessionMessageErrors,
@@ -206,6 +209,7 @@ import type {
   SessionPromptAsyncResponses,
   SessionPromptErrors,
   SessionPromptResponses,
+  SessionResetRequest,
   SessionRevertErrors,
   SessionRevertResponses,
   SessionShareErrors,
@@ -349,10 +353,16 @@ import type {
   V2SessionExecutionGateResponses,
   V2SessionExecutionGateSetErrors,
   V2SessionExecutionGateSetResponses,
+  V2SessionExecutionResetErrors,
+  V2SessionExecutionResetResponses,
   V2SessionGetErrors,
   V2SessionGetResponses,
   V2SessionHistoryErrors,
   V2SessionHistoryResponses,
+  V2SessionInputAuthorizationRevokeErrors,
+  V2SessionInputAuthorizationRevokeResponses,
+  V2SessionInputAuthorizationSetErrors,
+  V2SessionInputAuthorizationSetResponses,
   V2SessionInputCancelErrors,
   V2SessionInputCancelResponses,
   V2SessionInputErrors,
@@ -5270,6 +5280,92 @@ export class Revert extends HeyApiClient {
   }
 }
 
+export class InputAuthorization extends HeyApiClient {
+  /**
+   * Revoke one managed input
+   *
+   * Remove the exact process-local managed input execution grant.
+   */
+  public revoke<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      inputID: string
+      claimID?: string
+      cell?: SessionInputExecutionCellRef
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "path", key: "inputID" },
+            { in: "body", key: "claimID" },
+            { in: "body", key: "cell" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).delete<
+      V2SessionInputAuthorizationRevokeResponses,
+      V2SessionInputAuthorizationRevokeErrors,
+      ThrowOnError
+    >({
+      url: "/api/session/{sessionID}/input/{inputID}/authorization",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Authorize one managed input
+   *
+   * Install a process-local execution grant for one managed Session input and execution cell.
+   */
+  public set<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      inputID: string
+      sessionInputManagedInputAuthorization: SessionInputManagedInputAuthorization
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "path", key: "inputID" },
+            { key: "sessionInputManagedInputAuthorization", map: "body" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      V2SessionInputAuthorizationSetResponses,
+      V2SessionInputAuthorizationSetErrors,
+      ThrowOnError
+    >({
+      url: "/api/session/{sessionID}/input/{inputID}/authorization",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+}
+
 export class Permission2 extends HeyApiClient {
   /**
    * List session permission requests
@@ -5777,6 +5873,45 @@ export class Session3 extends HeyApiClient {
   }
 
   /**
+   * Reset managed session execution
+   *
+   * Durably terminalize old managed execution through an exact Session event cut.
+   */
+  public executionReset<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      sessionResetRequest: SessionResetRequest
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { key: "sessionResetRequest", map: "body" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      V2SessionExecutionResetResponses,
+      V2SessionExecutionResetErrors,
+      ThrowOnError
+    >({
+      url: "/api/session/{sessionID}/execution-reset",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
    * Send message
    *
    * Durably admit one session input and schedule agent-loop execution unless resume is false.
@@ -5788,6 +5923,7 @@ export class Session3 extends HeyApiClient {
       prompt?: PromptInput
       delivery?: "steer" | "queue"
       completionContract?: SessionInputCompletionContract
+      managedExecution?: SessionInputManagedExecutionRef
       resume?: boolean
     },
     options?: Options<never, ThrowOnError>,
@@ -5802,6 +5938,7 @@ export class Session3 extends HeyApiClient {
             { in: "body", key: "prompt" },
             { in: "body", key: "delivery" },
             { in: "body", key: "completionContract" },
+            { in: "body", key: "managedExecution" },
             { in: "body", key: "resume" },
           ],
         },
@@ -6080,6 +6217,11 @@ export class Session3 extends HeyApiClient {
   private _revert?: Revert
   get revert(): Revert {
     return (this._revert ??= new Revert({ client: this.client }))
+  }
+
+  private _inputAuthorization?: InputAuthorization
+  get inputAuthorization(): InputAuthorization {
+    return (this._inputAuthorization ??= new InputAuthorization({ client: this.client }))
   }
 
   private _permission?: Permission2

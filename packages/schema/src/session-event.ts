@@ -190,6 +190,7 @@ export const PromptCanceled = Event.define({
     origin: Schema.Literals(["user", "framework", "runtime_shutdown", "stale", "business"]),
     reason: Schema.String,
     inputVisibility: Schema.Literals(["missing", "admitted_unpromoted"]),
+    managedExecution: ManagedExecutionRef.pipe(optional),
     executionReset: SessionReset.Reference.pipe(optional),
   },
 })

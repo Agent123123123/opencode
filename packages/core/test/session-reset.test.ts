@@ -74,11 +74,12 @@ function authorizeDirectInput(sessionID: SessionV2.ID, inputID: SessionMessage.I
     claimID,
     cell,
     managedExecutionRef: SessionInput.ManagedExecutionRef.make({
-      schema: "motryx.managed_execution.v2",
+      schema: "motryx.managed_execution.v4",
+      purpose: "orchestrator",
       origin: "DIRECT_USER",
       productSessionID: sessionID,
       owner: { kind: "CONTROL_ROLE", id: sessionID, generation: 1 },
-      checkpoint: { kind: "CONTROL", id: sessionID, revision: 1 },
+      checkpoint: { kind: "CONTROL", id: sessionID },
       cell,
       claimID,
     }),
@@ -385,11 +386,12 @@ describe("managed Session execution reset", () => {
           correction: { maxSteps: 1, instruction: "submit" },
         }),
         managedExecution: SessionInput.ManagedExecutionRef.make({
-          schema: "motryx.managed_execution.v2",
+          schema: "motryx.managed_execution.v4",
+          purpose: "orchestrator",
           origin: "FRAMEWORK",
           productSessionID: created.id,
           owner: { kind: "CONTROL_ROLE", id: "control_owner_reset_test", generation: 1 },
-          checkpoint: { kind: "CONTROL", id: "control_owner_reset_test", revision: 1 },
+          checkpoint: { kind: "CONTROL", id: "control_owner_reset_test" },
           cell: {
             supervisorIncarnationID: "supervisor_test",
             hostIncarnationID: "host_test",
@@ -420,6 +422,15 @@ describe("managed Session execution reset", () => {
         idle: true,
       })
       expect((yield* session.input({ sessionID: created.id, inputID: framework.id })).state).toBe("canceled")
+      const history = yield* session.history({ sessionID: created.id, limit: 100 })
+      const canceled = history.events.find((event) =>
+        event.type === SessionEvent.PromptCanceled.type && event.data.messageID === framework.id,
+      )
+      expect(framework.completion?.managedExecution).toBeDefined()
+      expect(canceled?.type).toBe(SessionEvent.PromptCanceled.type)
+      if (canceled?.type === SessionEvent.PromptCanceled.type) {
+        expect(canceled.data.managedExecution).toEqual(framework.completion?.managedExecution)
+      }
       expect((yield* session.input({ sessionID: created.id, inputID: admitOnlyProbe.id })).state).toBe("canceled")
       expect((yield* session.input({ sessionID: created.id, inputID: queuedUser.id })).state).toBe("admitted")
       expect((yield* session.input({ sessionID: created.id, inputID: promotedUser.id })).state).toBe("promoted")

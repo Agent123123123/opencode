@@ -8,7 +8,6 @@ import {
   InvalidRequestError,
   InvalidCursorError,
   MessageNotFoundError,
-  ProviderConnectionRequiredError,
   ServiceUnavailableError,
   SessionNotFoundError,
   UnknownError,
@@ -496,15 +495,6 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
                   ),
                 ),
                 Effect.catchTags({
-                  "Session.ProviderConnectionRequiredError": (error) =>
-                    Effect.fail(
-                      new ProviderConnectionRequiredError({
-                        providerID: error.providerID,
-                        modelID: error.modelID,
-                        variant: error.variant,
-                        message: error.message,
-                      }),
-                    ),
                   "SessionSelection.ModelNotSelectedError": () =>
                     Effect.fail(
                       new ServiceUnavailableError({ message: "Managed session has no selected model", service: "catalog" }),

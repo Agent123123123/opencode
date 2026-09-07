@@ -12,6 +12,7 @@ import {
 import { Cause, DateTime, Effect, Exit, FiberSet, Layer, Option, Semaphore, Stream } from "effect"
 import { AgentV2 } from "../../agent"
 import { Config } from "../../config"
+import { Integration } from "../../integration"
 import { Database } from "../../database/database"
 import { EventV2 } from "../../event"
 import { Location } from "../../location"
@@ -170,6 +171,7 @@ const layer = Layer.effect(
       readonly turnID: SessionMessage.ID
       startCommitEntered: boolean
       started: boolean
+      notStarted: boolean
       turnStartedAt?: DateTime.Utc
       activityInputIDs: ReadonlyArray<SessionMessage.ID>
       interruptedToolsReconciled: boolean
@@ -232,37 +234,16 @@ const layer = Layer.effect(
         }
         if (promoted > 0) currentStep = 1
       }
-      if (!activity.interruptedToolsReconciled) {
-        yield* failInterruptedTools(session.id)
-        activity.interruptedToolsReconciled = true
-      }
-      const agent = yield* agents.select(session.agent)
-      const toolFibers = yield* FiberSet.make<void, ToolOutputStore.Error>()
-      const model = yield* models.resolve(session)
-      activity.providerID = model.provider
-      activity.modelID = model.id
-      const effectiveModel = {
-        id: ModelV2.ID.make(model.id),
-        providerID: ProviderV2.ID.make(model.provider),
-        ...(session.model?.variant === undefined ? {} : { variant: session.model.variant }),
-      }
-      const activityBeforePromotion =
+      // Establish failure ownership before model/credential/context preparation.
+      // History remains context, not authority to adopt inputs of an older Turn.
+      const activityInputIDs =
         activity.activityInputIDs.length > 0
           ? activity.activityInputIDs
           : currentActivityInputIDs(yield* getContext(session.id))
-      activity.activityInputIDs = activityBeforePromotion
-      const contextSource = loadSystemContext(session, agent, effectiveModel, activityBeforePromotion)
-      const initialized = yield* SessionContextEpoch.initialize(db, contextSource, session.id)
-      // A physical turn is owned by the inputs promoted for this Activity.
-      // Earlier user messages remain in model context, but after a process-loss
-      // continuation they must not be reclassified as inputs of the successor
-      // Attempt. Fall back to transcript inference only for a forced/orphaned
-      // Activity that had no fresh promotion identity.
-      const activityInputIDs = activityBeforePromotion.length > 0
-        ? activityBeforePromotion
-        : currentActivityInputIDs(yield* getContext(session.id))
       activity.activityInputIDs = activityInputIDs
       activity.managed = session.execution.managed
+      activity.providerID = session.model?.providerID
+      activity.modelID = session.model?.id
       if (session.execution.managed) {
         if (activityInputIDs.length !== 1) {
           return yield* new ManagedTurnError({
@@ -292,6 +273,22 @@ const layer = Layer.effect(
           ? ManagedSessionAuthority.executionRef(session.id, activityInputIDs[0]!) ?? execution
           : execution
       }
+      if (!activity.interruptedToolsReconciled) {
+        yield* failInterruptedTools(session.id)
+        activity.interruptedToolsReconciled = true
+      }
+      const agent = yield* agents.select(session.agent)
+      const toolFibers = yield* FiberSet.make<void, ToolOutputStore.Error>()
+      const model = yield* models.resolve(session)
+      activity.providerID = model.provider
+      activity.modelID = model.id
+      const effectiveModel = {
+        id: ModelV2.ID.make(model.id),
+        providerID: ProviderV2.ID.make(model.provider),
+        ...(session.model?.variant === undefined ? {} : { variant: session.model.variant }),
+      }
+      const contextSource = loadSystemContext(session, agent, effectiveModel, activityInputIDs)
+      const initialized = yield* SessionContextEpoch.initialize(db, contextSource, session.id)
       const system = initialized ?? (yield* SessionContextEpoch.prepare(db, events, contextSource, session.id))
       const entries = yield* SessionHistory.entriesForRunner(db, session.id, system.baselineSeq)
       const projection = yield* SessionModelContext.projectEntries(entries, model)
@@ -606,12 +603,14 @@ const layer = Layer.effect(
       if (!forced && !hasSteer && !hasQueue && !hasOrphanedPromotion) return
       let promotion: SessionInput.Delivery | undefined = hasSteer ? "steer" : hasQueue ? "queue" : undefined
       let shouldRun = forced || hasSteer || hasQueue || hasOrphanedPromotion
+      let preparationFailure: Cause.Cause<RunError> | undefined
       while (shouldRun) {
         yield* SessionModelSwitch.applyPending(db, events, input.sessionID)
         const activity: Activity = {
           turnID: SessionMessage.ID.create(),
           startCommitEntered: false,
           started: false,
+          notStarted: false,
           activityInputIDs: [],
           interruptedToolsReconciled: false,
           managed: false,
@@ -659,7 +658,8 @@ const layer = Layer.effect(
                     if (admitted?.promotedSeq !== undefined) promotedInputIDs.push(inputID)
                   }
                   if (promotedInputIDs.length === 0) return
-                  yield* events.publish(SessionEvent.Turn.NotStarted, {
+                  const failure = runtimeFailure(error, activity.providerID, activity.modelID)
+                  const terminal = yield* events.publish(SessionEvent.Turn.NotStarted, {
                     sessionID: input.sessionID,
                     timestamp: yield* DateTime.now,
                     schema: "opencode.turn_not_started.v2",
@@ -672,14 +672,23 @@ const layer = Layer.effect(
                     ...(!interrupted
                       ? {
                           failure: {
-                            ...runtimeFailure(error, activity.providerID, activity.modelID),
-                            retryable: error instanceof SystemContext.InitializationBlocked,
-                            retryExhausted: error instanceof SystemContext.InitializationBlocked,
-                            attemptCount: activity.preStartRetryCount + 1,
+                            ...failure,
+                            // No tool execution was started for this Input.
+                            // An unexpected preparation failure is a protocol
+                            // failure, not evidence of an unknown external effect.
+                            ...(activity.managed && failure.kind === "unknown"
+                              ? { kind: "protocol_contract_unsatisfied" as const }
+                              : {}),
+                            ...(error instanceof SystemContext.InitializationBlocked
+                              ? { retryable: true, retryExhausted: true }
+                              : {}),
+                            attemptCount: Math.max(failure.attemptCount, activity.preStartRetryCount + 1),
                           },
                         }
                       : {}),
                   })
+                  if (!terminal.durable) return yield* Effect.die("NotStarted proof was not durably committed")
+                  activity.notStarted = true
                   revokeActivityInputGrants(input.sessionID, promotedInputIDs, activity.managedExecution)
                   return
                 }
@@ -724,10 +733,18 @@ const layer = Layer.effect(
           ),
         )
         yield* SessionModelSwitch.applyPending(db, events, input.sessionID)
-        if (Exit.isFailure(activityExit)) return yield* Effect.failCause(activityExit.cause)
+        if (Exit.isFailure(activityExit)) {
+          if (!activity.managed || !activity.notStarted || Cause.hasInterrupts(activityExit.cause)) {
+            return yield* Effect.failCause(activityExit.cause)
+          }
+          // A terminal no-start must not strand the next separately admitted
+          // Input. Preserve the failure for explicit callers after draining.
+          preparationFailure ??= activityExit.cause
+        }
         shouldRun = yield* SessionInput.hasPending(db, input.sessionID, "queue")
         promotion = shouldRun ? "queue" : undefined
       }
+      if (preparationFailure) return yield* Effect.failCause(preparationFailure)
     })
 
     return Service.of({
@@ -798,6 +815,13 @@ const mergeInputIDs = (
 ): ReadonlyArray<SessionMessage.ID> => [...new Set([...current, ...added])]
 
 const failureKind = (error: unknown): SessionEvent.Turn.Failure["kind"] => {
+  if (error instanceof SessionRunnerModel.ProviderConnectionRequiredError || error instanceof Integration.AuthorizationError)
+    return "authentication"
+  if (
+    error instanceof SessionRunnerModel.ModelUnavailableError || error instanceof SessionRunnerModel.ModelNotSelectedError ||
+    error instanceof SessionRunnerModel.VariantUnavailableError || error instanceof SessionRunnerModel.UnsupportedApiError
+  ) return "invalid_request"
+  if (error instanceof SystemContext.InitializationBlocked) return "protocol_contract_unsatisfied"
   if (error instanceof ManagedTurnError) {
     if (error.kind === "protocol") return "protocol_contract_unsatisfied"
     if (error.kind === "resource") return "resource_limit"
@@ -851,8 +875,14 @@ const runtimeFailure = (
     ...(httpStatus === undefined ? {} : { httpStatus }),
     ...(reason?._tag === "Transport" && reason.kind ? { transportKind: reason.kind } : {}),
     ...(reason?._tag === "Transport" && reason.code ? { transportCode: reason.code } : {}),
+    ...(error instanceof SessionRunnerModel.ProviderConnectionRequiredError
+      ? { transportCode: "provider_connection_required" }
+      : {}),
     retryable: llmError?.retryable ?? false,
-    retryExhausted: llmError?.retryExhausted ?? error instanceof ManagedTurnError,
+    retryExhausted: llmError?.retryExhausted ?? (
+      error instanceof ManagedTurnError || error instanceof SessionRunnerModel.ProviderConnectionRequiredError ||
+      error instanceof Integration.AuthorizationError
+    ),
     attemptCount: Math.max(1, Math.trunc(llmError?.attemptCount ?? 1)),
     ...(providerID ? { providerID } : {}),
     ...(modelID ? { modelID } : {}),

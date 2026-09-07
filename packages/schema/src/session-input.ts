@@ -69,8 +69,10 @@ export const ExecutionCellRef = Schema.Struct({
 export interface ExecutionCellRef extends Schema.Schema.Type<typeof ExecutionCellRef> {}
 
 export const FrameworkManagedExecutionRef = Schema.Struct({
-  schema: Schema.Literal("motryx.managed_execution.v2"),
+  schema: Schema.Literal("motryx.managed_execution.v4"),
   origin: Schema.Literal("FRAMEWORK"),
+  purpose: Schema.Literals(["orchestrator", "analyst", "coordinator", "checker", "responder"]),
+  originLaneID: ManagedExecutionID.pipe(optional),
   productSessionID: SessionID,
   owner: Schema.Struct({
     kind: Schema.Literals(["FUNCTION_SLOT", "CONTROL_ROLE"]),
@@ -80,7 +82,6 @@ export const FrameworkManagedExecutionRef = Schema.Struct({
   checkpoint: Schema.Struct({
     kind: Schema.Literals(["LANE", "CONTROL"]),
     id: ManagedExecutionID,
-    revision: NonNegativeInt,
   }),
   cell: ExecutionCellRef,
   claimID: ManagedExecutionID,
@@ -89,8 +90,10 @@ export interface FrameworkManagedExecutionRef
   extends Schema.Schema.Type<typeof FrameworkManagedExecutionRef> {}
 
 export const DirectUserManagedExecutionRef = Schema.Struct({
-  schema: Schema.Literal("motryx.managed_execution.v2"),
+  schema: Schema.Literal("motryx.managed_execution.v4"),
   origin: Schema.Literal("DIRECT_USER"),
+  purpose: FrameworkManagedExecutionRef.fields.purpose.pipe(optional),
+  originLaneID: FrameworkManagedExecutionRef.fields.originLaneID,
   productSessionID: SessionID,
   owner: FrameworkManagedExecutionRef.fields.owner.pipe(optional),
   checkpoint: FrameworkManagedExecutionRef.fields.checkpoint.pipe(optional),

@@ -37,10 +37,13 @@ const switchedModel = ModelV2.Ref.make({
 })
 const exactAgent = AgentV2.ID.make("build")
 let connected = false
+let configured = true
 const wakeCalls: SessionV2.ID[] = []
 
 const resolveConfigured: SessionSelection.Interface["resolveConfigured"] = (input) =>
-  Effect.succeed({ agent: input.agent ?? exactAgent, model: input.model })
+  configured
+    ? Effect.succeed({ agent: input.agent ?? exactAgent, model: input.model })
+    : Effect.fail(new SessionSelection.ModelUnavailableError({ model: input.model }))
 const resolveAvailable: SessionSelection.Interface["resolve"] = (input) => {
   const model = input.model ?? exactModel
   return connected
@@ -107,9 +110,10 @@ const countPromptAdmissions = Database.Service.use(({ db }) =>
 )
 
 describe("managed session provider admission", () => {
-  it.effect("keeps selection durable but rejects a disconnected prompt before admission", () =>
+  it.effect("durably admits a disconnected managed prompt and reconciles an exact retry", () =>
     Effect.gen(function* () {
       connected = false
+      configured = true
       wakeCalls.length = 0
       const session = yield* SessionV2.Service
       const location = Location.Ref.make({ directory: AbsolutePath.make("/managed-project") })
@@ -129,18 +133,15 @@ describe("managed session provider admission", () => {
       expect(created).toMatchObject({ agent: exactAgent, model: exactModel, execution: { managed: true } })
 
       const messageID = SessionMessage.ID.create()
-      const failure = yield* session
+      const admitted = yield* session
         .prompt({ sessionID: created.id, id: messageID, prompt: Prompt.make({ text: "needs provider" }) })
-        .pipe(Effect.flip)
-      expect(failure).toMatchObject({
-        _tag: "Session.ProviderConnectionRequiredError",
-        providerID,
-        modelID,
-        variant: "default",
+      expect(admitted).toMatchObject({
+        id: messageID,
+        delivery: "queue",
       })
-      expect(yield* countInputs).toBe(0)
-      expect(yield* countPromptAdmissions).toBe(0)
-      expect(wakeCalls).toEqual([])
+      expect(yield* countInputs).toBe(1)
+      expect(yield* countPromptAdmissions).toBe(1)
+      expect(wakeCalls).toEqual([created.id])
 
       connected = true
       expect(
@@ -159,7 +160,18 @@ describe("managed session provider admission", () => {
       })
       expect(yield* countInputs).toBe(1)
       expect(yield* countPromptAdmissions).toBe(1)
-      expect(wakeCalls).toEqual([created.id])
+      expect(wakeCalls).toEqual([created.id, created.id])
+
+      configured = false
+      expect(yield* session.prompt({
+        sessionID: created.id, id: messageID, prompt: Prompt.make({ text: "needs provider" }), resume: false,
+      })).toEqual(admitted)
+      expect(yield* session.prompt({
+        sessionID: created.id, prompt: Prompt.make({ text: "configuration is checked after admission" }), resume: false,
+      })).toMatchObject({ sessionID: created.id, delivery: "queue" })
+      expect(yield* countInputs).toBe(2)
+      expect(yield* countPromptAdmissions).toBe(2)
+      configured = true
 
       connected = false
       yield* session.switchModel({ sessionID: created.id, model: switchedModel })
@@ -172,6 +184,7 @@ describe("managed session provider admission", () => {
   it.effect("rejects managed steer and persists an exact controller completion contract", () =>
     Effect.gen(function* () {
       connected = true
+      configured = true
       const session = yield* SessionV2.Service
       const created = yield* session.create({
         location: Location.Ref.make({ directory: AbsolutePath.make("/managed-contract-project") }),
@@ -197,11 +210,12 @@ describe("managed session provider admission", () => {
         correction: { maxSteps: 1 as const, instruction: "Call exactly one terminal submission tool now." },
       }
       const managedExecution = SessionInput.ManagedExecutionRef.make({
-        schema: "motryx.managed_execution.v2",
+        schema: "motryx.managed_execution.v4",
+        purpose: "orchestrator",
         origin: "FRAMEWORK",
         productSessionID: created.id,
         owner: { kind: "CONTROL_ROLE", id: "control_owner_test", generation: 1 },
-        checkpoint: { kind: "CONTROL", id: "control_owner_test", revision: 1 },
+        checkpoint: { kind: "CONTROL", id: "control_owner_test" },
         cell: {
           supervisorIncarnationID: "supervisor_test",
           hostIncarnationID: "host_test",

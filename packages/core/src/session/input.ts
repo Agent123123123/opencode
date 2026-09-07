@@ -200,6 +200,12 @@ export const cancel = Effect.fn("SessionInput.cancel")(function* (
     return CancelResult.make({ outcome: "canceled", status: current })
   }
   if (current.state === "promoted") return CancelResult.make({ outcome: "too_late", status: current })
+  const admittedExecution = current.state === "admitted" ? current.input.completion?.managedExecution : undefined
+  // Framework admission already contains the immutable reference. Direct user
+  // admission can be enriched by its exact grant before promotion.
+  const managedExecution = admittedExecution?.origin === "FRAMEWORK"
+    ? admittedExecution
+    : ManagedSessionAuthority.executionRef(input.sessionID, input.id) ?? admittedExecution
   const timestamp = yield* DateTime.now
   yield* events
     .publish(SessionEvent.PromptCanceled, {
@@ -209,6 +215,7 @@ export const cancel = Effect.fn("SessionInput.cancel")(function* (
       origin: input.origin,
       reason: input.reason,
       inputVisibility: current.state === "admitted" ? "admitted_unpromoted" : "missing",
+      ...(managedExecution ? { managedExecution } : {}),
       ...(input.executionReset ? { executionReset: input.executionReset } : {}),
     }, input.eventID ? { id: input.eventID } : undefined)
     .pipe(

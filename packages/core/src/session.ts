@@ -120,18 +120,6 @@ export class ManagedSelectionRequiredError extends Schema.TaggedErrorClass<Manag
   "Session.ManagedSelectionRequiredError",
   { field: Schema.Literals(["agent", "model"]) },
 ) {}
-export class ProviderConnectionRequiredError extends Schema.TaggedErrorClass<ProviderConnectionRequiredError>()(
-  "Session.ProviderConnectionRequiredError",
-  {
-    providerID: ProviderV2.ID,
-    modelID: ModelV2.ID,
-    variant: ModelV2.VariantID,
-  },
-) {
-  override get message() {
-    return `Provider connection required for ${this.providerID}/${this.modelID}#${this.variant}`
-  }
-}
 export class ManagedInputError extends Schema.TaggedErrorClass<ManagedInputError>()("Session.ManagedInputError", {
   reason: Schema.Literals([
     "steer_not_allowed",
@@ -151,7 +139,6 @@ export type Error =
   | PromptConflictError
   | CreateConflictError
   | ManagedSelectionRequiredError
-  | ProviderConnectionRequiredError
   | ManagedInputError
   | SessionReset.Conflict
   | SessionSelection.Error
@@ -206,7 +193,7 @@ export interface Interface {
     resume?: boolean
   }) => Effect.Effect<
     SessionInput.Admitted,
-    NotFoundError | PromptConflictError | ProviderConnectionRequiredError | ManagedInputError | SessionSelection.ModelError
+    NotFoundError | PromptConflictError | ManagedInputError | SessionSelection.ModelError
   >
   readonly input: (input: {
     sessionID: SessionSchema.ID
@@ -503,21 +490,6 @@ const layer = Layer.effect(
         Effect.uninterruptible(
           Effect.gen(function* () {
             const session = yield* result.get(input.sessionID)
-            if (session.execution.managed) {
-              if (!session.model) return yield* new SessionSelection.ModelNotSelectedError()
-              const configured = yield* configuredModelSelection(session.model, session.location)
-              yield* modelSelection(configured, session.location).pipe(
-                Effect.catchTag("SessionSelection.ModelUnavailableError", () =>
-                  Effect.fail(
-                    new ProviderConnectionRequiredError({
-                      providerID: configured.providerID,
-                      modelID: configured.id,
-                      variant: configured.variant ?? ModelV2.VariantID.make("default"),
-                    }),
-                  ),
-                ),
-              )
-            }
             const prompt = resolvePrompt(input.prompt)
             const messageID = input.id ?? SessionMessage.ID.create()
             const delivery = input.delivery ?? (session.execution.managed ? "queue" : "steer")
@@ -546,12 +518,14 @@ const layer = Layer.effect(
               ? input.completionContract
                 ? SessionInput.makeCompletion("controller", input.completionContract, input.managedExecution)
                 : SessionInput.ordinaryCompletion(SessionInput.ManagedExecutionRef.make({
-                    schema: "motryx.managed_execution.v2",
+                    schema: "motryx.managed_execution.v4",
                     productSessionID: input.sessionID,
                     origin: "DIRECT_USER",
                   }))
               : undefined
             const expected = { sessionID: input.sessionID, messageID, prompt, delivery, completion }
+            // Model availability belongs to runner preflight. Admit first so
+            // preparation failures retain the exact Input and NotStarted proof.
             const admitted = yield* SessionInput.admit(db, events, {
               id: messageID,
               sessionID: input.sessionID,

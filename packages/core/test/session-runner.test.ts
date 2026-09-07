@@ -155,7 +155,7 @@ const echo = Layer.effectDiscard(
   ),
 )
 const echoNode = makeLocationNode({ name: "test/session-runner-tools", layer: echo, deps: [ToolRegistry.node] })
-let modelResolveHook = Effect.void
+let modelResolveHook: Effect.Effect<void, SessionRunnerModel.Error> = Effect.void
 let currentModel = model
 const models = SessionRunnerModel.layerWith((session) =>
   modelResolveHook.pipe(Effect.as(session.model?.id === "replacement" ? replacementModel : currentModel)),
@@ -380,11 +380,12 @@ const requiredCompletion = (instruction = "Call echo now.") =>
   })
 
 const managedExecutionRef = (id: SessionMessage.ID) => SessionInput.ManagedExecutionRef.make({
-  schema: "motryx.managed_execution.v2",
+  schema: "motryx.managed_execution.v4",
+  purpose: "orchestrator",
   origin: "FRAMEWORK",
   productSessionID: sessionID,
   owner: { kind: "CONTROL_ROLE", id: "runner_test_owner", generation: 1 },
-  checkpoint: { kind: "CONTROL", id: "runner_test_owner", revision: 1 },
+  checkpoint: { kind: "CONTROL", id: "runner_test_owner" },
   cell: {
     supervisorIncarnationID: "runner_test_supervisor",
     hostIncarnationID: "runner_test_host",
@@ -771,6 +772,145 @@ describe("SessionRunnerLLM", () => {
           outcome: "failed",
           reason: "model resolution failed",
         },
+      })
+    }),
+  )
+
+  it.effect("attributes disconnected managed preflight to its exact Input and does not replay it", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const inputID = yield* admitManagedInput("Needs provider connection")
+      modelResolveHook = Effect.fail(new SessionRunnerModel.ProviderConnectionRequiredError({
+        providerID: ProviderV2.ID.make("fake"),
+        modelID: ModelV2.ID.make("fake-model"),
+      }))
+      const runner = yield* SessionRunner.Service
+      expect(Exit.isFailure(yield* runner.run({ sessionID, force: false }).pipe(Effect.exit))).toBe(true)
+      const history = (yield* (yield* SessionV2.Service).history({ sessionID, limit: 100 })).events
+      expect(history.filter((event) => event.type === "session.turn.started")).toHaveLength(0)
+      const stopped = history.filter((event) => event.type === "session.turn.not_started")
+      expect(stopped).toHaveLength(1)
+      expect(stopped[0]?.data).toMatchObject({
+        activityInputIDs: [inputID],
+        managedExecution: managedExecutionRef(inputID),
+        outcome: "failed",
+        failure: {
+          kind: "authentication",
+          transportCode: "provider_connection_required",
+          providerID: "fake",
+          modelID: "fake-model",
+          retryable: false,
+          retryExhausted: true,
+          attemptCount: 1,
+        },
+      })
+      expect(ManagedSessionAuthority.executionRef(sessionID, inputID)).toBeUndefined()
+      modelResolveHook = Effect.void
+      yield* runner.run({ sessionID, force: true })
+      expect(requests).toHaveLength(0)
+    }),
+  )
+
+  it.effect("does not classify unavailable model configuration as authentication or unknown tool effect", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const inputID = yield* admitManagedInput("Configured model was removed")
+      modelResolveHook = Effect.fail(new SessionRunnerModel.ModelUnavailableError({
+        providerID: ProviderV2.ID.make("fake"),
+        modelID: ModelV2.ID.make("fake-model"),
+      }))
+      yield* (yield* SessionRunner.Service).run({ sessionID, force: false }).pipe(Effect.exit)
+      const history = (yield* (yield* SessionV2.Service).history({ sessionID, limit: 100 })).events
+      expect(history.find((event) => event.type === "session.turn.not_started")?.data).toMatchObject({
+        activityInputIDs: [inputID],
+        managedExecution: managedExecutionRef(inputID),
+        failure: { kind: "invalid_request", providerID: "fake", modelID: "fake-model" },
+      })
+      expect(requests).toHaveLength(0)
+    }),
+  )
+
+  it.effect("enriches a direct-user NotStarted with its exact current Input grant", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const { db } = yield* Database.Service
+      const events = yield* EventV2.Service
+      yield* db.update(SessionTable).set({
+        agent: "build", model: { id: "fake-model", providerID: "fake" },
+        execution_managed: true, execution_gate_open: true, execution_gate_reason: "test",
+      }).where(eq(SessionTable.id, sessionID)).run().pipe(Effect.orDie)
+      const inputID = SessionMessage.ID.create()
+      yield* SessionInput.admit(db, events, {
+        id: inputID, sessionID, prompt: Prompt.make({ text: "Direct user request" }), delivery: "queue",
+        completion: SessionInput.ordinaryCompletion({
+          schema: "motryx.managed_execution.v4", origin: "DIRECT_USER", productSessionID: sessionID,
+          purpose: "orchestrator",
+        }),
+      })
+      const execution = { ...managedExecutionRef(inputID), origin: "DIRECT_USER" as const }
+      ManagedSessionAuthority.grant(sessionID)
+      expect(ManagedSessionAuthority.authorizeInput({
+        sessionID, inputID, claimID: execution.claimID!, cell: execution.cell!, managedExecutionRef: execution,
+      })).toBe("authorized")
+      modelResolveHook = Effect.fail(new SessionRunnerModel.ProviderConnectionRequiredError({
+        providerID: ProviderV2.ID.make("fake"), modelID: ModelV2.ID.make("fake-model"),
+      }))
+      yield* (yield* SessionRunner.Service).run({ sessionID, force: false }).pipe(Effect.exit)
+      const history = (yield* (yield* SessionV2.Service).history({ sessionID, limit: 100 })).events
+      expect(history.find((event) => event.type === "session.turn.not_started")?.data).toMatchObject({
+        activityInputIDs: [inputID], managedExecution: execution,
+        failure: { kind: "authentication", transportCode: "provider_connection_required" },
+      })
+      expect(ManagedSessionAuthority.executionRef(sessionID, inputID)).toBeUndefined()
+      expect(requests).toHaveLength(0)
+    }),
+  )
+
+  it.effect("preserves managed identity when initial system context preparation fails", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const inputID = yield* admitManagedInput("Context preparation fails")
+      systemLoadHook = Effect.die(new Error("context preparation failed"))
+      yield* (yield* SessionRunner.Service).run({ sessionID, force: false }).pipe(Effect.exit)
+      const history = (yield* (yield* SessionV2.Service).history({ sessionID, limit: 100 })).events
+      expect(history.filter((event) => event.type === "session.turn.started")).toHaveLength(0)
+      expect(history.find((event) => event.type === "session.turn.not_started")?.data).toMatchObject({
+        activityInputIDs: [inputID],
+        managedExecution: managedExecutionRef(inputID),
+        failure: { kind: "protocol_contract_unsatisfied" },
+      })
+      expect(requests).toHaveLength(0)
+    }),
+  )
+
+  it.effect("a managed NotStarted does not strand the next independently admitted queued Input", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const failedInputID = yield* admitManagedInput("First cannot start")
+      const nextInputID = yield* admitManagedInput("Second can start")
+      let resolutions = 0
+      modelResolveHook = Effect.suspend(() => ++resolutions === 1
+        ? Effect.fail(new SessionRunnerModel.ProviderConnectionRequiredError({
+            providerID: ProviderV2.ID.make("fake"), modelID: ModelV2.ID.make("fake-model"),
+          }))
+        : Effect.void)
+      responses = [[
+        LLMEvent.stepStart({ index: 0 }),
+        LLMEvent.toolCall({ id: "call-next-after-no-start", name: "echo", input: { text: "next completed" } }),
+        LLMEvent.stepFinish({ index: 0, reason: "tool-calls" }),
+        LLMEvent.finish({ reason: "tool-calls" }),
+      ]]
+      const exit = yield* (yield* SessionRunner.Service).run({ sessionID, force: false }).pipe(Effect.exit)
+      expect(Exit.isFailure(exit)).toBe(true)
+      expect(requests).toHaveLength(1)
+      const history = (yield* (yield* SessionV2.Service).history({ sessionID, limit: 100 })).events
+      expect(history.filter((event) => event.type === "session.turn.not_started")).toHaveLength(1)
+      expect(history.find((event) => event.type === "session.turn.not_started")?.data).toMatchObject({
+        activityInputIDs: [failedInputID], managedExecution: managedExecutionRef(failedInputID),
+      })
+      expect(history.filter((event) => event.type === "session.turn.started")).toHaveLength(1)
+      expect(history.find((event) => event.type === "session.turn.settled")?.data).toMatchObject({
+        activityInputIDs: [nextInputID], managedExecution: managedExecutionRef(nextInputID), outcome: "completed",
       })
     }),
   )

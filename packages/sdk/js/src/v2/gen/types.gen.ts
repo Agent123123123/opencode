@@ -25,6 +25,8 @@ export type Event =
   | EventSessionNextPromptAdmitted
   | EventSessionNextPromptCanceled
   | EventSessionNextExecutionGateChanged
+  | EventSessionNextExecutionResetStarted
+  | EventSessionNextExecutionReset
   | EventSessionNextContextUpdated
   | EventSessionTurnStarted
   | EventSessionTurnNotStarted
@@ -896,6 +898,7 @@ export type GlobalEvent = {
           prompt: Prompt
           delivery: "steer" | "queue"
           completion?: SessionInputCompletion
+          resumeRequested?: boolean
         }
       }
     | {
@@ -908,6 +911,8 @@ export type GlobalEvent = {
           origin: "user" | "framework" | "runtime_shutdown" | "stale" | "business"
           reason: string
           inputVisibility: "missing" | "admitted_unpromoted"
+          managedExecution?: SessionInputManagedExecutionRef
+          executionReset?: SessionResetReference
         }
       }
     | {
@@ -918,6 +923,43 @@ export type GlobalEvent = {
           sessionID: string
           open: boolean
           reason: string
+        }
+      }
+    | {
+        id: string
+        type: "session.next.execution.reset.started"
+        properties: {
+          schema: "opencode.managed_execution_reset.v1"
+          sessionID: string
+          resetID: string
+          recoveryCellIncarnationID: string
+          throughEventSeq: SessionResetEventCursor
+          policy: "worker_flush" | "primary_preserve_user"
+          reason: "runtime_shutdown" | "process_lost"
+          cancelInputIDs: Array<string>
+          notStartedInputIDs: Array<string>
+          tools: Array<SessionResetToolTarget>
+          turn?: SessionResetTurnTarget
+          preservedInputIDs: Array<string>
+        }
+      }
+    | {
+        id: string
+        type: "session.next.execution.reset"
+        properties: {
+          schema: "opencode.managed_execution_reset.v1"
+          sessionID: string
+          resetID: string
+          recoveryCellIncarnationID: string
+          throughEventSeq: SessionResetEventCursor
+          policy: "worker_flush" | "primary_preserve_user"
+          reason: "runtime_shutdown" | "process_lost"
+          canceledInputIDs: Array<string>
+          notStarted: Array<SessionResetInputClosure>
+          tools: Array<SessionResetToolClosure>
+          turn?: SessionResetTurnClosure
+          preservedInputIDs: Array<string>
+          idle: boolean
         }
       }
     | {
@@ -940,6 +982,7 @@ export type GlobalEvent = {
           turnStartedAt: number
           activityInputIDs: Array<string>
           completionContractDigest?: string
+          managedExecution?: SessionInputManagedExecutionRef
         }
       }
     | {
@@ -977,6 +1020,8 @@ export type GlobalEvent = {
             providerID?: string
             modelID?: string
           }
+          managedExecution?: SessionInputManagedExecutionRef
+          executionReset?: SessionResetReference
         }
       }
     | {
@@ -1066,6 +1111,8 @@ export type GlobalEvent = {
             providerID?: string
             modelID?: string
           }
+          managedExecution?: SessionInputManagedExecutionRef
+          executionReset?: SessionResetReference
         }
       }
     | {
@@ -1217,6 +1264,7 @@ export type GlobalEvent = {
           sessionID: string
           assistantMessageID: string
           callID: string
+          managedExecution?: SessionInputManagedExecutionRef
           turnID: string
           activityInputIDs: Array<string>
           name: string
@@ -1230,6 +1278,7 @@ export type GlobalEvent = {
           sessionID: string
           assistantMessageID: string
           callID: string
+          managedExecution?: SessionInputManagedExecutionRef
           turnID: string
           activityInputIDs: Array<string>
           delta: string
@@ -1243,6 +1292,7 @@ export type GlobalEvent = {
           sessionID: string
           assistantMessageID: string
           callID: string
+          managedExecution?: SessionInputManagedExecutionRef
           turnID: string
           activityInputIDs: Array<string>
           text: string
@@ -1256,6 +1306,7 @@ export type GlobalEvent = {
           sessionID: string
           assistantMessageID: string
           callID: string
+          managedExecution?: SessionInputManagedExecutionRef
           turnID: string
           activityInputIDs: Array<string>
           tool: string
@@ -1276,6 +1327,7 @@ export type GlobalEvent = {
           sessionID: string
           assistantMessageID: string
           callID: string
+          managedExecution?: SessionInputManagedExecutionRef
           turnID: string
           activityInputIDs: Array<string>
           structured: {
@@ -1292,6 +1344,7 @@ export type GlobalEvent = {
           sessionID: string
           assistantMessageID: string
           callID: string
+          managedExecution?: SessionInputManagedExecutionRef
           turnID: string
           activityInputIDs: Array<string>
           structured: {
@@ -1314,6 +1367,7 @@ export type GlobalEvent = {
           sessionID: string
           assistantMessageID: string
           callID: string
+          managedExecution?: SessionInputManagedExecutionRef
           turnID?: string
           activityInputIDs?: Array<string>
           error: SessionErrorUnknown
@@ -1819,6 +1873,8 @@ export type GlobalEvent = {
     | SyncEventSessionNextPromptAdmitted
     | SyncEventSessionNextPromptCanceled
     | SyncEventSessionNextExecutionGateChanged
+    | SyncEventSessionNextExecutionResetStarted
+    | SyncEventSessionNextExecutionReset
     | SyncEventSessionNextContextUpdated
     | SyncEventSessionTurnStarted
     | SyncEventSessionTurnNotStarted
@@ -2933,14 +2989,6 @@ export type PromptInput = {
   agents?: Array<PromptAgentAttachment>
 }
 
-export type ProviderConnectionRequiredError = {
-  _tag: "ProviderConnectionRequiredError"
-  providerID: string
-  modelID: string
-  variant: string
-  message: string
-}
-
 export type MessageNotFoundError = {
   _tag: "MessageNotFoundError"
   sessionID: string
@@ -2964,6 +3012,8 @@ export type SessionDurableEvent =
   | SessionNextPromptAdmitted
   | SessionNextPromptCanceled
   | SessionNextExecutionGateChanged
+  | SessionNextExecutionResetStarted
+  | SessionNextExecutionReset
   | SessionNextContextUpdated
   | SessionTurnStarted
   | SessionTurnNotStarted
@@ -3099,6 +3149,8 @@ export type V2Event =
   | SessionNextPromptAdmitted
   | SessionNextPromptCanceled
   | SessionNextExecutionGateChanged
+  | SessionNextExecutionResetStarted
+  | SessionNextExecutionReset
   | SessionNextContextUpdated
   | SessionTurnStarted
   | SessionTurnNotStarted1
@@ -3320,10 +3372,101 @@ export type SessionInputCompletionContract =
   | SessionInputOrdinaryStopCompletionContract
   | SessionInputRequiredTerminalToolCompletionContract
 
+export type SessionInputExecutionCellRef = {
+  supervisorIncarnationID: string
+  hostIncarnationID: string
+  sidecarIncarnationID: string
+}
+
+export type SessionInputFrameworkManagedExecutionRef = {
+  schema: "motryx.managed_execution.v4"
+  origin: "FRAMEWORK"
+  purpose: "orchestrator" | "analyst" | "coordinator" | "checker" | "responder"
+  originLaneID?: string
+  productSessionID: string
+  owner: {
+    kind: "FUNCTION_SLOT" | "CONTROL_ROLE"
+    id: string
+    generation: number
+  }
+  checkpoint: {
+    kind: "LANE" | "CONTROL"
+    id: string
+  }
+  cell: SessionInputExecutionCellRef
+  claimID: string
+}
+
+export type SessionInputDirectUserManagedExecutionRef = {
+  schema: "motryx.managed_execution.v4"
+  origin: "DIRECT_USER"
+  purpose?: "orchestrator" | "analyst" | "coordinator" | "checker" | "responder"
+  originLaneID?: string
+  productSessionID: string
+  owner?: {
+    kind: "FUNCTION_SLOT" | "CONTROL_ROLE"
+    id: string
+    generation: number
+  }
+  checkpoint?: {
+    kind: "LANE" | "CONTROL"
+    id: string
+  }
+  cell?: SessionInputExecutionCellRef
+  claimID?: string
+}
+
+export type SessionInputManagedExecutionRef =
+  | SessionInputFrameworkManagedExecutionRef
+  | SessionInputDirectUserManagedExecutionRef
+
 export type SessionInputCompletion = {
   origin: "builtin" | "controller"
   contract: SessionInputCompletionContract
   digest: string
+  managedExecution?: SessionInputManagedExecutionRef
+}
+
+export type SessionResetReference = {
+  resetID: string
+  recoveryCellIncarnationID: string
+  reason: "runtime_shutdown" | "process_lost"
+}
+
+export type SessionResetEventCursor = number
+
+export type SessionResetToolTarget = {
+  assistantMessageID: string
+  callID: string
+  outcome: "interrupted" | "outcome_unknown"
+  providerExecuted: boolean
+}
+
+export type SessionResetTurnTarget = {
+  turnID: string
+  turnStartedAt: number
+  activityInputIDs: Array<string>
+  outcome: "interrupted" | "outcome_unknown"
+  managedExecution?: SessionInputManagedExecutionRef
+}
+
+export type SessionResetInputClosure = {
+  inputID: string
+  turnID: string
+  eventSeq: number
+}
+
+export type SessionResetToolClosure = {
+  assistantMessageID: string
+  callID: string
+  outcome: "interrupted" | "outcome_unknown"
+  eventSeq: number
+}
+
+export type SessionResetTurnClosure = {
+  turnID: string
+  outcome: "interrupted" | "outcome_unknown"
+  eventSeq: number
 }
 
 export type SessionErrorUnknown = {
@@ -3676,6 +3819,7 @@ export type SyncEventSessionNextPromptAdmitted = {
       prompt: Prompt
       delivery: "steer" | "queue"
       completion?: SessionInputCompletion
+      resumeRequested?: boolean
     }
   }
 }
@@ -3695,6 +3839,8 @@ export type SyncEventSessionNextPromptCanceled = {
       origin: "user" | "framework" | "runtime_shutdown" | "stale" | "business"
       reason: string
       inputVisibility: "missing" | "admitted_unpromoted"
+      managedExecution?: SessionInputManagedExecutionRef
+      executionReset?: SessionResetReference
     }
   }
 }
@@ -3712,6 +3858,57 @@ export type SyncEventSessionNextExecutionGateChanged = {
       sessionID: string
       open: boolean
       reason: string
+    }
+  }
+}
+
+export type SyncEventSessionNextExecutionResetStarted = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "session.next.execution.reset.started.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      schema: "opencode.managed_execution_reset.v1"
+      sessionID: string
+      resetID: string
+      recoveryCellIncarnationID: string
+      throughEventSeq: SessionResetEventCursor
+      policy: "worker_flush" | "primary_preserve_user"
+      reason: "runtime_shutdown" | "process_lost"
+      cancelInputIDs: Array<string>
+      notStartedInputIDs: Array<string>
+      tools: Array<SessionResetToolTarget>
+      turn?: SessionResetTurnTarget
+      preservedInputIDs: Array<string>
+    }
+  }
+}
+
+export type SyncEventSessionNextExecutionReset = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "session.next.execution.reset.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      schema: "opencode.managed_execution_reset.v1"
+      sessionID: string
+      resetID: string
+      recoveryCellIncarnationID: string
+      throughEventSeq: SessionResetEventCursor
+      policy: "worker_flush" | "primary_preserve_user"
+      reason: "runtime_shutdown" | "process_lost"
+      canceledInputIDs: Array<string>
+      notStarted: Array<SessionResetInputClosure>
+      tools: Array<SessionResetToolClosure>
+      turn?: SessionResetTurnClosure
+      preservedInputIDs: Array<string>
+      idle: boolean
     }
   }
 }
@@ -3748,6 +3945,7 @@ export type SyncEventSessionTurnStarted = {
       turnStartedAt: number
       activityInputIDs: Array<string>
       completionContractDigest?: string
+      managedExecution?: SessionInputManagedExecutionRef
     }
   }
 }
@@ -3792,6 +3990,8 @@ export type SyncEventSessionTurnNotStarted = {
         providerID?: string
         modelID?: string
       }
+      managedExecution?: SessionInputManagedExecutionRef
+      executionReset?: SessionResetReference
     }
   }
 }
@@ -3895,6 +4095,8 @@ export type SyncEventSessionTurnSettled = {
         providerID?: string
         modelID?: string
       }
+      managedExecution?: SessionInputManagedExecutionRef
+      executionReset?: SessionResetReference
     }
   }
 }
@@ -4101,6 +4303,7 @@ export type SyncEventSessionNextToolInputStarted = {
       sessionID: string
       assistantMessageID: string
       callID: string
+      managedExecution?: SessionInputManagedExecutionRef
       turnID: string
       activityInputIDs: Array<string>
       name: string
@@ -4121,6 +4324,7 @@ export type SyncEventSessionNextToolInputEnded = {
       sessionID: string
       assistantMessageID: string
       callID: string
+      managedExecution?: SessionInputManagedExecutionRef
       turnID: string
       activityInputIDs: Array<string>
       text: string
@@ -4141,6 +4345,7 @@ export type SyncEventSessionNextToolCalled = {
       sessionID: string
       assistantMessageID: string
       callID: string
+      managedExecution?: SessionInputManagedExecutionRef
       turnID: string
       activityInputIDs: Array<string>
       tool: string
@@ -4168,6 +4373,7 @@ export type SyncEventSessionNextToolProgress = {
       sessionID: string
       assistantMessageID: string
       callID: string
+      managedExecution?: SessionInputManagedExecutionRef
       turnID: string
       activityInputIDs: Array<string>
       structured: {
@@ -4191,6 +4397,7 @@ export type SyncEventSessionNextToolSuccess = {
       sessionID: string
       assistantMessageID: string
       callID: string
+      managedExecution?: SessionInputManagedExecutionRef
       turnID: string
       activityInputIDs: Array<string>
       structured: {
@@ -4220,6 +4427,7 @@ export type SyncEventSessionNextToolFailed = {
       sessionID: string
       assistantMessageID: string
       callID: string
+      managedExecution?: SessionInputManagedExecutionRef
       turnID?: string
       activityInputIDs?: Array<string>
       error: SessionErrorUnknown
@@ -4446,6 +4654,32 @@ export type SessionV2ExecutionGate = {
   managed: boolean
   open: boolean
   reason: string
+}
+
+export type SessionResetRequest = {
+  schema: "opencode.managed_execution_reset.v1"
+  resetID: string
+  recoveryCellIncarnationID: string
+  throughEventSeq: SessionResetEventCursor
+  policy: "worker_flush" | "primary_preserve_user"
+  reason: "runtime_shutdown" | "process_lost"
+}
+
+export type SessionResetReceipt = {
+  schema: "opencode.managed_execution_reset.v1"
+  sessionID: string
+  resetID: string
+  recoveryCellIncarnationID: string
+  throughEventSeq: SessionResetEventCursor
+  policy: "worker_flush" | "primary_preserve_user"
+  reason: "runtime_shutdown" | "process_lost"
+  canceledInputIDs: Array<string>
+  notStarted: Array<SessionResetInputClosure>
+  tools: Array<SessionResetToolClosure>
+  turn?: SessionResetTurnClosure
+  preservedInputIDs: Array<string>
+  idle: boolean
+  resetSeq: number
 }
 
 export type PromptInputFileAttachment = {
@@ -4854,6 +5088,7 @@ export type SessionNextPromptAdmitted = {
     prompt: Prompt
     delivery: "steer" | "queue"
     completion?: SessionInputCompletion
+    resumeRequested?: boolean
   }
 }
 
@@ -4876,6 +5111,8 @@ export type SessionNextPromptCanceled = {
     origin: "user" | "framework" | "runtime_shutdown" | "stale" | "business"
     reason: string
     inputVisibility: "missing" | "admitted_unpromoted"
+    managedExecution?: SessionInputManagedExecutionRef
+    executionReset?: SessionResetReference
   }
 }
 
@@ -4896,6 +5133,63 @@ export type SessionNextExecutionGateChanged = {
     sessionID: string
     open: boolean
     reason: string
+  }
+}
+
+export type SessionNextExecutionResetStarted = {
+  id: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  type: "session.next.execution.reset.started"
+  durable?: {
+    aggregateID: string
+    seq: number
+    version: number
+  }
+  location?: LocationRef
+  data: {
+    schema: "opencode.managed_execution_reset.v1"
+    sessionID: string
+    resetID: string
+    recoveryCellIncarnationID: string
+    throughEventSeq: SessionResetEventCursor
+    policy: "worker_flush" | "primary_preserve_user"
+    reason: "runtime_shutdown" | "process_lost"
+    cancelInputIDs: Array<string>
+    notStartedInputIDs: Array<string>
+    tools: Array<SessionResetToolTarget>
+    turn?: SessionResetTurnTarget
+    preservedInputIDs: Array<string>
+  }
+}
+
+export type SessionNextExecutionReset = {
+  id: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  type: "session.next.execution.reset"
+  durable?: {
+    aggregateID: string
+    seq: number
+    version: number
+  }
+  location?: LocationRef
+  data: {
+    schema: "opencode.managed_execution_reset.v1"
+    sessionID: string
+    resetID: string
+    recoveryCellIncarnationID: string
+    throughEventSeq: SessionResetEventCursor
+    policy: "worker_flush" | "primary_preserve_user"
+    reason: "runtime_shutdown" | "process_lost"
+    canceledInputIDs: Array<string>
+    notStarted: Array<SessionResetInputClosure>
+    tools: Array<SessionResetToolClosure>
+    turn?: SessionResetTurnClosure
+    preservedInputIDs: Array<string>
+    idle: boolean
   }
 }
 
@@ -4938,6 +5232,7 @@ export type SessionTurnStarted = {
     turnStartedAt: number
     activityInputIDs: Array<string>
     completionContractDigest?: string
+    managedExecution?: SessionInputManagedExecutionRef
   }
 }
 
@@ -4985,6 +5280,8 @@ export type SessionTurnNotStarted = {
       providerID?: string
       modelID?: string
     }
+    managedExecution?: SessionInputManagedExecutionRef
+    executionReset?: SessionResetReference
   }
 }
 
@@ -5094,6 +5391,8 @@ export type SessionTurnSettled = {
       providerID?: string
       modelID?: string
     }
+    managedExecution?: SessionInputManagedExecutionRef
+    executionReset?: SessionResetReference
   }
 }
 
@@ -5290,6 +5589,7 @@ export type SessionNextToolInputStarted = {
     sessionID: string
     assistantMessageID: string
     callID: string
+    managedExecution?: SessionInputManagedExecutionRef
     turnID: string
     activityInputIDs: Array<string>
     name: string
@@ -5313,6 +5613,7 @@ export type SessionNextToolInputEnded = {
     sessionID: string
     assistantMessageID: string
     callID: string
+    managedExecution?: SessionInputManagedExecutionRef
     turnID: string
     activityInputIDs: Array<string>
     text: string
@@ -5336,6 +5637,7 @@ export type SessionNextToolCalled = {
     sessionID: string
     assistantMessageID: string
     callID: string
+    managedExecution?: SessionInputManagedExecutionRef
     turnID: string
     activityInputIDs: Array<string>
     tool: string
@@ -5366,6 +5668,7 @@ export type SessionNextToolProgress = {
     sessionID: string
     assistantMessageID: string
     callID: string
+    managedExecution?: SessionInputManagedExecutionRef
     turnID: string
     activityInputIDs: Array<string>
     structured: {
@@ -5392,6 +5695,7 @@ export type SessionNextToolSuccess = {
     sessionID: string
     assistantMessageID: string
     callID: string
+    managedExecution?: SessionInputManagedExecutionRef
     turnID: string
     activityInputIDs: Array<string>
     structured: {
@@ -5424,6 +5728,7 @@ export type SessionNextToolFailed = {
     sessionID: string
     assistantMessageID: string
     callID: string
+    managedExecution?: SessionInputManagedExecutionRef
     turnID?: string
     activityInputIDs?: Array<string>
     error: SessionErrorUnknown
@@ -5640,6 +5945,8 @@ export type SessionTurnNotStarted1 = {
       providerID?: string
       modelID?: string
     }
+    managedExecution?: SessionInputManagedExecutionRef
+    executionReset?: SessionResetReference
   }
 }
 
@@ -5725,7 +6032,15 @@ export type SessionTurnSettled1 = {
       providerID?: string
       modelID?: string
     }
+    managedExecution?: SessionInputManagedExecutionRef
+    executionReset?: SessionResetReference
   }
+}
+
+export type SessionInputManagedInputAuthorization = {
+  claimID: string
+  cell: SessionInputExecutionCellRef
+  managedExecutionRef: SessionInputManagedExecutionRef
 }
 
 export type ModelApi =
@@ -6233,6 +6548,7 @@ export type SessionNextToolInputDelta = {
     sessionID: string
     assistantMessageID: string
     callID: string
+    managedExecution?: SessionInputManagedExecutionRef
     turnID: string
     activityInputIDs: Array<string>
     delta: string
@@ -7283,6 +7599,7 @@ export type EventSessionNextPromptAdmitted = {
     prompt: Prompt
     delivery: "steer" | "queue"
     completion?: SessionInputCompletion
+    resumeRequested?: boolean
   }
 }
 
@@ -7296,6 +7613,8 @@ export type EventSessionNextPromptCanceled = {
     origin: "user" | "framework" | "runtime_shutdown" | "stale" | "business"
     reason: string
     inputVisibility: "missing" | "admitted_unpromoted"
+    managedExecution?: SessionInputManagedExecutionRef
+    executionReset?: SessionResetReference
   }
 }
 
@@ -7307,6 +7626,45 @@ export type EventSessionNextExecutionGateChanged = {
     sessionID: string
     open: boolean
     reason: string
+  }
+}
+
+export type EventSessionNextExecutionResetStarted = {
+  id: string
+  type: "session.next.execution.reset.started"
+  properties: {
+    schema: "opencode.managed_execution_reset.v1"
+    sessionID: string
+    resetID: string
+    recoveryCellIncarnationID: string
+    throughEventSeq: SessionResetEventCursor
+    policy: "worker_flush" | "primary_preserve_user"
+    reason: "runtime_shutdown" | "process_lost"
+    cancelInputIDs: Array<string>
+    notStartedInputIDs: Array<string>
+    tools: Array<SessionResetToolTarget>
+    turn?: SessionResetTurnTarget
+    preservedInputIDs: Array<string>
+  }
+}
+
+export type EventSessionNextExecutionReset = {
+  id: string
+  type: "session.next.execution.reset"
+  properties: {
+    schema: "opencode.managed_execution_reset.v1"
+    sessionID: string
+    resetID: string
+    recoveryCellIncarnationID: string
+    throughEventSeq: SessionResetEventCursor
+    policy: "worker_flush" | "primary_preserve_user"
+    reason: "runtime_shutdown" | "process_lost"
+    canceledInputIDs: Array<string>
+    notStarted: Array<SessionResetInputClosure>
+    tools: Array<SessionResetToolClosure>
+    turn?: SessionResetTurnClosure
+    preservedInputIDs: Array<string>
+    idle: boolean
   }
 }
 
@@ -7331,6 +7689,7 @@ export type EventSessionTurnStarted = {
     turnStartedAt: number
     activityInputIDs: Array<string>
     completionContractDigest?: string
+    managedExecution?: SessionInputManagedExecutionRef
   }
 }
 
@@ -7369,6 +7728,8 @@ export type EventSessionTurnNotStarted = {
       providerID?: string
       modelID?: string
     }
+    managedExecution?: SessionInputManagedExecutionRef
+    executionReset?: SessionResetReference
   }
 }
 
@@ -7460,6 +7821,8 @@ export type EventSessionTurnSettled = {
       providerID?: string
       modelID?: string
     }
+    managedExecution?: SessionInputManagedExecutionRef
+    executionReset?: SessionResetReference
   }
 }
 
@@ -7624,6 +7987,7 @@ export type EventSessionNextToolInputStarted = {
     sessionID: string
     assistantMessageID: string
     callID: string
+    managedExecution?: SessionInputManagedExecutionRef
     turnID: string
     activityInputIDs: Array<string>
     name: string
@@ -7638,6 +8002,7 @@ export type EventSessionNextToolInputDelta = {
     sessionID: string
     assistantMessageID: string
     callID: string
+    managedExecution?: SessionInputManagedExecutionRef
     turnID: string
     activityInputIDs: Array<string>
     delta: string
@@ -7652,6 +8017,7 @@ export type EventSessionNextToolInputEnded = {
     sessionID: string
     assistantMessageID: string
     callID: string
+    managedExecution?: SessionInputManagedExecutionRef
     turnID: string
     activityInputIDs: Array<string>
     text: string
@@ -7666,6 +8032,7 @@ export type EventSessionNextToolCalled = {
     sessionID: string
     assistantMessageID: string
     callID: string
+    managedExecution?: SessionInputManagedExecutionRef
     turnID: string
     activityInputIDs: Array<string>
     tool: string
@@ -7687,6 +8054,7 @@ export type EventSessionNextToolProgress = {
     sessionID: string
     assistantMessageID: string
     callID: string
+    managedExecution?: SessionInputManagedExecutionRef
     turnID: string
     activityInputIDs: Array<string>
     structured: {
@@ -7704,6 +8072,7 @@ export type EventSessionNextToolSuccess = {
     sessionID: string
     assistantMessageID: string
     callID: string
+    managedExecution?: SessionInputManagedExecutionRef
     turnID: string
     activityInputIDs: Array<string>
     structured: {
@@ -7727,6 +8096,7 @@ export type EventSessionNextToolFailed = {
     sessionID: string
     assistantMessageID: string
     callID: string
+    managedExecution?: SessionInputManagedExecutionRef
     turnID?: string
     activityInputIDs?: Array<string>
     error: SessionErrorUnknown
@@ -12842,12 +13212,54 @@ export type V2SessionExecutionGateSetResponses = {
 export type V2SessionExecutionGateSetResponse =
   V2SessionExecutionGateSetResponses[keyof V2SessionExecutionGateSetResponses]
 
+export type V2SessionExecutionResetData = {
+  body: SessionResetRequest
+  path: {
+    sessionID: string
+  }
+  query?: never
+  url: "/api/session/{sessionID}/execution-reset"
+}
+
+export type V2SessionExecutionResetErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * SessionNotFoundError
+   */
+  404: SessionNotFoundError
+  /**
+   * ConflictError
+   */
+  409: ConflictError
+}
+
+export type V2SessionExecutionResetError = V2SessionExecutionResetErrors[keyof V2SessionExecutionResetErrors]
+
+export type V2SessionExecutionResetResponses = {
+  /**
+   * Success
+   */
+  200: {
+    data: SessionResetReceipt
+  }
+}
+
+export type V2SessionExecutionResetResponse = V2SessionExecutionResetResponses[keyof V2SessionExecutionResetResponses]
+
 export type V2SessionPromptData = {
   body: {
     id?: string
     prompt: PromptInput
     delivery?: "steer" | "queue"
     completionContract?: SessionInputCompletionContract
+    managedExecution?: SessionInputManagedExecutionRef
     resume?: boolean
   }
   path: {
@@ -12875,9 +13287,9 @@ export type V2SessionPromptErrors = {
    */
   409: ConflictError
   /**
-   * ProviderConnectionRequiredError | ServiceUnavailableError
+   * ServiceUnavailableError
    */
-  503: ProviderConnectionRequiredError | ServiceUnavailableError
+  503: ServiceUnavailableError
 }
 
 export type V2SessionPromptError = V2SessionPromptErrors[keyof V2SessionPromptErrors]
@@ -13370,6 +13782,93 @@ export type V2SessionMessageResponses = {
 }
 
 export type V2SessionMessageResponse = V2SessionMessageResponses[keyof V2SessionMessageResponses]
+
+export type V2SessionInputAuthorizationRevokeData = {
+  body: {
+    claimID: string
+    cell: SessionInputExecutionCellRef
+  }
+  path: {
+    sessionID: string
+    inputID: string
+  }
+  query?: never
+  url: "/api/session/{sessionID}/input/{inputID}/authorization"
+}
+
+export type V2SessionInputAuthorizationRevokeErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * SessionNotFoundError
+   */
+  404: SessionNotFoundError
+  /**
+   * ConflictError
+   */
+  409: ConflictError
+}
+
+export type V2SessionInputAuthorizationRevokeError =
+  V2SessionInputAuthorizationRevokeErrors[keyof V2SessionInputAuthorizationRevokeErrors]
+
+export type V2SessionInputAuthorizationRevokeResponses = {
+  /**
+   * <No Content>
+   */
+  204: void
+}
+
+export type V2SessionInputAuthorizationRevokeResponse =
+  V2SessionInputAuthorizationRevokeResponses[keyof V2SessionInputAuthorizationRevokeResponses]
+
+export type V2SessionInputAuthorizationSetData = {
+  body: SessionInputManagedInputAuthorization
+  path: {
+    sessionID: string
+    inputID: string
+  }
+  query?: never
+  url: "/api/session/{sessionID}/input/{inputID}/authorization"
+}
+
+export type V2SessionInputAuthorizationSetErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * SessionNotFoundError
+   */
+  404: SessionNotFoundError
+  /**
+   * ConflictError
+   */
+  409: ConflictError
+}
+
+export type V2SessionInputAuthorizationSetError =
+  V2SessionInputAuthorizationSetErrors[keyof V2SessionInputAuthorizationSetErrors]
+
+export type V2SessionInputAuthorizationSetResponses = {
+  /**
+   * <No Content>
+   */
+  204: void
+}
+
+export type V2SessionInputAuthorizationSetResponse =
+  V2SessionInputAuthorizationSetResponses[keyof V2SessionInputAuthorizationSetResponses]
 
 export type V2SessionMessagesData = {
   body?: never

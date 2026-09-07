@@ -61,7 +61,7 @@ import { useLocation } from "../../context/location"
 import { v2PromptInput } from "../../context/session-v2"
 import { usePluginRuntime } from "../../plugin/runtime"
 import { SessionMessage } from "@opencode-ai/core/session/message"
-import { managedSessionProviderRequirement, providerConnectionRequirement } from "./provider-connection"
+import { managedSessionProviderRequirement } from "./provider-connection"
 
 registerOpencodeSpinner()
 
@@ -1137,23 +1137,6 @@ export function Prompt(props: PromptProps) {
     } else {
       const failed = (error: unknown) => {
         if (v2) sync.session.setStatus(sessionID, { type: "idle" })
-        const required = providerConnectionRequirement(error)
-        if (required) {
-          toast.show({ variant: "warning", message: required.message, duration: 5000 })
-          dialog.replace(() => (
-            <DialogProviderConnect
-              preferredProviderID={required.providerID}
-              onConnected={() => {
-                dialog.clear()
-                toast.show({
-                  variant: "success",
-                  message: `${required.providerID} connected. Press Enter to send the preserved prompt.`,
-                })
-              }}
-            />
-          ))
-          return
-        }
         toast.show({
           title: "Failed to send prompt",
           message: errorMessage(error),
@@ -1725,7 +1708,7 @@ export function Prompt(props: PromptProps) {
                 {(required) => (
                   <box paddingLeft={3}>
                     <text fg={theme.warning}>
-                      Connect {required().providerID} to send with {required().modelID}#{required().variant} · /connect
+                      Connect {required().providerID} to run with {required().modelID}#{required().variant} · /connect
                     </text>
                   </box>
                 )}

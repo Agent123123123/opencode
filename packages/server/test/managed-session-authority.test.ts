@@ -29,11 +29,12 @@ describe("managed session service write authority", () => {
       sidecarIncarnationID: "sidecar_exact",
     }
     const managedExecutionRef = SessionInput.ManagedExecutionRef.make({
-      schema: "motryx.managed_execution.v2",
+      schema: "motryx.managed_execution.v4",
+      purpose: "orchestrator",
       origin: "FRAMEWORK",
       productSessionID: sessionID,
       owner: { kind: "CONTROL_ROLE", id: "owner_exact", generation: 2 },
-      checkpoint: { kind: "CONTROL", id: "owner_exact", revision: 2 },
+      checkpoint: { kind: "CONTROL", id: "owner_exact" },
       cell,
       claimID: "claim_exact",
     })
