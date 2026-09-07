@@ -57,7 +57,7 @@ describe("Motryx product TUI", () => {
       role: "coordinator",
       sessionID: "ses_old_coord",
       orchestratorSessionID: "ses_orch",
-      status: "ALIVE",
+      status: "ASSIGNED",
       laneIDs: ["lane_1"],
     })
     expect(resolveProjectedDebugTarget(snapshot, "lane_1", "coordinator")?.sessionID).toBe("ses_coord")
@@ -128,7 +128,7 @@ function debugSnapshot(): MotryxControlSnapshot {
         repairCycle: 0,
         dependsOnLaneIDs: [],
         coordinatorSlotID: "slot_coord",
-        coordinatorRuntimeReadiness: "ready",
+        coordinatorRuntimeReadiness: "bound",
         checkerRuntimeReadiness: "unmaterialized",
         coordinatorRuntime: {
           slotID: "slot_coord",
@@ -143,7 +143,7 @@ function debugSnapshot(): MotryxControlSnapshot {
         role: "coordinator",
         sessionID: "ses_coord",
         orchestratorSessionID: "ses_orch",
-        status: "ALIVE",
+        status: "ASSIGNED",
         laneIDs: ["lane_1"],
       },
     ],

@@ -138,7 +138,7 @@ describe("Motryx typed control snapshot", () => {
             repairCycle: 0,
             dependsOnLaneIDs: [],
             coordinatorSlotID: "slot_coordinator",
-            coordinatorRuntimeReadiness: "ready",
+            coordinatorRuntimeReadiness: "bound",
             checkerRuntimeReadiness: "unmaterialized",
             coordinatorRuntime: {
               slotID: "slot_coordinator",
@@ -200,7 +200,7 @@ describe("Motryx typed control snapshot", () => {
 
     expect(value.lanes[0]).toMatchObject({
       coordinatorSlotID: "slot_coordinator",
-      coordinatorRuntimeReadiness: "ready",
+      coordinatorRuntimeReadiness: "bound",
       checkerRuntimeReadiness: "unmaterialized",
       coordinatorRuntime: {
         slotID: "slot_coordinator",

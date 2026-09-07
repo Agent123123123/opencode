@@ -1263,7 +1263,7 @@ function debugRouteSnapshot(projectID: string, orchestratorSessionID: string, ge
         repairCycle: 0,
         dependsOnLaneIDs: [],
         coordinatorSlotID: "slot_debug_coordinator",
-        coordinatorRuntimeReadiness: "ready",
+        coordinatorRuntimeReadiness: "bound",
         checkerRuntimeReadiness: "unmaterialized",
         coordinatorRuntime: {
           slotID: "slot_debug_coordinator",
@@ -1278,7 +1278,7 @@ function debugRouteSnapshot(projectID: string, orchestratorSessionID: string, ge
         role: "coordinator",
         sessionID: "ses_coordinator",
         orchestratorSessionID,
-        status: "ALIVE",
+        status: "ASSIGNED",
         laneIDs: ["lane_debug"],
       },
     ],

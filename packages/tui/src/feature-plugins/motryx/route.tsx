@@ -1763,12 +1763,12 @@ export function resolveProjectedDebugTarget(
     ? lane.coordinatorRuntimeReadiness
     : lane.checkerRuntimeReadiness
   const runtime = role === "coordinator" ? lane.coordinatorRuntime : lane.checkerRuntime
-  if (!slotID || readiness !== "ready" || !runtime || runtime.slotID !== slotID) return undefined
+  if (!slotID || readiness !== "bound" || !runtime || runtime.slotID !== slotID) return undefined
   const agents = snapshot.agents.filter(
     (item) =>
       item.instanceID === runtime.instanceID &&
       item.role === role &&
-      item.status === "ALIVE" &&
+      item.status === "ASSIGNED" &&
       item.sessionID === runtime.sessionID &&
       item.orchestratorSessionID === snapshot.orchestratorSessionID,
   )
