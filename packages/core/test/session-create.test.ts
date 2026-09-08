@@ -569,6 +569,33 @@ describe("SessionV2.create", () => {
     }),
   )
 
+  it.effect("returning to the applied model supersedes an unprocessed selection", () =>
+    Effect.gen(function* () {
+      const session = yield* SessionV2.Service
+      const created = yield* session.create({ location })
+      const original = created.model!
+      const selected = ModelV2.Ref.make({
+        id: ModelV2.ID.make("sonnet"),
+        providerID: ProviderV2.ID.anthropic,
+        variant: ModelV2.VariantID.make("high"),
+      })
+      const { db } = yield* Database.Service
+      const events = yield* EventV2.Service
+
+      yield* session.switchModel({ sessionID: created.id, model: selected })
+      expect(yield* SessionModelSwitch.pending(db, created.id)).toMatchObject({ model: selected })
+      yield* session.switchModel({ sessionID: created.id, model: original })
+      expect(yield* SessionModelSwitch.pending(db, created.id)).toMatchObject({ model: original })
+      expect(yield* session.get(created.id)).toMatchObject({ model: original })
+      expect(yield* SessionModelSwitch.applyPending(db, events, created.id)).toBe(true)
+      expect(yield* SessionModelSwitch.pending(db, created.id)).toBeUndefined()
+      expect(yield* session.get(created.id)).toMatchObject({ model: original })
+      expect(yield* session.messages({ sessionID: created.id })).not.toContainEqual(
+        expect.objectContaining({ type: "user" }),
+      )
+    }),
+  )
+
   it.effect("does not lose a newer desired model when an older apply commits afterward", () =>
     Effect.gen(function* () {
       const session = yield* SessionV2.Service

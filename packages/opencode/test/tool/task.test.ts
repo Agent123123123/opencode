@@ -216,6 +216,34 @@ describe("tool.task", () => {
     },
   )
 
+  it.instance(
+    "execute keeps an explicit subagent model instead of inheriting the parent model and variant",
+    () =>
+      Effect.gen(function* () {
+        const { chat, assistant } = yield* seed()
+        const tool = yield* TaskTool
+        const def = yield* tool.init()
+        const prompts: SessionPrompt.PromptInput[] = []
+        yield* def.execute(
+          { description: "inspect", prompt: "inspect", subagent_type: "custom" },
+          {
+            sessionID: chat.id,
+            messageID: assistant.id,
+            agent: "build",
+            abort: new AbortController().signal,
+            extra: { promptOps: stubOps({ onPrompt: (input) => prompts.push(input) }) },
+            messages: [],
+            metadata: () => Effect.void,
+            ask: () => Effect.void,
+          },
+        )
+        expect(prompts).toHaveLength(1)
+        expect(prompts[0].model).toEqual({ providerID: ref.providerID, modelID: ModelV2.ID.make("custom") })
+        expect(prompts[0].variant).toBeUndefined()
+      }),
+    { config: { agent: { custom: { description: "Custom model", mode: "subagent", model: "test/custom" } } } },
+  )
+
   it.instance("execute resumes an existing task session from task_id", () =>
     Effect.gen(function* () {
       const sessions = yield* Session.Service

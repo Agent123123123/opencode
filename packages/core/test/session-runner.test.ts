@@ -134,6 +134,7 @@ const echo = Layer.effectDiscard(
         toModelOutput: ({ output }) => [{ type: "text", text: output.text }],
         execute: ({ text }, context) =>
           Effect.gen(function* () {
+            const executionGate = toolExecutionGate
             authorizations.push(context)
             executions.push(text)
             activeToolExecutions++
@@ -141,7 +142,7 @@ const echo = Layer.effectDiscard(
             if (activeToolExecutions === toolExecutionsReady && toolExecutionsStarted) {
               yield* Deferred.succeed(toolExecutionsStarted, undefined)
             }
-            if (toolExecutionGate) yield* Deferred.await(toolExecutionGate)
+            if (executionGate) yield* Deferred.await(executionGate)
             return { text }
           }).pipe(Effect.ensuring(Effect.sync(() => activeToolExecutions--))),
       }),
@@ -1981,49 +1982,126 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
-  it.effect("keeps one model through a tool-driven turn and applies a durable switch after settlement", () =>
+  for (const finalModel of ["replacement", "fake-model"] as const) {
+    it.effect(`keeps the tool-driven turn on its initial model before settling the latest choice ${finalModel}`, () =>
+      Effect.gen(function* () {
+        yield* setup
+        const { db } = yield* Database.Service
+        yield* db.update(SessionTable)
+          .set({ model: { id: "fake-model", providerID: "fake", variant: "default" } })
+          .where(eq(SessionTable.id, sessionID)).run().pipe(Effect.orDie)
+        const session = yield* SessionV2.Service
+        const events = yield* EventV2.Service
+        yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Echo this" }), resume: false })
+
+        requests.length = 0
+        responses = [
+          [
+            LLMEvent.stepStart({ index: 0 }),
+            LLMEvent.toolCall({ id: "call-echo", name: "echo", input: { text: "hello" } }),
+            LLMEvent.stepFinish({ index: 0, reason: "tool-calls" }),
+            LLMEvent.finish({ reason: "tool-calls" }),
+          ],
+          [
+            LLMEvent.stepStart({ index: 0 }),
+            LLMEvent.stepFinish({ index: 0, reason: "stop" }),
+            LLMEvent.finish({ reason: "stop" }),
+          ],
+        ]
+        toolExecutionGate = yield* Deferred.make<void>()
+        toolExecutionsStarted = yield* Deferred.make<void>()
+        toolExecutionsReady = 1
+        const run = yield* Effect.forkChild(session.resume(sessionID))
+        yield* Deferred.await(toolExecutionsStarted)
+        yield* events.publish(SessionEvent.ModelSwitchRequested, {
+          sessionID,
+          timestamp: DateTime.makeUnsafe(1),
+          model: { id: ModelV2.ID.make("replacement"), providerID: ProviderV2.ID.make("fake") },
+        })
+        if (finalModel === "fake-model") {
+          yield* events.publish(SessionEvent.ModelSwitchRequested, {
+            sessionID,
+            timestamp: DateTime.makeUnsafe(2),
+            model: { id: ModelV2.ID.make("fake-model"), providerID: ProviderV2.ID.make("fake") },
+          })
+        }
+        expect(yield* session.get(sessionID)).toMatchObject({ model: { id: "fake-model", providerID: "fake" } })
+        systemBaseline = "Replacement context"
+        yield* Deferred.succeed(toolExecutionGate, undefined)
+        yield* Fiber.join(run)
+
+        expect(requests.map((request) => request.model)).toEqual([model, model])
+        expect(requests.map((request) => request.system.map((part) => part.text))).toEqual([
+          ["Initial context"],
+          ["Initial context"],
+        ])
+        expect(yield* session.get(sessionID)).toMatchObject({
+          model: { id: finalModel, providerID: "fake" },
+        })
+        expect((yield* session.messages({ sessionID })).filter((message) => message.type === "user")).toHaveLength(1)
+      }),
+    )
+  }
+
+  it.effect("settles model choices independently for two sessions with blocked tools", () =>
     Effect.gen(function* () {
       yield* setup
+      yield* insertSession(otherSessionID)
+      const { db } = yield* Database.Service
       const session = yield* SessionV2.Service
       const events = yield* EventV2.Service
-      yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Echo this" }), resume: false })
-
-      requests.length = 0
-      responses = [
-        [
-          LLMEvent.stepStart({ index: 0 }),
-          LLMEvent.toolCall({ id: "call-echo", name: "echo", input: { text: "hello" } }),
-          LLMEvent.stepFinish({ index: 0, reason: "tool-calls" }),
-          LLMEvent.finish({ reason: "tool-calls" }),
-        ],
-        [
-          LLMEvent.stepStart({ index: 0 }),
-          LLMEvent.stepFinish({ index: 0, reason: "stop" }),
-          LLMEvent.finish({ reason: "stop" }),
-        ],
+      yield* db.update(SessionTable).set({ agent: "build", model: { id: "fake-model", providerID: "fake" } })
+        .where(eq(SessionTable.id, sessionID)).run().pipe(Effect.orDie)
+      yield* db.update(SessionTable).set({ agent: "plan", model: { id: "replacement", providerID: "fake" } })
+        .where(eq(SessionTable.id, otherSessionID)).run().pipe(Effect.orDie)
+      for (const id of [sessionID, otherSessionID]) {
+        yield* session.prompt({ sessionID: id, prompt: Prompt.make({ text: "Use echo once" }), resume: false })
+      }
+      const toolResponse = [
+        LLMEvent.stepStart({ index: 0 }),
+        LLMEvent.toolCall({ id: "call-echo", name: "echo", input: { text: "hello" } }),
+        LLMEvent.stepFinish({ index: 0, reason: "tool-calls" }),
+        LLMEvent.finish({ reason: "tool-calls" }),
       ]
-      toolExecutionGate = yield* Deferred.make<void>()
-      toolExecutionsStarted = yield* Deferred.make<void>()
+      const finalResponse = [
+        LLMEvent.stepStart({ index: 0 }),
+        LLMEvent.stepFinish({ index: 0, reason: "stop" }),
+        LLMEvent.finish({ reason: "stop" }),
+      ]
+      responses = [toolResponse, toolResponse, finalResponse, finalResponse]
+      const firstGate = yield* Deferred.make<void>()
+      const secondGate = yield* Deferred.make<void>()
+      toolExecutionGate = firstGate
       toolExecutionsReady = 1
-      const run = yield* Effect.forkChild(session.resume(sessionID))
+      toolExecutionsStarted = yield* Deferred.make<void>()
+      const firstRun = yield* Effect.forkChild(session.resume(sessionID))
       yield* Deferred.await(toolExecutionsStarted)
-      yield* events.publish(SessionEvent.ModelSwitchRequested, {
-        sessionID,
-        timestamp: DateTime.makeUnsafe(1),
-        model: { id: ModelV2.ID.make("replacement"), providerID: ProviderV2.ID.make("fake") },
-      })
-      systemBaseline = "Replacement context"
-      yield* Deferred.succeed(toolExecutionGate, undefined)
-      yield* Fiber.join(run)
-
-      expect(requests.map((request) => request.model)).toEqual([model, model])
-      expect(requests.map((request) => request.system.map((part) => part.text))).toEqual([
-        ["Initial context"],
-        ["Initial context"],
-      ])
-      expect(yield* session.get(sessionID)).toMatchObject({
-        model: { id: "replacement", providerID: "fake" },
-      })
+      // Each running tool has already captured the gate it awaits.
+      toolExecutionGate = secondGate
+      toolExecutionsReady = 2
+      toolExecutionsStarted = yield* Deferred.make<void>()
+      const secondRun = yield* Effect.forkChild(session.resume(otherSessionID))
+      yield* Deferred.await(toolExecutionsStarted)
+      for (const [id, selected] of [[sessionID, "replacement"], [otherSessionID, "fake-model"]] as const) {
+        yield* events.publish(SessionEvent.ModelSwitchRequested, {
+          sessionID: id,
+          timestamp: DateTime.makeUnsafe(1),
+          model: { id: ModelV2.ID.make(selected), providerID: ProviderV2.ID.make("fake") },
+        })
+      }
+      yield* Deferred.succeed(secondGate, undefined)
+      yield* Fiber.join(secondRun)
+      expect(yield* session.get(otherSessionID)).toMatchObject({ model: { id: "fake-model" } })
+      expect(yield* session.get(sessionID)).toMatchObject({ model: { id: "fake-model" } })
+      expect(requests.map((request) => request.model)).toEqual([model, replacementModel, replacementModel])
+      yield* Deferred.succeed(firstGate, undefined)
+      yield* Fiber.join(firstRun)
+      expect(yield* session.get(sessionID)).toMatchObject({ model: { id: "replacement" } })
+      expect(yield* session.get(otherSessionID)).toMatchObject({ model: { id: "fake-model" } })
+      expect(requests.map((request) => request.model)).toEqual([model, replacementModel, replacementModel, model])
+      for (const id of [sessionID, otherSessionID]) {
+        expect((yield* session.messages({ sessionID: id })).filter((message) => message.type === "user")).toHaveLength(1)
+      }
     }),
   )
 
