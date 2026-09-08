@@ -12,6 +12,8 @@ import {
 import { Cause, DateTime, Effect, Exit, FiberSet, Layer, Option, Semaphore, Stream } from "effect"
 import { AgentV2 } from "../../agent"
 import { Config } from "../../config"
+import { Flag } from "../../flag/flag"
+import { InstallationUserAgent } from "../../installation/version"
 import { Integration } from "../../integration"
 import { Database } from "../../database/database"
 import { EventV2 } from "../../event"
@@ -310,6 +312,17 @@ const layer = Layer.effect(
       const request = LLM.request({
         model,
         providerOptions: { openai: { promptCacheKey } },
+        http: model.provider.startsWith("opencode")
+          ? {
+              headers: {
+                "x-opencode-project": location.project.id,
+                "x-opencode-session": session.id,
+                "x-opencode-request": activity.turnID,
+                "x-opencode-client": Flag.OPENCODE_CLIENT,
+                "user-agent": InstallationUserAgent,
+              },
+            }
+          : undefined,
         system: [agent.info?.system, system.baseline]
           .filter((part): part is string => part !== undefined && part.length > 0)
           .map(SystemPart.make),

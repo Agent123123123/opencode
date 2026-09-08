@@ -72,6 +72,7 @@ export async function compileStandalone(input: {
       define: {
         FFF_LIBC: JSON.stringify(input.abi === "musl" ? "musl" : "gnu"),
         OPENCODE_VERSION: JSON.stringify(input.opencodeVersion),
+        OPENCODE_USER_AGENT: JSON.stringify(`${input.userAgent}/${input.userAgentVersion}`),
         OPENCODE_MODELS_DEV: input.prepared.modelsData,
         OTUI_TREE_SITTER_WORKER_PATH: JSON.stringify(bunfsRoot + treeSitterWorkerPath),
         OPENCODE_WORKER_PATH: JSON.stringify(workerPath),
