@@ -309,7 +309,7 @@ export function motryxSelectionBoundaryCommands(
     {
       name: "motryx.model.weak",
       title: "Configure weak model",
-      description: "Select the launcher-owned model tier used by Coordinator, Checker, and helpers.",
+      description: "Select the launcher-owned model tier used by Coordinator and Checker.",
       slashName: "weak_model",
       category: "Motryx",
       namespace: "palette",
