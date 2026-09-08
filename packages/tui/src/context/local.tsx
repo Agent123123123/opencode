@@ -194,16 +194,16 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
           if (state.pending) save()
         })
 
-      const managedSessionModel = createMemo(() => {
-        if (route.data.type !== "session") return
-        const session = sync.session.get(route.data.sessionID)
+      function managedSessionModel(sessionID = route.data.type === "session" ? route.data.sessionID : undefined) {
+        if (!sessionID) return
+        const session = sync.session.get(sessionID)
         if (session?.metadata?.executionManaged !== true || !session.model) return
         return {
           providerID: session.model.providerID,
           modelID: session.model.id,
           variant: session.model.variant ?? "default",
         }
-      })
+      }
 
       const fallbackModel = createMemo(() => {
         if (args.model) {
@@ -244,9 +244,7 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
         }
       })
 
-      const currentModel = createMemo(() => {
-        const managed = managedSessionModel()
-        if (managed) return { providerID: managed.providerID, modelID: managed.modelID }
+      const configuredModel = createMemo(() => {
         const a = agent.current()
         return (
           getFirstValidModel(
@@ -256,6 +254,12 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
           ) ?? undefined
         )
       })
+
+      function currentModel(sessionID?: string) {
+        const managed = managedSessionModel(sessionID)
+        if (managed) return { providerID: managed.providerID, modelID: managed.modelID }
+        return configuredModel()
+      }
 
       return {
         current: currentModel,
@@ -268,8 +272,8 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
         favorite() {
           return modelStore.favorite
         },
-        parsed: createMemo(() => {
-          const value = currentModel()
+        parsed(sessionID?: string) {
+          const value = currentModel(sessionID)
           if (!value) {
             return {
               provider: "Connect a provider",
@@ -284,7 +288,7 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
             model: info?.name ?? value.modelID,
             reasoning: info?.capabilities?.reasoning ?? false,
           }
-        }),
+        },
         cycle(direction: 1 | -1) {
           const current = currentModel()
           if (!current) return
@@ -385,26 +389,26 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
           })
         },
         variant: {
-          selected() {
-            const managed = managedSessionModel()
+          selected(sessionID?: string) {
+            const managed = managedSessionModel(sessionID)
             if (managed) return managed.variant
-            const m = currentModel()
+            const m = currentModel(sessionID)
             if (!m) return undefined
             const key = `${m.providerID}/${m.modelID}`
             return modelStore.variant[key]
           },
-          current() {
-            const managed = managedSessionModel()
+          current(sessionID?: string) {
+            const managed = managedSessionModel(sessionID)
             if (managed) return managed.variant
-            const v = this.selected()
+            const v = this.selected(sessionID)
             if (!v) return undefined
-            if (!this.list().includes(v)) return undefined
+            if (!this.list(sessionID).includes(v)) return undefined
             return v
           },
-          list() {
-            const managed = managedSessionModel()
+          list(sessionID?: string) {
+            const managed = managedSessionModel(sessionID)
             if (managed && !isModelValid(managed)) return [managed.variant]
-            const m = currentModel()
+            const m = currentModel(sessionID)
             if (!m) return []
             const provider = sync.data.provider.find((item) => item.id === m.providerID)
             const info = provider?.models[m.modelID]

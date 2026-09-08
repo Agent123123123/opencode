@@ -28,11 +28,10 @@ test("projects external V2 turns incrementally and preserves the exact session a
   await using tmp = await tmpdir()
   await Bun.write(`${tmp.path}/kv.json`, "{}")
   const events = createEventSource()
-  const persisted: SessionMessage[] = [
-    { id: "msg_user_1", type: "user", text: "start", time: { created: 1 } },
-  ]
+  const persisted: SessionMessage[] = [{ id: "msg_user_1", type: "user", text: "start", time: { created: 1 } }]
   let messageReads = 0
   let providerAuthReads = 0
+  let currentModel = model
   const calls = createFetch((url) => {
     if (url.pathname === "/provider/auth") providerAuthReads++
     if (url.pathname === `/api/session/${sessionID}`)
@@ -45,7 +44,7 @@ test("projects external V2 turns incrementally and preserves the exact session a
           time: { created: 1, updated: 1 },
           title: "V2 live session",
           agent: "orchestrator",
-          model,
+          model: currentModel,
           location: { directory },
           execution: { managed: true, gateOpen: true },
         },
@@ -159,6 +158,28 @@ test("projects external V2 turns incrementally and preserves the exact session a
     expect(sync.data.part.msg_assistant_1[0]).toBe(text)
     expect(messageReads).toBe(1)
 
+    currentModel = { providerID: "new-provider", id: "new-model", variant: "high" }
+    events.emit(
+      global({
+        id: "evt_model_requested",
+        type: "session.next.model.switch.requested",
+        properties: { sessionID, timestamp: 5, model: currentModel },
+      }),
+    )
+    await Bun.sleep(20)
+    expect(sync.session.get(sessionID)?.model).toEqual(model)
+    events.emit(
+      global({
+        id: "evt_model_switched",
+        type: "session.next.model.switched",
+        properties: { sessionID, messageID: "msg_model_switched", timestamp: 6, model: currentModel },
+      }),
+    )
+    await wait(() => sync.session.get(sessionID)?.model?.providerID === "new-provider")
+    expect(sync.session.get(sessionID)?.model).toEqual(currentModel)
+    expect(messageReads).toBe(1)
+    persisted.push({ id: "msg_model_switched", type: "model-switched", model: currentModel, time: { created: 6 } })
+
     persisted.push({
       id: "msg_assistant_recovered",
       type: "assistant",
@@ -168,11 +189,15 @@ test("projects external V2 turns incrementally and preserves the exact session a
       time: { created: 5, completed: 6 },
       finish: "stop",
     })
+    // A selection applied while disconnected must be recovered from the Session readback.
+    currentModel = { providerID: "reconnected-provider", id: "reconnected-model", variant: "default" }
     events.emit(global({ id: "evt_reconnected", type: "server.connected", properties: {} }))
 
     await wait(() => sync.data.message[sessionID]?.some((message) => message.id === "msg_assistant_recovered"))
     expect(messageReads).toBe(2)
     expect(sync.data.message[sessionID][0]).toBe(first)
+    await wait(() => sync.session.get(sessionID)?.model?.providerID === "reconnected-provider")
+    expect(sync.session.get(sessionID)?.model).toEqual(currentModel)
 
     const authReadsBeforeDispose = providerAuthReads
     events.emit(global({ id: "evt_instance_disposed", type: "server.instance.disposed", properties: { directory } }))

@@ -159,7 +159,27 @@ export const {
           )
           break
         case "session.next.agent.switched":
+          break
         case "session.next.model.switched":
+          if (store.session.info[event.data.sessionID]) {
+            setStore(
+              "session",
+              "info",
+              event.data.sessionID,
+              produce((session) => {
+                session.model = event.data.model
+                session.time.updated = event.data.timestamp
+              }),
+            )
+          }
+          message.update(event.data.sessionID, (draft) => {
+            message.prepend(draft, {
+              id: event.data.messageID,
+              type: "model-switched",
+              model: event.data.model,
+              time: { created: event.data.timestamp },
+            })
+          })
           break
         case "session.next.title.changed": {
           if (!store.session.info[event.data.sessionID]) break

@@ -39,6 +39,7 @@ test("refreshes exact sessions into reactive getters", async () => {
           tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
           time: { created: 0, updated: 0 },
           title: "Test session",
+          model: { providerID: "old-provider", id: "model", variant: "high" },
           location: { directory },
         },
       })
@@ -86,6 +87,38 @@ test("refreshes exact sessions into reactive getters", async () => {
     })
     await wait(() => data.session.get("ses_test")?.title === "Renamed session")
     expect(data.session.get("ses_test")?.time.updated).toBe(42)
+    emitEvent(events, {
+      id: "evt_model_requested",
+      type: "session.next.model.switch.requested",
+      properties: {
+        sessionID: "ses_test",
+        timestamp: 43,
+        model: { providerID: "new-provider", id: "model" },
+      },
+    })
+    await Bun.sleep(20)
+    expect(data.session.get("ses_test")?.model).toEqual({ providerID: "old-provider", id: "model", variant: "high" })
+    emitEvent(events, {
+      id: "evt_model_switched",
+      type: "session.next.model.switched",
+      properties: {
+        sessionID: "ses_test",
+        messageID: "msg_model_switched",
+        timestamp: 44,
+        model: { providerID: "new-provider", id: "model" },
+      },
+    })
+    await wait(() => data.session.get("ses_test")?.model?.providerID === "new-provider")
+    expect(data.session.get("ses_test")?.model).toEqual({ providerID: "new-provider", id: "model" })
+    expect(data.session.get("ses_test")?.time.updated).toBe(44)
+    expect(data.session.message.list("ses_test")).toEqual([
+      {
+        id: "msg_model_switched",
+        type: "model-switched",
+        model: { providerID: "new-provider", id: "model" },
+        time: { created: 44 },
+      },
+    ])
     await Bun.sleep(20)
     for (const path of ["/api/agent", "/api/command", "/api/integration", "/api/model", "/api/provider", "/api/skill"])
       expect(requested.has(path)).toBe(false)

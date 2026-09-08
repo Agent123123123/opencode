@@ -278,7 +278,11 @@ export const {
         case "server.connected": {
           if (startup.sessionApi !== "v2") break
           const sourceData = v2Data()
-          for (const sessionID of v2Sessions) void sourceData.session.message.refresh(sessionID).catch(() => {})
+          for (const sessionID of v2Sessions) {
+            void Promise.all([sourceData.session.refresh(sessionID), sourceData.session.message.refresh(sessionID)])
+              .then(() => projectV2Session(sessionID))
+              .catch(() => {})
+          }
           break
         }
         case "server.instance.disposed":

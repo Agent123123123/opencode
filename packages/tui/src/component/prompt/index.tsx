@@ -238,7 +238,7 @@ export function Prompt(props: PromptProps) {
   )
   const [cursorVersion, setCursorVersion] = createSignal(0)
   const currentProviderLabel = createMemo(() => {
-    const current = local.model.parsed()
+    const current = local.model.parsed(props.sessionID)
     return visibleProviderLabel(current.model, current.provider)
   })
   const hasRightContent = createMemo(() => Boolean(props.right))
@@ -995,7 +995,7 @@ export function Prompt(props: PromptProps) {
       void exit()
       return true
     }
-    const selectedModel = local.model.current()
+    const selectedModel = local.model.current(props.sessionID)
     if (!v2 && !selectedModel) {
       void promptModelWarning()
       return false
@@ -1016,7 +1016,7 @@ export function Prompt(props: PromptProps) {
       return false
     }
 
-    const variant = local.model.variant.current()
+    const variant = local.model.variant.current(props.sessionID)
     let sessionID = props.sessionID
     let finishMoveProgress = false
     if (sessionID == null) {
@@ -1375,9 +1375,9 @@ export function Prompt(props: PromptProps) {
   })
 
   const showVariant = createMemo(() => {
-    const variants = local.model.variant.list()
+    const variants = local.model.variant.list(props.sessionID)
     if (variants.length === 0) return false
-    const current = local.model.variant.current()
+    const current = local.model.variant.current(props.sessionID)
     return !!current
   })
 
@@ -1555,7 +1555,7 @@ export function Prompt(props: PromptProps) {
                             truncate
                             fg={fadeColor(leader() ? theme.textMuted : theme.text, modelMetaAlpha())}
                           >
-                            {local.model.parsed().model}
+                            {local.model.parsed(props.sessionID).model}
                           </text>
                           <Show when={currentProviderLabel()}>
                             {(provider) => (
@@ -1577,7 +1577,7 @@ export function Prompt(props: PromptProps) {
                             </text>
                             <text flexShrink={0} wrapMode="none">
                               <span style={{ fg: fadeColor(theme.warning, variantMetaAlpha()), bold: true }}>
-                                {local.model.variant.current()}
+                                {local.model.variant.current(props.sessionID)}
                               </span>
                             </text>
                           </Show>
