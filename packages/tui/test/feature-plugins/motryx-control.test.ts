@@ -25,7 +25,7 @@ const config: MotryxControlConfig = {
 function snapshot(overrides: Record<string, unknown> = {}) {
   const now = "2026-07-19T00:00:00.000Z"
   return {
-    schemaVersion: 10,
+    schemaVersion: 11,
     projectID,
     orchestratorSessionID: config.orchestratorSessionID,
     projectionRevision: "server-generation:ic:revision",
@@ -105,9 +105,9 @@ describe("Motryx typed control snapshot", () => {
     ).toEqual({ ok: false, error: "Motryx control API must use http or https" })
   })
 
-  test("accepts an exact schema-v8 ROUTABLE/binding/reconcile proof", () => {
+  test("accepts an exact schema-v11 ROUTABLE/binding/reconcile proof", () => {
     expect(parseMotryxControlSnapshot(snapshot(), config)).toMatchObject({
-      schemaVersion: 10,
+      schemaVersion: 11,
       projectID,
       orchestratorSessionID: config.orchestratorSessionID,
       projectionRevision: "server-generation:ic:revision",
@@ -213,7 +213,7 @@ describe("Motryx typed control snapshot", () => {
     expect(value.executionHistory[0]).toMatchObject({ summaryID: "summary_1", terminalKind: "COMPLETED" })
   })
 
-  test("strictly parses v8 runtime attention and retry diagnostics", () => {
+  test("strictly parses current runtime attention and retry diagnostics", () => {
     const value = parseMotryxControlSnapshot(snapshot({
       attentionItems: [{
         attentionID: "attention_provider_retry",
@@ -339,7 +339,7 @@ describe("Motryx typed control snapshot", () => {
       fetcher: async (input, init) => {
         request = new Request(input, init)
         return Response.json({
-          schemaVersion: 10,
+          schemaVersion: 11,
           incidentID: "incident_1",
           status: "OPEN",
           presentationState: "DISMISSED",
@@ -362,7 +362,7 @@ describe("Motryx typed control snapshot", () => {
 
 describe("Motryx typed Orchestrator sessions", () => {
   const sessions = () => ({
-    schemaVersion: 10,
+    schemaVersion: 11,
     projectID,
     status: "ROUTABLE",
     current: {

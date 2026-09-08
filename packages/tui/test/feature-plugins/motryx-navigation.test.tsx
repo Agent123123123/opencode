@@ -101,10 +101,10 @@ test("Motryx opens native model pickers for launcher-owned tiers and preserves O
   const commands = motryxSelectionBoundaryCommands(api, {
     ok: true,
     value: {
-      argv: ["/runtime/scripts/motryx.sh", "--project", "/tmp/project", "models", "set", "--defer-refresh"],
+      argv: ["/runtime/scripts/motryx.sh", "--project", "/tmp/project", "models", "set"],
       projectID: "/tmp/project",
     },
-  })
+  }, () => ({ sessionID: "ses_current", serverGeneration: "gen_1", bindingGeneration: 1, ownerRunID: "run_1" }))
 
   const generic = commands.find((command) => command.name === "model.list")
   expect(generic?.hidden).toBe(true)

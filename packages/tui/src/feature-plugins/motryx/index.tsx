@@ -61,7 +61,7 @@ const tui: TuiPlugin = async (api) => {
     priority: MOTRYX_PRODUCT_COMMAND_PRIORITY,
     commands: [
       ...motryxSessionNavigationCommands(api, config, () => actions),
-      ...motryxSelectionBoundaryCommands(api),
+      ...motryxSelectionBoundaryCommands(api, motryxModelSetCommandFromEnv(), () => actions?.modelApplicationRoute()),
       {
         name: "motryx.open",
         title: "Open Motryx workflow",
@@ -251,6 +251,7 @@ export function motryxSessionNavigationCommands(
 export function motryxSelectionBoundaryCommands(
   api: TuiPluginApi,
   modelSetCommand: MotryxModelSetCommandResult = motryxModelSetCommandFromEnv(),
+  currentRoute: MotryxRouteActions["modelApplicationRoute"] = () => undefined,
 ): TuiKeymapCommand[] {
   let modelSetPending = false
   let savedStrongModel: string | undefined
@@ -292,6 +293,7 @@ export function motryxSelectionBoundaryCommands(
         showMotryxModelPicker(
           api,
           modelSetCommand,
+          currentRoute,
           "strong",
           savedStrongModel ?? api.state.config.model,
           () => modelSetPending,
@@ -315,6 +317,7 @@ export function motryxSelectionBoundaryCommands(
         showMotryxModelPicker(
           api,
           modelSetCommand,
+          currentRoute,
           "weak",
           savedWeakModel ?? api.state.config.small_model,
           () => modelSetPending,
@@ -388,6 +391,7 @@ export function motryxSelectionBoundaryCommands(
 function showMotryxModelPicker(
   api: TuiPluginApi,
   command: MotryxModelSetCommandResult,
+  currentRoute: MotryxRouteActions["modelApplicationRoute"],
   tier: MotryxModelTier,
   configured: string | undefined,
   pending: () => boolean,
@@ -396,6 +400,11 @@ function showMotryxModelPicker(
 ) {
   if (!command.ok) {
     api.ui.toast({ variant: "error", message: command.error })
+    return
+  }
+  const expected = currentRoute()
+  if (!expected) {
+    api.ui.toast({ variant: "error", message: "The Motryx route is not live. Reconnect before selecting a model." })
     return
   }
   const current = parseConfiguredModel(configured)
@@ -408,17 +417,22 @@ function showMotryxModelPicker(
         setPending(true)
         const model = `${selection.providerID}/${selection.modelID}`
         try {
-          await setMotryxModelTier(command.value, tier, model, { signal: api.lifecycle.signal })
-          onSaved(model)
+          const result = await setMotryxModelTier(command.value, tier, model, { expected, signal: api.lifecycle.signal })
+          if (JSON.stringify(currentRoute()) !== JSON.stringify(expected)) return
+          onSaved(result.selection.model)
           api.ui.dialog.clear()
+          const selection = `${result.selection.model}#${result.selection.variant}`
           api.ui.toast({
-            variant: "success",
-            message:
-              tier === "strong"
-                ? `Strong model saved: ${model}. The next Motryx launch converges all Orchestrator and Analyst sessions at their turn boundaries.`
-                : `Weak model saved: ${model}. The next Motryx launch converges all worker and helper sessions at their turn boundaries.`,
+            variant: result.status === "partial" || result.status === "unconfirmed" ? "error" : "success",
+            message: result.status === "offline" ? `${tier} preference saved: ${selection}. No running instance.`
+              : result.status === "unconfirmed" ? `${tier} preference saved. Online application unconfirmed: ${result.message}`
+                : result.status === "partial" ? `${tier} preference saved. Unconfirmed requests: ${result.unconfirmed.map((item) => `${item.sessionID}: ${item.message}`).join("; ")}`
+                  : result.accepted.length === 0 ? `${tier} preference saved: ${selection}. No attached target sessions.`
+                    : result.accepted.every((item) => item.applied) ? `${tier} model applied: ${selection}.`
+                      : `${tier} model requests accepted: ${selection}. Waiting for active turns to finish.`,
           })
         } catch (error) {
+          if (JSON.stringify(currentRoute()) !== JSON.stringify(expected)) return
           api.ui.toast({
             variant: "error",
             message: error instanceof Error ? error.message : String(error),

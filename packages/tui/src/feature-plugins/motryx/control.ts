@@ -1,6 +1,6 @@
 import path from "node:path"
 
-export const MOTRYX_CONTROL_SCHEMA_VERSION = 10 as const
+export const MOTRYX_CONTROL_SCHEMA_VERSION = 11 as const
 
 export type MotryxControlConfig = {
   apiURL: string
@@ -132,7 +132,8 @@ export type MotryxLaneProjection = {
   checkerRuntimeReadiness: string
   coordinatorRuntime?: MotryxRuntimeTargetProjection
   checkerRuntime?: MotryxRuntimeTargetProjection
-  schedulingPhase?: "READY" | "PREPARING"
+  schedulingPhase?: "ELIGIBLE" | "PREPARING"
+  schedulingReason?: "CAPACITY" | "SLOT_BUSY" | "MANAGEMENT"
   runPhase?: "EXECUTING" | "WAITING_RESPONSE" | "RESUME_QUEUED"
   requestMessageID?: string
   requestDeadlineAt?: number
@@ -273,6 +274,7 @@ export type MotryxAttentionItemProjection = {
   scopeKind: "LANE" | "SESSION"
   role: string
   laneID?: string
+  slotID?: string
   claimID?: string
   inputID?: string
   causalInputID?: string
@@ -403,7 +405,7 @@ export async function fetchMotryxControlHealth(
     throw new MotryxControlSchemaError("Motryx control health did not return JSON")
   }
   const root = requiredRecord(await response.json(), "health")
-  if (root.schemaVersion !== MOTRYX_CONTROL_SCHEMA_VERSION) fail("health.schemaVersion must be 10")
+  if (root.schemaVersion !== MOTRYX_CONTROL_SCHEMA_VERSION) fail("health.schemaVersion must be 11")
   if (root.status !== "ok" && root.status !== "switching" && root.status !== "starting") {
     fail("health.status is invalid")
   }
@@ -492,7 +494,7 @@ async function parseSessionListResponse(response: Response, config: MotryxContro
 
 export function parseMotryxSessionList(value: unknown, expected: MotryxControlConfig): MotryxSessionList {
   const root = requiredRecord(value, "sessions")
-  if (root.schemaVersion !== MOTRYX_CONTROL_SCHEMA_VERSION) fail("sessions.schemaVersion must be 10")
+  if (root.schemaVersion !== MOTRYX_CONTROL_SCHEMA_VERSION) fail("sessions.schemaVersion must be 11")
   const projectID = exactProject(root.projectID, expected.projectID, "sessions.projectID")
   if (root.status !== "ROUTABLE" && root.status !== "SWITCHING" && root.status !== "UNAVAILABLE") {
     fail("sessions.status is invalid")
@@ -623,7 +625,7 @@ export async function dismissMotryxIncident(
     throw new MotryxControlHttpError(response.status, `Motryx incident dismissal returned HTTP ${response.status}${detail}`)
   }
   const result = requiredRecord(value, "incident dismissal")
-  if (result.schemaVersion !== MOTRYX_CONTROL_SCHEMA_VERSION) fail("incident dismissal schemaVersion must be 10")
+  if (result.schemaVersion !== MOTRYX_CONTROL_SCHEMA_VERSION) fail("incident dismissal schemaVersion must be 11")
   if (result.incidentID !== input.incidentID) fail("incident dismissal returned a different incident")
   if (result.presentationState !== "DISMISSED") fail("incident dismissal did not persist DISMISSED")
   return {
@@ -636,7 +638,7 @@ export async function dismissMotryxIncident(
 
 export function parseMotryxControlSnapshot(value: unknown, expected: MotryxControlConfig): MotryxControlSnapshot {
   const root = requiredRecord(value, "snapshot")
-  if (root.schemaVersion !== MOTRYX_CONTROL_SCHEMA_VERSION) fail("snapshot.schemaVersion must be 10")
+  if (root.schemaVersion !== MOTRYX_CONTROL_SCHEMA_VERSION) fail("snapshot.schemaVersion must be 11")
   const projectID = exactProject(root.projectID, expected.projectID, "snapshot.projectID")
   const orchestratorSessionID = exactString(
     root.orchestratorSessionID,
@@ -841,8 +843,13 @@ function parseLane(value: unknown, label: string): MotryxLaneProjection {
     checkerRuntime: parseRuntimeTarget(item.checkerRuntime, `${label}.checkerRuntime`),
     schedulingPhase: optionalEnum(
       item.schedulingPhase,
-      new Set(["READY", "PREPARING"] as const),
+      new Set(["ELIGIBLE", "PREPARING"] as const),
       `${label}.schedulingPhase`,
+    ),
+    schedulingReason: optionalEnum(
+      item.schedulingReason,
+      new Set(["CAPACITY", "SLOT_BUSY", "MANAGEMENT"] as const),
+      `${label}.schedulingReason`,
     ),
     runPhase: parseRunPhase(item.runPhase, `${label}.runPhase`),
     requestMessageID: optionalString(item.requestMessageID, `${label}.requestMessageID`),
@@ -950,6 +957,7 @@ function parseAttentionItem(value: unknown, label: string): MotryxAttentionItemP
     : exactEnum(item.retryLayer, new Set(["PROVIDER", "DELIVERY", "RUN", "PROTOCOL"] as const), `${label}.retryLayer`)
   return compact({
     attentionID: requiredString(item.attentionID, `${label}.attentionID`),
+    slotID: optionalString(item.slotID, `${label}.slotID`),
     kind,
     severity,
     scopeKind,

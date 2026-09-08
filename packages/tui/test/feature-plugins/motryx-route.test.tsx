@@ -34,7 +34,7 @@ test("Motryx plugin route composes the standard session surface with the Flow/In
   const checkerDetail =
     "CHECKER_DETAIL_INSPECT_ONLY registered snapshot evidence implementation showing recommended_skills"
   const snapshot: MotryxControlSnapshot = {
-    schemaVersion: 10,
+    schemaVersion: 11,
     projectID,
     orchestratorSessionID: config.orchestratorSessionID,
     projectionRevision: "server-generation:ic:route",
@@ -376,7 +376,7 @@ test("Motryx runtime error card can be dismissed without resolving the incident"
               attention: { visibleOpenIncidentCount: 0, failedLaneCount: 0, activeAttentionCount: 0, userActionRequiredCount: 0, retryingCount: 0 },
             }
             return Response.json({
-              schemaVersion: 10,
+              schemaVersion: 11,
               incidentID: incident.incidentID,
               status: "OPEN",
               presentationState: "DISMISSED",
@@ -463,7 +463,7 @@ test("Motryx runtime error card can be dismissed without resolving the incident"
   }
 })
 
-test("Motryx v8 separates runtime retry from stable reconciliation attention", async () => {
+test("Motryx separates runtime retry from stable reconciliation attention", async () => {
   const projectID = path.resolve("/tmp/motryx-route-attention-project")
   const sessionID = "ses_route_attention"
   const config: MotryxControlConfig = {
@@ -681,6 +681,20 @@ test("Motryx v8 separates runtime retry from stable reconciliation attention", a
     expect(frame).toContain("provider_internal")
     expect(frame).toContain("input msg_lane_reconciliation")
     expect(frame).not.toContain("repair runtime/provider, then retry_failed_lane")
+    currentSnapshot = {
+      ...currentSnapshot,
+      projectionRevision: "server:shared-slot-attention",
+      attentionItems: [{
+        ...waitingAttention,
+        attentionID: "attention_shared_slot",
+        laneID: undefined,
+        slotID: "slot_debug_coordinator",
+        summary: "Shared coordinator Slot needs reconciliation.",
+      }],
+    }
+    await actions!.refresh()
+    frame = await renderUntil(app, (value) => value.includes("Shared coordinator Slot needs reconciliation."))
+    expect(frame).toContain("Shared coordinator Slot needs reconciliation.")
   } finally {
     lifecycle.abort()
     app.renderer.destroy()
@@ -772,7 +786,7 @@ test("/sessions switches the exact Motryx Orchestrator and rebinds conversation 
   } as unknown as TuiPluginApi
   const now = "2026-07-19T00:00:00.000Z"
   const routeSnapshot = (sessionID: string, bindingGeneration: number): MotryxControlSnapshot => ({
-    schemaVersion: 10,
+    schemaVersion: 11,
     projectID,
     orchestratorSessionID: sessionID,
     projectionRevision: `server-generation:ic:${sessionID}`,
@@ -821,7 +835,7 @@ test("/sessions switches the exact Motryx Orchestrator and rebinds conversation 
     diagnostics: [],
   })
   const sessionList = (currentID: string, bindingGeneration: number) => ({
-    schemaVersion: 10,
+    schemaVersion: 11,
     projectID,
     status: "ROUTABLE",
     current: {
@@ -1253,7 +1267,7 @@ async function clickFrameText(app: Awaited<ReturnType<typeof testRender>>, frame
 function debugRouteSnapshot(projectID: string, orchestratorSessionID: string, generation = 7, server = "server") {
   const now = "2026-07-19T00:00:00.000Z"
   return {
-    schemaVersion: 10,
+    schemaVersion: 11,
     projectID,
     orchestratorSessionID,
     projectionRevision: `${server}:revision`,

@@ -20,7 +20,7 @@ const route = {
 function routable(overrides: Record<string, unknown> = {}) {
   const current = { ...route, ...overrides }
   return {
-    schemaVersion: 10,
+    schemaVersion: 11,
     projectID: config.projectID,
     status: "ROUTABLE",
     current,
@@ -38,7 +38,7 @@ function routable(overrides: Record<string, unknown> = {}) {
 
 function unavailable() {
   return {
-    schemaVersion: 10,
+    schemaVersion: 11,
     projectID: config.projectID,
     status: "UNAVAILABLE",
     current: null,

@@ -18,6 +18,7 @@ import {
   type MotryxLaneProjection,
   type MotryxRuntimeHealthWarning,
   type MotryxSessionList,
+  type MotryxSessionRoute,
 } from "./control"
 import {
   createMotryxProjectionController,
@@ -46,6 +47,7 @@ export type MotryxConversationTarget = {
 }
 
 export type MotryxRouteActions = {
+  modelApplicationRoute: () => MotryxSessionRoute | undefined
   refresh: () => Promise<void>
   showSessions: () => Promise<void>
   rename: () => Promise<void>
@@ -480,6 +482,15 @@ export function MotryxRoute(props: {
   onMount(() => {
     if (!config) return
     const actions: MotryxRouteActions = {
+      modelApplicationRoute: () => {
+        const current = activeConfig()
+        const proof = snapshot()
+        if (!current || !proof || switching() || connection().phase !== "live" ||
+          proof.orchestratorSessionID !== current.orchestratorSessionID ||
+          path.resolve(proof.projectID) !== path.resolve(current.projectID)) return
+        return { sessionID: proof.orchestratorSessionID, serverGeneration: proof.route.serverGeneration,
+          bindingGeneration: proof.binding.bindingGeneration, ownerRunID: proof.binding.ownerRunID }
+      },
       refresh: async () => projectionController?.refresh().then(() => undefined),
       showSessions,
       rename: renameOrchestrator,
@@ -1375,6 +1386,13 @@ function LaneRow(props: {
       <Show when={props.lane.dependsOnLaneIDs.length > 0}>
         <text fg={props.api.theme.current.textMuted}>depends on {props.lane.dependsOnLaneIDs.length}</text>
       </Show>
+      <Show when={props.lane.schedulingReason}>
+        <text fg={props.api.theme.current.textMuted}>
+          {props.lane.schedulingReason === "SLOT_BUSY" ? "Waiting for shared worker"
+            : props.lane.schedulingReason === "MANAGEMENT" ? "Paused for runtime management"
+            : "Waiting for execution capacity"}
+        </text>
+      </Show>
     </box>
   )
 }
@@ -1569,7 +1587,10 @@ function InspectPanel(props: {
   const executionHistory = createMemo(() => props.snapshot.executionHistory
     .filter((summary) => summary.laneID === props.lane?.id))
   const attentionItems = createMemo(() => props.snapshot.attentionItems
-    .filter((attention) => attention.laneID === props.lane?.id && attention.presentationState === "VISIBLE")
+    .filter((attention) => attention.presentationState === "VISIBLE" && (
+      (attention.laneID !== undefined && attention.laneID === props.lane?.id) ||
+      (attention.slotID !== undefined && [props.lane?.coordinatorSlotID, props.lane?.checkerSlotID].includes(attention.slotID))
+    ))
     .sort(compareRuntimeAttention))
   const primaryAttention = createMemo(() => attentionItems()[0])
   const failureAttention = createMemo(() => {
@@ -1816,7 +1837,7 @@ function laneColor(api: TuiPluginApi, status: string) {
   if (status === "BLOCKED" || status === "FAILED") return api.theme.current.error
   if (
     status === "PENDING" || status === "CHECKING" || status === "AWAITING_CHECK" ||
-    status === "READY" || status === "PREPARING"
+    status === "ELIGIBLE" || status === "PREPARING"
   ) return api.theme.current.warning
   if (status === "WORKING") return api.theme.current.info
   return api.theme.current.textMuted
@@ -1832,7 +1853,7 @@ const MOTRYX_KNOWN_LANE_STATUSES = new Set([
   "FAILED",
   "DONE",
   "WAIVED",
-  "READY",
+  "ELIGIBLE",
   "PREPARING",
 ])
 
