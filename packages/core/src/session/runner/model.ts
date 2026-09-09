@@ -101,6 +101,7 @@ const apiKey = (model: ModelV2.Info, credential?: Credential.Value) => {
 
 const withDefaults = (model: ModelV2.Info, route: AnyRoute) => {
   const body = model.request.body
+  const settings = model.api.settings ?? {}
   const httpBody = Object.hasOwn(body, "apiKey")
     ? Object.fromEntries(Object.entries(body).filter(([key]) => key !== "apiKey"))
     : body
@@ -108,7 +109,12 @@ const withDefaults = (model: ModelV2.Info, route: AnyRoute) => {
     provider: model.providerID,
     endpoint: model.api.url === undefined ? undefined : { baseURL: model.api.url },
     headers: model.request.headers,
-    http: { body: httpBody },
+    http: {
+      body: httpBody,
+      timeout: typeof settings.timeout === "number" || settings.timeout === false ? settings.timeout : undefined,
+      headerTimeout: typeof settings.headerTimeout === "number" || settings.headerTimeout === false ? settings.headerTimeout : undefined,
+      chunkTimeout: typeof settings.chunkTimeout === "number" ? settings.chunkTimeout : undefined,
+    },
     limits: { context: model.limit.context, output: model.limit.output },
   })
 }

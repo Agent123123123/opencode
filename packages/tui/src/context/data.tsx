@@ -11,6 +11,7 @@ import type {
   SessionV2Info,
   V2Event,
 } from "@opencode-ai/sdk/v2"
+import { DateTime, Option } from "effect"
 import { createStore, produce } from "solid-js/store"
 import { createSimpleContext } from "./helper"
 import { useSDK } from "./sdk"
@@ -21,6 +22,9 @@ type LocationData = {
   reference?: ReferenceInfo[]
 }
 
+type ProviderRetry = Extract<V2Event, { type: "session.next.retried" }>["data"]
+type SessionRuntime = { turnID?: string; messageID?: string; terminal: boolean; seq: number; retry?: ProviderRetry }
+
 type Data = {
   session: {
     info: Record<string, SessionV2Info>
@@ -28,6 +32,7 @@ type Data = {
     messageRevision: Record<string, number>
     permission: Record<string, PermissionV2Request[]>
     question: Record<string, QuestionV2Request[]>
+    runtime: Record<string, SessionRuntime>
   }
   location: Record<string, LocationData>
 }
@@ -54,6 +59,7 @@ export const {
         messageRevision: {},
         permission: {},
         question: {},
+        runtime: {},
       },
       location: {},
     })
@@ -107,6 +113,30 @@ export const {
           (item): item is SessionMessageAssistantReasoning => item.type === "reasoning" && item.id === reasoningID,
         )
       },
+    }
+
+    function handleRuntimeEvent(event: V2Event) {
+      if ("sessionID" in event.data && typeof event.data.sessionID === "string" && event.durable) {
+        const id = event.data.sessionID
+        const current = store.session.runtime[id]
+        const seq = event.durable.seq
+        if (!current || seq > current.seq) {
+          if (event.type === "session.turn.started") {
+            setStore("session", "runtime", id, { turnID: event.data.turnID, terminal: false, seq,
+              messageID: undefined, retry: undefined })
+          } else if (event.type === "session.turn.settled" || event.type === "session.turn.not_started" ||
+            event.type === "session.next.execution.reset") {
+            setStore("session", "runtime", id, { ...current, terminal: true, seq, retry: undefined })
+          } else if (event.type === "session.next.retried" && current?.turnID === event.data.turnID && !current.terminal) {
+            setStore("session", "runtime", id, { ...current, seq, retry: event.data })
+          } else if (event.type === "session.next.step.started" && current && !current.terminal) {
+            setStore("session", "runtime", id, { ...current, seq, messageID: event.data.assistantMessageID,
+              retry: current.messageID === event.data.assistantMessageID ? current.retry : undefined })
+          } else if (event.type === "session.next.compaction.started" && current) {
+            setStore("session", "runtime", id, { ...current, seq, retry: undefined })
+          }
+        }
+      }
     }
 
     function handleEvent(event: V2Event) {
@@ -416,7 +446,6 @@ export const {
             }
           })
           break
-        case "session.next.retried":
         case "session.next.compaction.started":
         case "session.next.compaction.delta":
           break
@@ -447,10 +476,33 @@ export const {
         } as V2Event)
       })
       onCleanup(unsub)
+      // OpenCode already forwards durable identity in its sync envelope. The
+      // ordinary UI event envelope deliberately contains only properties.
+      const unsubscribeRuntime = sdk.event.on("event", (envelope) => {
+        if (envelope.payload.type !== "sync") return
+        const event = envelope.payload.syncEvent
+        const separator = event.type.lastIndexOf(".")
+        const type = event.type.slice(0, separator)
+        const version = Number(event.type.slice(separator + 1))
+        if (type === "session.next.retried" && version !== 2) return
+        const deadline = type === "session.next.retried" && "retryNotBefore" in event.data ? event.data.retryNotBefore : undefined
+        const retryNotBefore = (typeof deadline === "string" || typeof deadline === "number" || DateTime.isDateTime(deadline))
+          ? Option.getOrUndefined(Option.map(DateTime.make(deadline), DateTime.toEpochMillis)) : undefined
+        handleRuntimeEvent({ id: event.id, type, data: type === "session.next.retried" ? { ...event.data, retryNotBefore } : event.data,
+          durable: { aggregateID: event.aggregateID, seq: event.seq, version } } as V2Event)
+      })
+      onCleanup(unsubscribeRuntime)
     })
 
     const result = {
       session: {
+        turnID(sessionID: string) {
+          const runtime = store.session.runtime[sessionID]
+          return runtime?.terminal ? undefined : runtime?.turnID
+        },
+        retry(sessionID: string) {
+          return store.session.runtime[sessionID]?.retry
+        },
         get(sessionID: string) {
           return store.session.info[sessionID]
         },

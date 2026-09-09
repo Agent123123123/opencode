@@ -1011,12 +1011,12 @@ export type GlobalEvent = {
               | "tool_effect_unknown"
               | "unknown"
             safeMessage: string
-            httpStatus?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+            httpStatus?: number
             transportKind?: string
             transportCode?: string
             retryable: boolean
             retryExhausted: boolean
-            attemptCount: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+            attemptCount: number
             providerID?: string
             modelID?: string
           }
@@ -1066,12 +1066,12 @@ export type GlobalEvent = {
               | "tool_effect_unknown"
               | "unknown"
             safeMessage: string
-            httpStatus?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+            httpStatus?: number
             transportKind?: string
             transportCode?: string
             retryable: boolean
             retryExhausted: boolean
-            attemptCount: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+            attemptCount: number
             providerID?: string
             modelID?: string
           }
@@ -1102,12 +1102,12 @@ export type GlobalEvent = {
               | "tool_effect_unknown"
               | "unknown"
             safeMessage: string
-            httpStatus?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+            httpStatus?: number
             transportKind?: string
             transportCode?: string
             retryable: boolean
             retryExhausted: boolean
-            attemptCount: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+            attemptCount: number
             providerID?: string
             modelID?: string
           }
@@ -1384,8 +1384,36 @@ export type GlobalEvent = {
         properties: {
           timestamp: number
           sessionID: string
-          attempt: number
-          error: SessionNextRetryError
+          turnID: string
+          activityInputIDs: Array<string>
+          requestID: string
+          phase: "waiting" | "requesting"
+          retryAttempt: number
+          retryLimit: number
+          retryNotBefore?: number
+          failure: {
+            kind:
+              | "authentication"
+              | "quota"
+              | "rate_limit"
+              | "provider_internal"
+              | "transport"
+              | "invalid_request"
+              | "content_policy"
+              | "resource_limit"
+              | "protocol_contract_unsatisfied"
+              | "tool_effect_unknown"
+              | "unknown"
+            safeMessage: string
+            httpStatus?: number
+            transportKind?: string
+            transportCode?: string
+            retryable: boolean
+            retryExhausted: boolean
+            attemptCount: number
+            providerID?: string
+            modelID?: string
+          }
         }
       }
     | {
@@ -3153,9 +3181,9 @@ export type V2Event =
   | SessionNextExecutionReset
   | SessionNextContextUpdated
   | SessionTurnStarted
-  | SessionTurnNotStarted1
+  | SessionTurnNotStarted
   | SessionTurnCorrection
-  | SessionTurnSettled1
+  | SessionTurnSettled
   | SessionNextSynthetic
   | SessionNextShellStarted
   | SessionNextShellEnded
@@ -3493,19 +3521,6 @@ export type ToolFileContent = {
 }
 
 export type LlmToolContent = ToolTextContent | ToolFileContent
-
-export type SessionNextRetryError = {
-  message: string
-  statusCode?: number
-  isRetryable: boolean
-  responseHeaders?: {
-    [key: string]: string
-  }
-  responseBody?: string
-  metadata?: {
-    [key: string]: string
-  }
-}
 
 export type FileDiff = {
   path: string
@@ -3981,12 +3996,12 @@ export type SyncEventSessionTurnNotStarted = {
           | "tool_effect_unknown"
           | "unknown"
         safeMessage: string
-        httpStatus?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        httpStatus?: number
         transportKind?: string
         transportCode?: string
         retryable: boolean
         retryExhausted: boolean
-        attemptCount: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        attemptCount: number
         providerID?: string
         modelID?: string
       }
@@ -4050,12 +4065,12 @@ export type SyncEventSessionTurnSettled = {
           | "tool_effect_unknown"
           | "unknown"
         safeMessage: string
-        httpStatus?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        httpStatus?: number
         transportKind?: string
         transportCode?: string
         retryable: boolean
         retryExhausted: boolean
-        attemptCount: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        attemptCount: number
         providerID?: string
         modelID?: string
       }
@@ -4086,12 +4101,12 @@ export type SyncEventSessionTurnSettled = {
           | "tool_effect_unknown"
           | "unknown"
         safeMessage: string
-        httpStatus?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        httpStatus?: number
         transportKind?: string
         transportCode?: string
         retryable: boolean
         retryExhausted: boolean
-        attemptCount: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        attemptCount: number
         providerID?: string
         modelID?: string
       }
@@ -4444,15 +4459,43 @@ export type SyncEventSessionNextRetried = {
   type: "sync"
   id: string
   syncEvent: {
-    type: "session.next.retried.1"
+    type: "session.next.retried.2"
     id: string
     seq: number
     aggregateID: string
     data: {
       timestamp: number
       sessionID: string
-      attempt: number
-      error: SessionNextRetryError
+      turnID: string
+      activityInputIDs: Array<string>
+      requestID: string
+      phase: "waiting" | "requesting"
+      retryAttempt: number
+      retryLimit: number
+      retryNotBefore?: number
+      failure: {
+        kind:
+          | "authentication"
+          | "quota"
+          | "rate_limit"
+          | "provider_internal"
+          | "transport"
+          | "invalid_request"
+          | "content_policy"
+          | "resource_limit"
+          | "protocol_contract_unsatisfied"
+          | "tool_effect_unknown"
+          | "unknown"
+        safeMessage: string
+        httpStatus?: number
+        transportKind?: string
+        transportCode?: string
+        retryable: boolean
+        retryExhausted: boolean
+        attemptCount: number
+        providerID?: string
+        modelID?: string
+      }
     }
   }
 }
@@ -5271,12 +5314,12 @@ export type SessionTurnNotStarted = {
         | "tool_effect_unknown"
         | "unknown"
       safeMessage: string
-      httpStatus?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      httpStatus?: number
       transportKind?: string
       transportCode?: string
       retryable: boolean
       retryExhausted: boolean
-      attemptCount: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      attemptCount: number
       providerID?: string
       modelID?: string
     }
@@ -5346,12 +5389,12 @@ export type SessionTurnSettled = {
         | "tool_effect_unknown"
         | "unknown"
       safeMessage: string
-      httpStatus?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      httpStatus?: number
       transportKind?: string
       transportCode?: string
       retryable: boolean
       retryExhausted: boolean
-      attemptCount: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      attemptCount: number
       providerID?: string
       modelID?: string
     }
@@ -5382,12 +5425,12 @@ export type SessionTurnSettled = {
         | "tool_effect_unknown"
         | "unknown"
       safeMessage: string
-      httpStatus?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      httpStatus?: number
       transportKind?: string
       transportCode?: string
       retryable: boolean
       retryExhausted: boolean
-      attemptCount: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      attemptCount: number
       providerID?: string
       modelID?: string
     }
@@ -5798,8 +5841,36 @@ export type SessionNextRetried = {
   data: {
     timestamp: number
     sessionID: string
-    attempt: number
-    error: SessionNextRetryError
+    turnID: string
+    activityInputIDs: Array<string>
+    requestID: string
+    phase: "waiting" | "requesting"
+    retryAttempt: number
+    retryLimit: number
+    retryNotBefore?: number
+    failure: {
+      kind:
+        | "authentication"
+        | "quota"
+        | "rate_limit"
+        | "provider_internal"
+        | "transport"
+        | "invalid_request"
+        | "content_policy"
+        | "resource_limit"
+        | "protocol_contract_unsatisfied"
+        | "tool_effect_unknown"
+        | "unknown"
+      safeMessage: string
+      httpStatus?: number
+      transportKind?: string
+      transportCode?: string
+      retryable: boolean
+      retryExhausted: boolean
+      attemptCount: number
+      providerID?: string
+      modelID?: string
+    }
   }
 }
 
@@ -5898,142 +5969,6 @@ export type SessionNextRevertCommitted = {
     timestamp: number
     sessionID: string
     messageID: string
-  }
-}
-
-export type SessionTurnNotStarted1 = {
-  id: string
-  metadata?: {
-    [key: string]: unknown
-  }
-  type: "session.turn.not_started"
-  durable?: {
-    aggregateID: string
-    seq: number
-    version: number
-  }
-  location?: LocationRef
-  data: {
-    timestamp: number
-    sessionID: string
-    schema: "opencode.turn_not_started.v2"
-    turnID: string
-    activityInputIDs: Array<string>
-    outcome: "failed" | "aborted" | "interrupted"
-    reason: string
-    errorClass: "transport" | "resource" | "protocol" | "tool_unknown" | "interrupt" | "unknown"
-    failure?: {
-      kind:
-        | "authentication"
-        | "quota"
-        | "rate_limit"
-        | "provider_internal"
-        | "transport"
-        | "invalid_request"
-        | "content_policy"
-        | "resource_limit"
-        | "protocol_contract_unsatisfied"
-        | "tool_effect_unknown"
-        | "unknown"
-      safeMessage: string
-      httpStatus?: number | "NaN" | "Infinity" | "-Infinity"
-      transportKind?: string
-      transportCode?: string
-      retryable: boolean
-      retryExhausted: boolean
-      attemptCount: number | "NaN" | "Infinity" | "-Infinity"
-      providerID?: string
-      modelID?: string
-    }
-    managedExecution?: SessionInputManagedExecutionRef
-    executionReset?: SessionResetReference
-  }
-}
-
-export type SessionTurnSettled1 = {
-  id: string
-  metadata?: {
-    [key: string]: unknown
-  }
-  type: "session.turn.settled"
-  durable?: {
-    aggregateID: string
-    seq: number
-    version: number
-  }
-  location?: LocationRef
-  data: {
-    timestamp: number
-    sessionID: string
-    schema: "opencode.turn_settled.v3"
-    turnID: string
-    turnStartedAt: number
-    activityInputIDs: Array<string>
-    outcome: "completed" | "error" | "aborted"
-    reason?: string
-    errorClass?: "transport" | "resource" | "protocol" | "tool_unknown" | "interrupt" | "unknown"
-    abortOrigin?: "user" | "framework" | "runtime_shutdown" | "unknown"
-    failure?: {
-      kind:
-        | "authentication"
-        | "quota"
-        | "rate_limit"
-        | "provider_internal"
-        | "transport"
-        | "invalid_request"
-        | "content_policy"
-        | "resource_limit"
-        | "protocol_contract_unsatisfied"
-        | "tool_effect_unknown"
-        | "unknown"
-      safeMessage: string
-      httpStatus?: number | "NaN" | "Infinity" | "-Infinity"
-      transportKind?: string
-      transportCode?: string
-      retryable: boolean
-      retryExhausted: boolean
-      attemptCount: number | "NaN" | "Infinity" | "-Infinity"
-      providerID?: string
-      modelID?: string
-    }
-    completion?:
-      | {
-          mode: "ordinary_stop"
-          correctionSteps: 0
-        }
-      | {
-          mode: "required_terminal_tool"
-          correctionSteps: 0 | 1
-          terminalTool: {
-            name: string
-            callID: string
-          }
-        }
-    providerWarning?: {
-      kind:
-        | "authentication"
-        | "quota"
-        | "rate_limit"
-        | "provider_internal"
-        | "transport"
-        | "invalid_request"
-        | "content_policy"
-        | "resource_limit"
-        | "protocol_contract_unsatisfied"
-        | "tool_effect_unknown"
-        | "unknown"
-      safeMessage: string
-      httpStatus?: number | "NaN" | "Infinity" | "-Infinity"
-      transportKind?: string
-      transportCode?: string
-      retryable: boolean
-      retryExhausted: boolean
-      attemptCount: number | "NaN" | "Infinity" | "-Infinity"
-      providerID?: string
-      modelID?: string
-    }
-    managedExecution?: SessionInputManagedExecutionRef
-    executionReset?: SessionResetReference
   }
 }
 
@@ -7719,12 +7654,12 @@ export type EventSessionTurnNotStarted = {
         | "tool_effect_unknown"
         | "unknown"
       safeMessage: string
-      httpStatus?: number | "NaN" | "Infinity" | "-Infinity"
+      httpStatus?: number
       transportKind?: string
       transportCode?: string
       retryable: boolean
       retryExhausted: boolean
-      attemptCount: number | "NaN" | "Infinity" | "-Infinity"
+      attemptCount: number
       providerID?: string
       modelID?: string
     }
@@ -7776,12 +7711,12 @@ export type EventSessionTurnSettled = {
         | "tool_effect_unknown"
         | "unknown"
       safeMessage: string
-      httpStatus?: number | "NaN" | "Infinity" | "-Infinity"
+      httpStatus?: number
       transportKind?: string
       transportCode?: string
       retryable: boolean
       retryExhausted: boolean
-      attemptCount: number | "NaN" | "Infinity" | "-Infinity"
+      attemptCount: number
       providerID?: string
       modelID?: string
     }
@@ -7812,12 +7747,12 @@ export type EventSessionTurnSettled = {
         | "tool_effect_unknown"
         | "unknown"
       safeMessage: string
-      httpStatus?: number | "NaN" | "Infinity" | "-Infinity"
+      httpStatus?: number
       transportKind?: string
       transportCode?: string
       retryable: boolean
       retryExhausted: boolean
-      attemptCount: number | "NaN" | "Infinity" | "-Infinity"
+      attemptCount: number
       providerID?: string
       modelID?: string
     }
@@ -8114,8 +8049,36 @@ export type EventSessionNextRetried = {
   properties: {
     timestamp: number
     sessionID: string
-    attempt: number
-    error: SessionNextRetryError
+    turnID: string
+    activityInputIDs: Array<string>
+    requestID: string
+    phase: "waiting" | "requesting"
+    retryAttempt: number
+    retryLimit: number
+    retryNotBefore?: number
+    failure: {
+      kind:
+        | "authentication"
+        | "quota"
+        | "rate_limit"
+        | "provider_internal"
+        | "transport"
+        | "invalid_request"
+        | "content_policy"
+        | "resource_limit"
+        | "protocol_contract_unsatisfied"
+        | "tool_effect_unknown"
+        | "unknown"
+      safeMessage: string
+      httpStatus?: number
+      transportKind?: string
+      transportCode?: string
+      retryable: boolean
+      retryExhausted: boolean
+      attemptCount: number
+      providerID?: string
+      modelID?: string
+    }
   }
 }
 

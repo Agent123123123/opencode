@@ -9,6 +9,7 @@ import {
   providerEventFailure,
   type ProviderErrorEvent,
 } from "@opencode-ai/llm"
+import { RequestExecutor } from "@opencode-ai/llm/route"
 import { Cause, DateTime, Effect, Exit, FiberSet, Layer, Option, Semaphore, Stream } from "effect"
 import { AgentV2 } from "../../agent"
 import { Config } from "../../config"
@@ -427,6 +428,22 @@ const layer = Layer.effect(
               ),
             ).pipe(FiberSet.run(toolFibers))
           }),
+        ),
+        Effect.provideService(RequestExecutor.RetryObserver, (observation) =>
+          withPublication(Effect.gen(function* () {
+            yield* events.publish(SessionEvent.Retried, {
+              sessionID: session.id,
+              timestamp: yield* DateTime.now,
+              turnID: activity.turnID,
+              activityInputIDs,
+              requestID: observation.requestID,
+              phase: observation.phase,
+              retryAttempt: observation.retryAttempt,
+              retryLimit: observation.retryLimit,
+              retryNotBefore: observation.phase === "waiting" ? DateTime.makeUnsafe(observation.retryNotBefore) : undefined,
+              failure: runtimeFailure(observation.error, model.provider, model.id),
+            })
+          })),
         ),
         Effect.ensuring(withPublication(publisher.flush())),
       )

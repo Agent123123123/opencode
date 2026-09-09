@@ -1,5 +1,5 @@
 import { describe, expect } from "bun:test"
-import { Effect, Fiber, Layer, Random, Ref } from "effect"
+import { Deferred, Effect, Fiber, Layer, Random, Ref } from "effect"
 import * as TestClock from "effect/testing/TestClock"
 import { Headers, HttpClient, HttpClientError, HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
 import { LLM, LLMError } from "../src"
@@ -94,6 +94,56 @@ const expectLLMError = (error: unknown) => {
 const errorHttp = (error: LLMError) => ("http" in error.reason ? error.reason.http : undefined)
 
 describe("RequestExecutor", () => {
+  it.effect("observes only real retries and isolates a broken observer from the provider result", () =>
+    Effect.gen(function* () {
+      const attempts = yield* Ref.make(0)
+      const seen: RequestExecutor.RetryObservation[] = []
+      const result = yield* Effect.gen(function* () {
+        const executor = yield* RequestExecutor.Service
+        return yield* executor.execute(request)
+      }).pipe(
+        Effect.provide(countedResponsesLayer(attempts, [
+          Response.json({ error: { message: "rate limited" } }, { status: 429, headers: { "retry-after-ms": "0" } }),
+          new Response("ok"),
+        ])),
+        Effect.provideService(RequestExecutor.RetryObserver, (observation) => Effect.sync(() => {
+          seen.push(observation)
+          throw new Error("observation storage unavailable")
+        })),
+      )
+      expect(result.response.status).toBe(200)
+      expect(yield* Ref.get(attempts)).toBe(2)
+      expect(seen.map((item) => item.phase)).toEqual(["waiting", "requesting"])
+      expect(new Set(seen.map((item) => item.requestID)).size).toBe(1)
+      expect(seen[0]).toMatchObject({ retryAttempt: 1, retryLimit: 2, error: { attemptCount: 1, retryExhausted: false } })
+    }),
+  )
+
+  it.effect("canceling retry wait never announces or sends the next attempt", () =>
+    Effect.gen(function* () {
+      const attempts = yield* Ref.make(0)
+      const waiting = yield* Deferred.make<void>()
+      const phases: string[] = []
+      const fiber = yield* Effect.gen(function* () {
+        const executor = yield* RequestExecutor.Service
+        return yield* executor.execute(request)
+      }).pipe(
+        Effect.provide(countedResponsesLayer(attempts, [Response.json({ error: { message: "unavailable" } },
+          { status: 503, headers: { "retry-after-ms": "10000" } })])),
+        Effect.provideService(RequestExecutor.RetryObserver, (observation) => Effect.gen(function* () {
+          phases.push(observation.phase)
+          yield* Deferred.succeed(waiting, undefined)
+        })),
+        Effect.forkChild,
+      )
+      yield* Deferred.await(waiting)
+      yield* Fiber.interrupt(fiber)
+      yield* TestClock.adjust(20_000)
+      expect(phases).toEqual(["waiting"])
+      expect(yield* Ref.get(attempts)).toBe(1)
+    }),
+  )
+
   it.effect("preserves a safe response-header timeout code and reason", () =>
     Effect.gen(function* () {
       const executor = yield* RequestExecutor.Service
@@ -367,8 +417,8 @@ describe("RequestExecutor", () => {
       const executor = yield* RequestExecutor.Service
       const response = yield* executor.execute(request)
 
-      expect(response.status).toBe(200)
-      expect(yield* response.text).toBe("ok")
+      expect(response.response.status).toBe(200)
+      expect(yield* response.response.text).toBe("ok")
     }).pipe(
       Effect.provide(
         responsesLayer([
@@ -484,7 +534,7 @@ describe("RequestExecutor", () => {
           ]),
         ),
       )
-      expect(response.status).toBe(200)
+      expect(response.response.status).toBe(200)
       expect(yield* Ref.get(retryAttempts)).toBe(2)
     }),
   )
@@ -575,7 +625,7 @@ describe("RequestExecutor", () => {
         yield* TestClock.adjust(1)
         const response = yield* Fiber.join(fiber)
 
-        expect(response.status).toBe(200)
+        expect(response.response.status).toBe(200)
         expect(yield* Ref.get(attempts)).toBe(2)
       }).pipe(
         Effect.provide(

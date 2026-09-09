@@ -6,7 +6,7 @@ import { Framing, type Framing as FramingDef } from "../framing"
 import type { Transport, TransportPrepareInput } from "./index"
 import * as ProviderShared from "../../protocols/shared"
 import { mergeJsonRecords, type LLMRequest } from "../../schema"
-import { responseStreamFailure } from "../executor"
+import { httpTimeoutError, responseStreamFailure } from "../executor"
 
 export type JsonRequestInput<Body> = TransportPrepareInput<Body>
 
@@ -128,16 +128,22 @@ export const httpJson = <Body, Frame>(input: HttpJsonInput<Body, Frame>): HttpJs
         framing: input.framing,
       })),
     ),
-  frames: (prepared, _request, runtime) =>
+  frames: (prepared, request, runtime) =>
     Stream.unwrap(
       Effect.gen(function* () {
-        const response = yield* runtime.http.execute(prepared.request)
+        const execution = yield* runtime.http.execute(prepared.request, request.http)
+        const response = execution.response
         const redactedNames = yield* Headers.CurrentRedactedNames
+        const bytes = request.http?.chunkTimeout !== undefined && response.headers["content-type"]?.includes("text/event-stream")
+          ? response.stream.pipe(Stream.timeoutOrElse({ duration: request.http.chunkTimeout,
+              orElse: () => Stream.fail(httpTimeoutError(prepared.request, "CHUNK")) }))
+          : response.stream
         return prepared.framing.frame(
-          response.stream.pipe(
+          bytes.pipe(
             Stream.mapError((error) =>
               responseStreamFailure({
                 error,
+                attemptCount: execution.attemptCount,
                 request: prepared.request,
                 response,
                 redactedNames,

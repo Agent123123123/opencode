@@ -24,6 +24,7 @@ import { useSDK } from "../../context/sdk"
 import { useRoute } from "../../context/route"
 import { useProject } from "../../context/project"
 import { useSync } from "../../context/sync"
+import { useOptionalData } from "../../context/data"
 import { useEvent } from "../../context/event"
 import { editorSelectionKey, useEditorContext, type EditorSelection } from "../../context/editor"
 import { normalizePromptContent, openEditor } from "../../editor"
@@ -167,7 +168,14 @@ export function Prompt(props: PromptProps) {
   const tuiConfig = useTuiConfig()
   const dialog = useDialog()
   const toast = useToast()
-  const status = createMemo(() => sync.data.session_status?.[props.sessionID ?? ""] ?? { type: "idle" })
+  const data = useOptionalData()
+  const status = createMemo(() => {
+    const current = sync.data.session_status?.[props.sessionID ?? ""] ?? { type: "idle" as const }
+    const retry = data?.session.retry(props.sessionID ?? "")
+    if (retry && current.type !== "idle") return { type: "retry" as const, message: retry.failure.safeMessage,
+      attempt: retry.retryAttempt, next: retry.retryNotBefore ?? 0, phase: retry.phase }
+    return current
+  })
   const history = usePromptHistory()
   const stash = usePromptStash()
   const keymap = useOpencodeKeymap()
@@ -442,7 +450,12 @@ export function Prompt(props: PromptProps) {
           }, 5000)
 
           if (store.interrupt >= 2) {
-            if (startup.sessionApi === "v2") void sdk.client.v2.session.interrupt({ sessionID: props.sessionID })
+            if (startup.sessionApi === "v2") {
+              const turnID = data?.session.turnID(props.sessionID)
+              if (turnID) void sdk.client.v2.session.interrupt({ sessionID: props.sessionID, turnID }, { throwOnError: true })
+                .catch(() => toast.show({ variant: "error", message: "Could not interrupt the active turn." }))
+              if (!turnID) toast.show({ variant: "warning", message: "The active turn is not yet available. Try again after the session updates." })
+            }
             if (startup.sessionApi !== "v2") void sdk.client.session.abort({ sessionID: props.sessionID })
             setStore("interrupt", 0)
           }
@@ -1631,13 +1644,13 @@ export function Prompt(props: PromptProps) {
                   flexGrow={1}
                   justifyContent={status().type === "retry" ? "space-between" : "flex-start"}
                 >
-                  <box flexShrink={0} flexDirection="row" gap={1}>
+                  <box flexShrink={1} minWidth={0} flexDirection="row" gap={1}>
                     <box marginLeft={1}>
                       <Show when={kv.get("animations_enabled", true)} fallback={<text fg={theme.textMuted}>[⋯]</text>}>
                         <spinner color={spinnerDef().color} frames={spinnerDef().frames} interval={40} />
                       </Show>
                     </box>
-                    <box flexDirection="row" gap={1} flexShrink={0}>
+                    <box flexDirection="row" gap={1} flexShrink={1} minWidth={0}>
                       {(() => {
                         const retry = createMemo(() => {
                           const s = status()
@@ -1661,7 +1674,7 @@ export function Prompt(props: PromptProps) {
                         onMount(() => {
                           const timer = setInterval(() => {
                             const next = retry()?.next
-                            if (next) setSeconds(Math.round((next - Date.now()) / 1000))
+                            setSeconds(next ? Math.max(0, Math.round((next - Date.now()) / 1000)) : 0)
                           }, 1000)
 
                           onCleanup(() => {
@@ -1671,9 +1684,7 @@ export function Prompt(props: PromptProps) {
                         const handleMessageClick = () => {
                           const r = retry()
                           if (!r) return
-                          if (isTruncated()) {
-                            void DialogAlert.show(dialog, "Retry Error", r.message)
-                          }
+                          void DialogAlert.show(dialog, "Retry Error", r.message)
                         }
 
                         const retryText = () => {
@@ -1681,15 +1692,16 @@ export function Prompt(props: PromptProps) {
                           if (!r) return ""
                           const baseMessage = message()
                           const truncatedHint = isTruncated() ? " (click to expand)" : ""
-                          const duration = formatDuration(seconds())
-                          const retryInfo = ` [retrying ${duration ? `in ${duration} ` : ""}attempt #${r.attempt}]`
-                          return baseMessage + truncatedHint + retryInfo
+                          const duration = r.next ? formatDuration(seconds()) : ""
+                          const phase = "phase" in r ? r.phase === "waiting" ? "waiting to retry" : "retrying now" : "retrying"
+                          const retryInfo = ` [${phase} ${duration ? `in ${duration} ` : ""}attempt #${r.attempt}]`
+                          return retryInfo.trim() + " " + baseMessage + truncatedHint
                         }
 
                         return (
                           <Show when={retry()}>
-                            <box onMouseUp={handleMessageClick}>
-                              <text fg={theme.error}>{retryText()}</text>
+                            <box onMouseUp={handleMessageClick} flexShrink={1} minWidth={0}>
+                              <text fg={theme.error} truncate>{retryText()}</text>
                             </box>
                           </Show>
                         )

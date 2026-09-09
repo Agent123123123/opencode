@@ -2249,12 +2249,12 @@ export type SessionsHistoryOutput = {
               | "tool_effect_unknown"
               | "unknown"
             readonly safeMessage: string
-            readonly httpStatus?: number | "Infinity" | "-Infinity" | "NaN"
+            readonly httpStatus?: number
             readonly transportKind?: string
             readonly transportCode?: string
             readonly retryable: boolean
             readonly retryExhausted: boolean
-            readonly attemptCount: number | "Infinity" | "-Infinity" | "NaN"
+            readonly attemptCount: number
             readonly providerID?: string
             readonly modelID?: string
           }
@@ -2352,12 +2352,12 @@ export type SessionsHistoryOutput = {
               | "tool_effect_unknown"
               | "unknown"
             readonly safeMessage: string
-            readonly httpStatus?: number | "Infinity" | "-Infinity" | "NaN"
+            readonly httpStatus?: number
             readonly transportKind?: string
             readonly transportCode?: string
             readonly retryable: boolean
             readonly retryExhausted: boolean
-            readonly attemptCount: number | "Infinity" | "-Infinity" | "NaN"
+            readonly attemptCount: number
             readonly providerID?: string
             readonly modelID?: string
           }
@@ -2382,12 +2382,12 @@ export type SessionsHistoryOutput = {
               | "tool_effect_unknown"
               | "unknown"
             readonly safeMessage: string
-            readonly httpStatus?: number | "Infinity" | "-Infinity" | "NaN"
+            readonly httpStatus?: number
             readonly transportKind?: string
             readonly transportCode?: string
             readonly retryable: boolean
             readonly retryExhausted: boolean
-            readonly attemptCount: number | "Infinity" | "-Infinity" | "NaN"
+            readonly attemptCount: number
             readonly providerID?: string
             readonly modelID?: string
           }
@@ -2946,14 +2946,35 @@ export type SessionsHistoryOutput = {
         readonly data: {
           readonly timestamp: number
           readonly sessionID: string
-          readonly attempt: number
-          readonly error: {
-            readonly message: string
-            readonly statusCode?: number
-            readonly isRetryable: boolean
-            readonly responseHeaders?: { readonly [x: string]: string }
-            readonly responseBody?: string
-            readonly metadata?: { readonly [x: string]: string }
+          readonly turnID: string
+          readonly activityInputIDs: ReadonlyArray<string>
+          readonly requestID: string
+          readonly phase: "waiting" | "requesting"
+          readonly retryAttempt: number
+          readonly retryLimit: number
+          readonly retryNotBefore?: number
+          readonly failure: {
+            readonly kind:
+              | "authentication"
+              | "quota"
+              | "rate_limit"
+              | "provider_internal"
+              | "transport"
+              | "invalid_request"
+              | "content_policy"
+              | "resource_limit"
+              | "protocol_contract_unsatisfied"
+              | "tool_effect_unknown"
+              | "unknown"
+            readonly safeMessage: string
+            readonly httpStatus?: number
+            readonly transportKind?: string
+            readonly transportCode?: string
+            readonly retryable: boolean
+            readonly retryExhausted: boolean
+            readonly attemptCount: number
+            readonly providerID?: string
+            readonly modelID?: string
           }
         }
       }
@@ -4219,14 +4240,35 @@ export type SessionsEventsOutput =
       readonly data: {
         readonly timestamp: number
         readonly sessionID: string
-        readonly attempt: number
-        readonly error: {
-          readonly message: string
-          readonly statusCode?: number
-          readonly isRetryable: boolean
-          readonly responseHeaders?: { readonly [x: string]: string }
-          readonly responseBody?: string
-          readonly metadata?: { readonly [x: string]: string }
+        readonly turnID: string
+        readonly activityInputIDs: ReadonlyArray<string>
+        readonly requestID: string
+        readonly phase: "waiting" | "requesting"
+        readonly retryAttempt: number
+        readonly retryLimit: number
+        readonly retryNotBefore?: number
+        readonly failure: {
+          readonly kind:
+            | "authentication"
+            | "quota"
+            | "rate_limit"
+            | "provider_internal"
+            | "transport"
+            | "invalid_request"
+            | "content_policy"
+            | "resource_limit"
+            | "protocol_contract_unsatisfied"
+            | "tool_effect_unknown"
+            | "unknown"
+          readonly safeMessage: string
+          readonly httpStatus?: number
+          readonly transportKind?: string
+          readonly transportCode?: string
+          readonly retryable: boolean
+          readonly retryExhausted: boolean
+          readonly attemptCount: number
+          readonly providerID?: string
+          readonly modelID?: string
         }
       }
     }

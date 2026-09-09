@@ -54,6 +54,9 @@ export class HttpOptions extends Schema.Class<HttpOptions>("LLM.HttpOptions")({
   body: Schema.optional(JsonSchema),
   headers: Schema.optional(Schema.Record(Schema.String, Schema.String)),
   query: Schema.optional(Schema.Record(Schema.String, Schema.String)),
+  timeout: Schema.optional(Schema.Union([Schema.Finite.check(Schema.isGreaterThan(0)), Schema.Literal(false)])),
+  headerTimeout: Schema.optional(Schema.Union([Schema.Finite.check(Schema.isGreaterThan(0)), Schema.Literal(false)])),
+  chunkTimeout: Schema.optional(Schema.Finite.check(Schema.isGreaterThan(0))),
 }) {}
 
 export namespace HttpOptions {
@@ -67,8 +70,11 @@ export const mergeHttpOptions = (...items: ReadonlyArray<HttpOptions | undefined
   const body = mergeJsonRecords(...items.map((item) => item?.body))
   const headers = mergeStringRecords(...items.map((item) => item?.headers))
   const query = mergeStringRecords(...items.map((item) => item?.query))
-  if (!body && !headers && !query) return undefined
-  return new HttpOptions({ body, headers, query })
+  const timeout = items.findLast((item) => item?.timeout !== undefined)?.timeout
+  const headerTimeout = items.findLast((item) => item?.headerTimeout !== undefined)?.headerTimeout
+  const chunkTimeout = items.findLast((item) => item?.chunkTimeout !== undefined)?.chunkTimeout
+  if (!body && !headers && !query && timeout === undefined && headerTimeout === undefined && chunkTimeout === undefined) return undefined
+  return new HttpOptions({ body, headers, query, timeout, headerTimeout, chunkTimeout })
 }
 
 export class GenerationOptions extends Schema.Class<GenerationOptions>("LLM.GenerationOptions")({

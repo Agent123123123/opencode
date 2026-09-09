@@ -1,4 +1,4 @@
-import { Cause, Context, Effect, Layer, Random } from "effect"
+import { Cause, Clock, Context, Effect, Layer, Random, Stream } from "effect"
 import {
   FetchHttpClient,
   Headers,
@@ -11,6 +11,7 @@ import {
   AuthenticationReason,
   ContentPolicyReason,
   HttpContext,
+  HttpOptions,
   HttpRateLimitDetails,
   HttpRequestDetails,
   HttpResponseDetails,
@@ -27,10 +28,24 @@ import { isContentPolicyViolation, isContextOverflow, isQuotaExceeded } from "..
 export interface Interface {
   readonly execute: (
     request: HttpClientRequest.HttpClientRequest,
-  ) => Effect.Effect<HttpClientResponse.HttpClientResponse, LLMError>
+    options?: HttpOptions,
+  ) => Effect.Effect<{ readonly response: HttpClientResponse.HttpClientResponse; readonly attemptCount: number }, LLMError>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/LLM/RequestExecutor") {}
+
+export type RetryObservation = {
+  readonly requestID: string
+  readonly retryAttempt: number
+  readonly retryLimit: number
+  readonly error: LLMError
+} & ({ readonly phase: "waiting"; readonly retryNotBefore: number } | { readonly phase: "requesting" })
+
+/** The caller may observe this request's existing retries; it cannot own their policy. */
+export const RetryObserver = Context.Reference<(observation: RetryObservation) => Effect.Effect<void, unknown>>(
+  "@opencode/LLM/RequestExecutor/RetryObserver",
+  { defaultValue: () => () => Effect.void },
+)
 
 const BODY_LIMIT = 16_384
 const MAX_RETRIES = 2
@@ -392,6 +407,13 @@ const transportDiagnostic = (error: unknown, phase: "request" | "response-stream
     }
     return { kind: "unknown", message: "HTTP transport failed before a provider response was received." }
   }
+  if (code === "HTTP_HEADER_TIMEOUT" || code === "HTTP_REQUEST_TIMEOUT" || code === "HTTP_CHUNK_TIMEOUT") {
+    return { kind: "timeout", code, message: code === "HTTP_HEADER_TIMEOUT"
+      ? "The provider did not send HTTP response headers before the configured headerTimeout."
+      : code === "HTTP_CHUNK_TIMEOUT"
+        ? "The provider SSE byte stream stopped progressing before the configured chunkTimeout."
+        : "The provider HTTP request did not finish reading its response before the configured timeout." }
+  }
   if (code === "UND_ERR_HEADERS_TIMEOUT") {
     return {
       kind: "timeout",
@@ -429,6 +451,7 @@ const transportDiagnostic = (error: unknown, phase: "request" | "response-stream
 
 export const responseStreamFailure = (input: {
   readonly error: unknown
+  readonly attemptCount: number
   readonly request: HttpClientRequest.HttpClientRequest
   readonly response: HttpClientResponse.HttpClientResponse
   readonly redactedNames: ReadonlyArray<string | RegExp>
@@ -451,7 +474,7 @@ export const responseStreamFailure = (input: {
       }),
       canRetry,
     }),
-    attemptCount: 1,
+    attemptCount: input.attemptCount,
     // A response body has already started. The RequestExecutor cannot safely
     // replay it in place, so the ordinary owning Attempt receives the retry.
     retryExhausted: canRetry,
@@ -491,12 +514,42 @@ const retryDelay = (error: LLMError, attempt: number) => {
   ).pipe(Effect.map((delay) => Math.round(delay)))
 }
 
+export const httpTimeoutError = (request: HttpClientRequest.HttpClientRequest, phase: "HEADER" | "REQUEST" | "CHUNK") =>
+  new HttpClientError.HttpClientError({
+    reason: new HttpClientError.TransportError({ request, cause: { code: `HTTP_${phase}_TIMEOUT` } }),
+  })
+
+/** Retain the attempt deadline after headers, across whichever body reader the transport uses. */
+const responseDeadline = (response: HttpClientResponse.HttpClientResponse, deadline: number) => {
+  const timeout = <A>(read: Effect.Effect<A, HttpClientError.HttpClientError>) => Effect.gen(function* () {
+    const remaining = deadline - (yield* Clock.currentTimeMillis)
+    return yield* read.pipe(Effect.timeoutOrElse({ duration: Math.max(0, remaining),
+      orElse: () => Effect.fail(httpTimeoutError(response.request, "REQUEST")) }))
+  })
+  return new Proxy(response, {
+    get(target, key) {
+      if (key === "stream") return target.stream.pipe(Stream.interruptWhen(Effect.gen(function* () {
+        yield* Effect.sleep(Math.max(0, deadline - (yield* Clock.currentTimeMillis)))
+        return yield* httpTimeoutError(target.request, "REQUEST")
+      })))
+      if (key === "text") return timeout(target.text)
+      if (key === "json") return timeout(target.json)
+      if (key === "arrayBuffer") return timeout(target.arrayBuffer)
+      if (key === "formData") return timeout(target.formData)
+      if (key === "urlParamsBody") return timeout(target.urlParamsBody)
+      return Reflect.get(target, key, target)
+    },
+  })
+}
+
 const retryStatusFailures = <A, R>(
   effect: Effect.Effect<A, LLMError, R>,
+  observe: (observation: RetryObservation) => Effect.Effect<void>,
+  requestID: string,
   retries = MAX_RETRIES,
   attempt = 0,
-): Effect.Effect<A, LLMError, R> =>
-  Effect.catchTag(effect, "LLM.Error", (error): Effect.Effect<A, LLMError, R> => {
+): Effect.Effect<{ readonly response: A; readonly attemptCount: number }, LLMError, R> =>
+  Effect.catchTag(effect.pipe(Effect.map((response) => ({ response, attemptCount: attempt + 1 }))), "LLM.Error", (error): Effect.Effect<{ readonly response: A; readonly attemptCount: number }, LLMError, R> => {
     if (!error.retryable || retries <= 0) {
       return Effect.fail(
         new LLMError({
@@ -508,25 +561,46 @@ const retryStatusFailures = <A, R>(
         }),
       )
     }
-    return retryDelay(error, attempt).pipe(
-      Effect.flatMap((delay) => Effect.sleep(delay)),
-      Effect.flatMap(() => retryStatusFailures(effect, retries - 1, attempt + 1)),
-    )
+    return Effect.gen(function* () {
+      const delay = yield* retryDelay(error, attempt)
+      const observation = { requestID, retryAttempt: attempt + 1, retryLimit: MAX_RETRIES,
+        error: new LLMError({ module: error.module, method: error.method, reason: error.reason,
+          attemptCount: attempt + 1, retryExhausted: false }) }
+      yield* observe({ ...observation, phase: "waiting", retryNotBefore: (yield* Clock.currentTimeMillis) + delay })
+      yield* Effect.sleep(delay)
+      yield* observe({ ...observation, phase: "requesting" })
+      return yield* retryStatusFailures(effect, observe, requestID, retries - 1, attempt + 1)
+    })
   })
 
 export const layer: Layer.Layer<Service, never, HttpClient.HttpClient> = Layer.effect(
   Service,
   Effect.gen(function* () {
     const http = yield* HttpClient.HttpClient
-    const executeOnce = (request: HttpClientRequest.HttpClientRequest) =>
+    const executeOnce = (request: HttpClientRequest.HttpClientRequest, options?: HttpOptions) =>
       Effect.gen(function* () {
         const redactedNames = yield* Headers.CurrentRedactedNames
-        return yield* http
-          .execute(request)
-          .pipe(Effect.mapError(toHttpError(redactedNames)), Effect.flatMap(statusError(request, redactedNames)))
+        const startedAt = yield* Clock.currentTimeMillis
+        const headers = typeof options?.headerTimeout === "number"
+          ? http.execute(request).pipe(Effect.timeoutOrElse({ duration: options.headerTimeout,
+              orElse: () => Effect.fail(httpTimeoutError(request, "HEADER")) }))
+          : http.execute(request)
+        const checked = headers.pipe(Effect.mapError(toHttpError(redactedNames)), Effect.flatMap(statusError(request, redactedNames)))
+        if (typeof options?.timeout !== "number") return yield* checked
+        const response = yield* checked.pipe(Effect.timeoutOrElse({ duration: options.timeout,
+          orElse: () => Effect.fail(toHttpError(redactedNames)(httpTimeoutError(request, "REQUEST"))) }))
+        return responseDeadline(response, startedAt + options.timeout)
       })
     return Service.of({
-      execute: (request) => retryStatusFailures(executeOnce(request)),
+      execute: (request, options) => Effect.gen(function* () {
+        const observer = yield* RetryObserver
+        const observe = (observation: RetryObservation) => Effect.suspend(() => observer(observation)).pipe(
+          Effect.catchCause((cause) => Cause.hasInterrupts(cause)
+            ? Effect.interrupt
+            : Effect.logWarning("Provider retry observation could not be published")),
+        )
+        return yield* retryStatusFailures(executeOnce(request, options), observe, crypto.randomUUID())
+      }),
     })
   }),
 )

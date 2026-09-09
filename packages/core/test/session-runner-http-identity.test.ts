@@ -121,7 +121,7 @@ const models = SessionRunnerModel.layerWith((session) =>
         type: "aisdk",
         package: "@ai-sdk/openai-compatible",
         url: server.url.href,
-        settings: { apiKey: "fixture-secret" },
+        settings: { apiKey: "fixture-secret", timeout: 200, headerTimeout: 200 },
       },
       capabilities: { tools: true, input: ["text"], output: ["text"] },
       request: {
@@ -273,8 +273,8 @@ describe("SessionRunner provider HTTP identity", () => {
     )
   }
 
-  it.live(
-    "keeps Turn identity across a transport retry and actual tool continuation",
+  for (const continuationRetry of [false, true]) it.live(
+    `keeps Turn identity and independent retry counts across a slow tool continuation (retry=${continuationRetry})`,
     () =>
       Effect.gen(function* () {
         requests.length = 0
@@ -312,8 +312,9 @@ describe("SessionRunner provider HTTP identity", () => {
             execute: (input) =>
               Effect.sync(() => {
                 executed.push(input.text)
+                retry = continuationRetry
                 return input
-              }),
+              }).pipe(Effect.delay(350)),
           }),
         })
         const sessions = yield* SessionV2.Service
@@ -324,7 +325,21 @@ describe("SessionRunner provider HTTP identity", () => {
         })
         yield* sessions.resume(sessionID)
         expect(executed).toEqual(["hello"])
-        expect(requests).toHaveLength(3)
+        expect(requests).toHaveLength(continuationRetry ? 4 : 3)
+        const history = yield* sessions.history({ sessionID, limit: 200 })
+        const retries = history.events.filter((event) => event.type === "session.next.retried")
+        expect(retries).toHaveLength(continuationRetry ? 4 : 2)
+        expect(retries.every((event) => event.durable?.version === 2)).toBe(true)
+        expect(retries.map((event) => event.data.phase)).toEqual(continuationRetry ? ["waiting", "requesting", "waiting", "requesting"] : ["waiting", "requesting"])
+        expect(new Set(retries.map((event) => event.data.requestID)).size).toBe(continuationRetry ? 2 : 1)
+        for (const event of retries) expect(event.data).toMatchObject({ sessionID,
+          retryAttempt: 1, retryLimit: 2, failure: { kind: "rate_limit", httpStatus: 429,
+            retryable: true, retryExhausted: false, providerID: "opencode", modelID: "test-model" } })
+        const started = history.events.find((event) => event.type === "session.turn.started")!
+        for (const event of retries) {
+          expect(event.data.turnID).toBe(started.data.turnID)
+          expect(event.data.activityInputIDs).toEqual(started.data.activityInputIDs)
+        }
         expect(new Set(requests.map((request) => request.headers.get("x-opencode-request"))).size).toBe(1)
         for (const request of requests) expect(request.headers.get("x-opencode-session")).toBe(sessionID)
         expect(requests[2]!.body.messages.some((message) => message.role === "tool")).toBe(true)

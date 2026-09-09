@@ -21,9 +21,62 @@ function global(payload: Event): GlobalEvent {
   return { directory, project: "proj_test", payload }
 }
 
-function emitEvent(events: ReturnType<typeof createEventSource>, payload: Event) {
-  events.emit(global(payload))
+function emitEvent(events: ReturnType<typeof createEventSource>, payload: Event & { durable?: { aggregateID: string; seq: number; version: number } }) {
+  const { durable, ...event } = payload
+  events.emit(global(event as Event))
+  if (durable) events.emit({ directory, project: "proj_test", payload: { type: "sync", id: "evt_sync", syncEvent: {
+    id: "id" in payload ? payload.id! : "evt_fixture", type: `${payload.type}.${durable.version}`,
+    aggregateID: durable.aggregateID, seq: durable.seq, data: payload.type === "session.next.retried" && payload.properties.retryNotBefore !== undefined
+      ? { ...payload.properties, retryNotBefore: new Date(payload.properties.retryNotBefore).toISOString() } : payload.properties,
+  } } } as GlobalEvent)
 }
+
+test("native retries retain exact Turn identity and clear only on new response or terminal progress", async () => {
+  const events = createEventSource()
+  const calls = createFetch(() => undefined, events)
+  let data!: ReturnType<typeof useData>
+  function Probe() {
+    data = useData()
+    return <text>{data.session.retry("ses_retry")?.phase ?? "no retry"}</text>
+  }
+  const app = await testRender(() => <TestTuiContexts>
+    <SDKProvider url="http://test" directory={directory} events={events.source} fetch={calls.fetch}>
+      <ProjectProvider><DataProvider><Probe /></DataProvider></ProjectProvider>
+    </SDKProvider>
+  </TestTuiContexts>)
+  const started = { sessionID: "ses_retry", timestamp: 1, turnID: "turn_retry", turnStartedAt: 1, activityInputIDs: ["input_retry"] }
+  const failure = { kind: "rate_limit" as const, safeMessage: "Rate limited", retryable: true,
+    retryExhausted: false, attemptCount: 1, httpStatus: 429 }
+  const retry = { sessionID: "ses_retry", timestamp: 3, turnID: "turn_retry", activityInputIDs: ["input_retry"],
+    requestID: "request_retry", phase: "waiting" as const, retryAttempt: 1, retryLimit: 2, retryNotBefore: 1000, failure }
+  const step = { sessionID: "ses_retry", timestamp: 2, assistantMessageID: "assistant_old", agent: "build",
+    model: { id: "model", providerID: "fixture" } }
+  try {
+    await wait(() => Boolean(data))
+    emitEvent(events, { id: "evt_start", type: "session.turn.started", durable: { aggregateID: "ses_retry", seq: 1, version: 2 }, properties: started })
+    emitEvent(events, { id: "evt_step", type: "session.next.step.started", durable: { aggregateID: "ses_retry", seq: 2, version: 1 }, properties: step })
+    emitEvent(events, { id: "evt_retry", type: "session.next.retried", durable: { aggregateID: "ses_retry", seq: 3, version: 2 }, properties: retry })
+    await wait(() => data.session.retry("ses_retry")?.phase === "waiting")
+    expect(data.session.retry("ses_retry")?.retryNotBefore).toBe(1000)
+    expect(data.session.turnID("ses_retry")).toBe("turn_retry")
+    emitEvent(events, { id: "evt_requesting", type: "session.next.retried", durable: { aggregateID: "ses_retry", seq: 4, version: 2 },
+      properties: { ...retry, phase: "requesting", retryNotBefore: undefined } })
+    await wait(() => data.session.retry("ses_retry")?.phase === "requesting")
+    expect(data.session.retry("ses_retry")?.retryNotBefore).toBeUndefined()
+    emitEvent(events, { id: "evt_old_step", type: "session.next.step.started", durable: { aggregateID: "ses_retry", seq: 5, version: 1 }, properties: step })
+    await app.renderOnce()
+    expect(data.session.retry("ses_retry")?.phase).toBe("requesting")
+    emitEvent(events, { id: "evt_new_step", type: "session.next.step.started", durable: { aggregateID: "ses_retry", seq: 6, version: 1 },
+      properties: { ...step, assistantMessageID: "assistant_new" } })
+    await wait(() => data.session.retry("ses_retry") === undefined)
+    emitEvent(events, { id: "evt_end", type: "session.turn.settled", durable: { aggregateID: "ses_retry", seq: 7, version: 3 },
+      properties: { ...started, schema: "opencode.turn_settled.v3", outcome: "completed" } })
+    emitEvent(events, { id: "evt_late_retry", type: "session.next.retried", durable: { aggregateID: "ses_retry", seq: 8, version: 2 }, properties: retry })
+    await app.renderOnce()
+    expect(data.session.retry("ses_retry")).toBeUndefined()
+    await wait(() => data.session.turnID("ses_retry") === undefined)
+  } finally { app.renderer.destroy() }
+})
 
 test("refreshes exact sessions into reactive getters", async () => {
   const events = createEventSource()

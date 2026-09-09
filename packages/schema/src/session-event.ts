@@ -223,12 +223,12 @@ export namespace Turn {
       "unknown",
     ]),
     safeMessage: Schema.String,
-    httpStatus: Schema.Number.pipe(optional),
+    httpStatus: Schema.Finite.pipe(optional),
     transportKind: Schema.String.pipe(optional),
     transportCode: Schema.String.pipe(optional),
     retryable: Schema.Boolean,
     retryExhausted: Schema.Boolean,
-    attemptCount: Schema.Number,
+    attemptCount: Schema.Finite,
     providerID: Schema.String.pipe(optional),
     modelID: Schema.String.pipe(optional),
   })
@@ -600,25 +600,19 @@ export namespace Tool {
   export type Failed = typeof Failed.Type
 }
 
-export const RetryError = Schema.Struct({
-  message: Schema.String,
-  statusCode: Schema.Finite.pipe(optional),
-  isRetryable: Schema.Boolean,
-  responseHeaders: Schema.Record(Schema.String, Schema.String).pipe(optional),
-  responseBody: Schema.String.pipe(optional),
-  metadata: Schema.Record(Schema.String, Schema.String).pipe(optional),
-}).annotate({
-  identifier: "session.next.retry_error",
-})
-export interface RetryError extends Schema.Schema.Type<typeof RetryError> {}
-
 export const Retried = Event.define({
   type: "session.next.retried",
-  ...options,
+  ...stepSettlementOptions,
   schema: {
     ...Base,
-    attempt: Schema.Finite,
-    error: RetryError,
+    turnID: SessionMessage.ID,
+    activityInputIDs: Schema.Array(SessionMessage.ID),
+    requestID: Schema.String,
+    phase: Schema.Literals(["waiting", "requesting"]),
+    retryAttempt: Schema.Int.check(Schema.isGreaterThan(0)),
+    retryLimit: Schema.Int.check(Schema.isGreaterThan(0)),
+    retryNotBefore: DateTimeUtcFromMillis.pipe(optional),
+    failure: Turn.Failure,
   },
 })
 export type Retried = typeof Retried.Type
