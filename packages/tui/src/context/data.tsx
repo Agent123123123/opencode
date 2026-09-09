@@ -12,11 +12,13 @@ import type {
   V2Event,
 } from "@opencode-ai/sdk/v2"
 import { DateTime, Option } from "effect"
-import { createStore, produce } from "solid-js/store"
+import { createStore, produce, reconcile } from "solid-js/store"
 import { createSimpleContext } from "./helper"
 import { useSDK } from "./sdk"
 import { useEvent } from "./event"
-import { createSignal, onCleanup, onMount } from "solid-js"
+import { batch, createSignal, onCleanup, onMount } from "solid-js"
+
+import { createSessionMessageHistory } from "./session-message-history"
 
 type LocationData = {
   reference?: ReferenceInfo[]
@@ -70,6 +72,28 @@ export const {
       directory: sdk.directory ?? process.cwd(),
     })
 
+    const versions = new Map<string, Map<string, number>>()
+    function changed(sessionID: string, ids: string[]) {
+      const entries = versions.get(sessionID) ?? new Map<string, number>()
+      for (const id of ids) entries.set(id, (entries.get(id) ?? 0) + 1)
+      versions.set(sessionID, entries)
+    }
+    const history = createSessionMessageHistory({
+      read: async (sessionID, query, signal) => {
+        if (!store.session.message[sessionID]) setStore("session", "message", sessionID, [])
+        const response = await sdk.client.v2.session.messages({ sessionID, ...query }, { throwOnError: true, signal })
+        return response.data
+      },
+      list: (sessionID) => store.session.message[sessionID] ?? [],
+      commit: (sessionID, messages, ids) =>
+        batch(() => {
+          changed(sessionID, ids)
+          setStore("session", "message", sessionID, reconcile(messages, { key: "id" }))
+          setStore("session", "messageRevision", sessionID, (value = 0) => value + 1)
+        }),
+    })
+    onCleanup(history.dispose)
+
     const message = {
       update(sessionID: string, fn: (messages: SessionMessage[]) => void) {
         setStore(
@@ -122,16 +146,32 @@ export const {
         const seq = event.durable.seq
         if (!current || seq > current.seq) {
           if (event.type === "session.turn.started") {
-            setStore("session", "runtime", id, { turnID: event.data.turnID, terminal: false, seq,
-              messageID: undefined, retry: undefined })
-          } else if (event.type === "session.turn.settled" || event.type === "session.turn.not_started" ||
-            event.type === "session.next.execution.reset") {
+            setStore("session", "runtime", id, {
+              turnID: event.data.turnID,
+              terminal: false,
+              seq,
+              messageID: undefined,
+              retry: undefined,
+            })
+          } else if (
+            event.type === "session.turn.settled" ||
+            event.type === "session.turn.not_started" ||
+            event.type === "session.next.execution.reset"
+          ) {
             setStore("session", "runtime", id, { ...current, terminal: true, seq, retry: undefined })
-          } else if (event.type === "session.next.retried" && current?.turnID === event.data.turnID && !current.terminal) {
+          } else if (
+            event.type === "session.next.retried" &&
+            current?.turnID === event.data.turnID &&
+            !current.terminal
+          ) {
             setStore("session", "runtime", id, { ...current, seq, retry: event.data })
           } else if (event.type === "session.next.step.started" && current && !current.terminal) {
-            setStore("session", "runtime", id, { ...current, seq, messageID: event.data.assistantMessageID,
-              retry: current.messageID === event.data.assistantMessageID ? current.retry : undefined })
+            setStore("session", "runtime", id, {
+              ...current,
+              seq,
+              messageID: event.data.assistantMessageID,
+              retry: current.messageID === event.data.assistantMessageID ? current.retry : undefined,
+            })
           } else if (event.type === "session.next.compaction.started" && current) {
             setStore("session", "runtime", id, { ...current, seq, retry: undefined })
           }
@@ -140,6 +180,36 @@ export const {
     }
 
     function handleEvent(event: V2Event) {
+      if ("sessionID" in event.data && typeof event.data.sessionID === "string") {
+        const sessionID = event.data.sessionID
+        const id =
+          "assistantMessageID" in event.data
+            ? event.data.assistantMessageID
+            : "messageID" in event.data
+              ? event.data.messageID
+              : event.type === "session.next.shell.ended"
+                ? message.activeShell(store.session.message[sessionID] ?? [], event.data.callID)?.id
+                : undefined
+        if (typeof id === "string") {
+          const part =
+            "textID" in event.data
+              ? event.data.textID
+              : "reasoningID" in event.data
+                ? event.data.reasoningID
+                : "assistantMessageID" in event.data && "callID" in event.data
+                  ? event.data.callID
+                  : undefined
+          history.touch(sessionID, id, typeof part === "string" ? part : undefined)
+          changed(sessionID, [id])
+        }
+        if (event.type === "session.next.step.started") {
+          const previous = message.activeAssistant(store.session.message[sessionID] ?? [])
+          if (previous && previous.id !== event.data.assistantMessageID) {
+            history.touch(sessionID, previous.id)
+            changed(sessionID, [previous.id])
+          }
+        }
+      }
       switch (event.type) {
         case "permission.v2.asked":
           setStore(
@@ -469,11 +539,13 @@ export const {
 
     onMount(() => {
       const unsub = events.subscribe((event, metadata) => {
-        handleEvent({
-          ...event,
-          data: event.properties,
-          location: { directory: metadata.directory, workspaceID: metadata.workspace },
-        } as V2Event)
+        batch(() =>
+          handleEvent({
+            ...event,
+            data: event.properties,
+            location: { directory: metadata.directory, workspaceID: metadata.workspace },
+          } as V2Event),
+        )
       })
       onCleanup(unsub)
       // OpenCode already forwards durable identity in its sync envelope. The
@@ -485,11 +557,18 @@ export const {
         const type = event.type.slice(0, separator)
         const version = Number(event.type.slice(separator + 1))
         if (type === "session.next.retried" && version !== 2) return
-        const deadline = type === "session.next.retried" && "retryNotBefore" in event.data ? event.data.retryNotBefore : undefined
-        const retryNotBefore = (typeof deadline === "string" || typeof deadline === "number" || DateTime.isDateTime(deadline))
-          ? Option.getOrUndefined(Option.map(DateTime.make(deadline), DateTime.toEpochMillis)) : undefined
-        handleRuntimeEvent({ id: event.id, type, data: type === "session.next.retried" ? { ...event.data, retryNotBefore } : event.data,
-          durable: { aggregateID: event.aggregateID, seq: event.seq, version } } as V2Event)
+        const deadline =
+          type === "session.next.retried" && "retryNotBefore" in event.data ? event.data.retryNotBefore : undefined
+        const retryNotBefore =
+          typeof deadline === "string" || typeof deadline === "number" || DateTime.isDateTime(deadline)
+            ? Option.getOrUndefined(Option.map(DateTime.make(deadline), DateTime.toEpochMillis))
+            : undefined
+        handleRuntimeEvent({
+          id: event.id,
+          type,
+          data: type === "session.next.retried" ? { ...event.data, retryNotBefore } : event.data,
+          durable: { aggregateID: event.aggregateID, seq: event.seq, version },
+        } as V2Event)
       })
       onCleanup(unsubscribeRuntime)
     })
@@ -517,11 +596,12 @@ export const {
           revision(sessionID: string) {
             return store.session.messageRevision[sessionID] ?? 0
           },
-          async refresh(sessionID: string) {
-            const result = await sdk.client.v2.session.messages({ sessionID }, { throwOnError: true })
-            setStore("session", "message", sessionID, result.data.data)
-            setStore("session", "messageRevision", sessionID, (value = 0) => value + 1)
+          version(sessionID: string, messageID: string) {
+            return versions.get(sessionID)?.get(messageID) ?? 0
           },
+          history: history.state,
+          loadOlder: history.loadOlder,
+          refresh: history.refresh,
         },
         permission: {
           list(sessionID: string) {
@@ -567,10 +647,7 @@ export const {
     }
 
     onMount(() => {
-      void Promise.allSettled([
-        result.location.refresh(),
-        result.location.reference.refresh(),
-      ]).then((settled) => {
+      void Promise.allSettled([result.location.refresh(), result.location.reference.refresh()]).then((settled) => {
         for (const failure of settled.filter((item) => item.status === "rejected"))
           console.error("Failed to refresh default location data", failure.reason)
       })

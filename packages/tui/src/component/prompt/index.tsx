@@ -74,7 +74,7 @@ export type PromptProps = {
   ref?: (ref: PromptRef | undefined) => void
   hint?: JSX.Element
   right?: JSX.Element
-  showIdleFooter?: boolean
+  heightLimit?: number
   showPlaceholder?: boolean
   placeholders?: {
     normal?: string[]
@@ -172,8 +172,14 @@ export function Prompt(props: PromptProps) {
   const status = createMemo(() => {
     const current = sync.data.session_status?.[props.sessionID ?? ""] ?? { type: "idle" as const }
     const retry = data?.session.retry(props.sessionID ?? "")
-    if (retry && current.type !== "idle") return { type: "retry" as const, message: retry.failure.safeMessage,
-      attempt: retry.retryAttempt, next: retry.retryNotBefore ?? 0, phase: retry.phase }
+    if (retry && current.type !== "idle")
+      return {
+        type: "retry" as const,
+        message: retry.failure.safeMessage,
+        attempt: retry.retryAttempt,
+        next: retry.retryNotBefore ?? 0,
+        phase: retry.phase,
+      }
     return current
   })
   const history = usePromptHistory()
@@ -232,17 +238,6 @@ export function Prompt(props: PromptProps) {
       props.sessionID ? sync.session.get(props.sessionID) : undefined,
       sync.data.model_available,
     ),
-  )
-  const footerVisible = createMemo(
-    () =>
-      props.showIdleFooter !== false ||
-      status().type !== "idle" ||
-      !!workspace.notice() ||
-      !!workspace.label() ||
-      !!move.progress() ||
-      move.pendingNew() ||
-      editorContextLabelState() !== "none" ||
-      !!providerRequirement(),
   )
   const [cursorVersion, setCursorVersion] = createSignal(0)
   const currentProviderLabel = createMemo(() => {
@@ -452,9 +447,15 @@ export function Prompt(props: PromptProps) {
           if (store.interrupt >= 2) {
             if (startup.sessionApi === "v2") {
               const turnID = data?.session.turnID(props.sessionID)
-              if (turnID) void sdk.client.v2.session.interrupt({ sessionID: props.sessionID, turnID }, { throwOnError: true })
-                .catch(() => toast.show({ variant: "error", message: "Could not interrupt the active turn." }))
-              if (!turnID) toast.show({ variant: "warning", message: "The active turn is not yet available. Try again after the session updates." })
+              if (turnID)
+                void sdk.client.v2.session
+                  .interrupt({ sessionID: props.sessionID, turnID }, { throwOnError: true })
+                  .catch(() => toast.show({ variant: "error", message: "Could not interrupt the active turn." }))
+              if (!turnID)
+                toast.show({
+                  variant: "warning",
+                  message: "The active turn is not yet available. Try again after the session updates.",
+                })
             }
             if (startup.sessionApi !== "v2") void sdk.client.session.abort({ sessionID: props.sessionID })
             setStore("interrupt", 0)
@@ -1436,7 +1437,12 @@ export function Prompt(props: PromptProps) {
       }),
     }
   })
-  const maxHeight = createMemo(() => tuiConfig.prompt?.max_height ?? Math.max(6, Math.floor(dimensions().height / 3)))
+  const maxHeight = createMemo(() =>
+    Math.min(
+      props.heightLimit ?? Infinity,
+      tuiConfig.prompt?.max_height ?? Math.max(6, Math.floor(dimensions().height / 3)),
+    ),
+  )
   const moveLabelWidth = createMemo(() => Math.max(12, Math.min(44, dimensions().width - 48)))
 
   return (
@@ -1634,8 +1640,8 @@ export function Prompt(props: PromptProps) {
             }
           />
         </box>
-        <Show when={footerVisible()}>
-          <box width="100%" flexDirection="row" justifyContent="space-between">
+        <box width="100%" height={1} overflow="hidden" flexDirection="row" justifyContent="space-between" gap={1}>
+          <box flexGrow={1} flexBasis={0} minWidth={0} height={1} overflow="hidden">
             <Switch>
               <Match when={status().type !== "idle"}>
                 <box
@@ -1693,7 +1699,8 @@ export function Prompt(props: PromptProps) {
                           const baseMessage = message()
                           const truncatedHint = isTruncated() ? " (click to expand)" : ""
                           const duration = r.next ? formatDuration(seconds()) : ""
-                          const phase = "phase" in r ? r.phase === "waiting" ? "waiting to retry" : "retrying now" : "retrying"
+                          const phase =
+                            "phase" in r ? (r.phase === "waiting" ? "waiting to retry" : "retrying now") : "retrying"
                           const retryInfo = ` [${phase} ${duration ? `in ${duration} ` : ""}attempt #${r.attempt}]`
                           return retryInfo.trim() + " " + baseMessage + truncatedHint
                         }
@@ -1701,14 +1708,16 @@ export function Prompt(props: PromptProps) {
                         return (
                           <Show when={retry()}>
                             <box onMouseUp={handleMessageClick} flexShrink={1} minWidth={0}>
-                              <text fg={theme.error} truncate>{retryText()}</text>
+                              <text fg={theme.error} truncate>
+                                {retryText()}
+                              </text>
                             </box>
                           </Show>
                         )
                       })()}
                     </box>
                   </box>
-                  <text fg={store.interrupt > 0 ? theme.primary : theme.text}>
+                  <text flexShrink={0} fg={store.interrupt > 0 ? theme.primary : theme.text} wrapMode="none">
                     esc{" "}
                     <span style={{ fg: store.interrupt > 0 ? theme.primary : theme.textMuted }}>
                       {store.interrupt > 0 ? "again to interrupt" : "interrupt"}
@@ -1718,8 +1727,17 @@ export function Prompt(props: PromptProps) {
               </Match>
               <Match when={providerRequirement()}>
                 {(required) => (
-                  <box paddingLeft={3}>
-                    <text fg={theme.warning}>
+                  <box
+                    paddingLeft={3}
+                    onMouseUp={() =>
+                      void DialogAlert.show(
+                        dialog,
+                        "Provider required",
+                        `Connect ${required().providerID} to run with ${required().modelID}#${required().variant} · /connect`,
+                      )
+                    }
+                  >
+                    <text fg={theme.warning} truncate>
                       Connect {required().providerID} to run with {required().modelID}#{required().variant} · /connect
                     </text>
                   </box>
@@ -1727,8 +1745,10 @@ export function Prompt(props: PromptProps) {
               </Match>
               <Match when={workspace.notice()}>
                 {(notice) => (
-                  <box paddingLeft={3}>
-                    <text fg={theme.accent}>{notice()}</text>
+                  <box paddingLeft={3} onMouseUp={() => void DialogAlert.show(dialog, "Workspace", notice())}>
+                    <text fg={theme.accent} truncate>
+                      {notice()}
+                    </text>
                   </box>
                 )}
               </Match>
@@ -1778,52 +1798,52 @@ export function Prompt(props: PromptProps) {
               <Match when={true}>
                 {props.hint ?? (
                   <Show when={props.sessionID}>
-                    <box marginLeft={1}>
-                      <text fg={theme.textMuted}>{location()?.directory ?? paths.cwd}</text>
+                    <box marginLeft={1} flexGrow={1} flexShrink={1} minWidth={0} height={1} overflow="hidden">
+                      <text fg={theme.textMuted} wrapMode="none" truncate>
+                        {location()?.directory ?? paths.cwd}
+                      </text>
                     </box>
                   </Show>
                 )}
               </Match>
             </Switch>
-            <Show when={status().type !== "retry"}>
-              <box gap={2} flexDirection="row">
-                <Show when={editorContextLabelState() !== "none" ? editorFileLabelDisplay() : undefined}>
-                  {(file) => (
-                    <text fg={editorContextLabelState() === "pending" ? theme.secondary : theme.textMuted}>
-                      {file()}
-                    </text>
-                  )}
-                </Show>
-                <Switch>
-                  <Match when={store.mode === "normal"}>
-                    <Switch>
-                      <Match when={usage()}>
-                        {(item) => (
-                          <text fg={theme.textMuted} wrapMode="none">
-                            {[item().context, item().cost].filter(Boolean).join(" · ")}
-                          </text>
-                        )}
-                      </Match>
-                      <Match when={true}>
-                        <text fg={theme.text}>
-                          {agentShortcut()} <span style={{ fg: theme.textMuted }}>agents</span>
-                        </text>
-                      </Match>
-                    </Switch>
-                    <text fg={theme.text}>
-                      {paletteShortcut()} <span style={{ fg: theme.textMuted }}>commands</span>
-                    </text>
-                  </Match>
-                  <Match when={store.mode === "shell"}>
-                    <text fg={theme.text}>
-                      esc <span style={{ fg: theme.textMuted }}>exit shell mode</span>
-                    </text>
-                  </Match>
-                </Switch>
-              </box>
-            </Show>
           </box>
-        </Show>
+          <Show when={status().type === "idle"}>
+            <box gap={2} flexDirection="row" flexShrink={0} height={1}>
+              <Show when={editorContextLabelState() !== "none" ? editorFileLabelDisplay() : undefined}>
+                {(file) => (
+                  <text fg={editorContextLabelState() === "pending" ? theme.secondary : theme.textMuted}>{file()}</text>
+                )}
+              </Show>
+              <Switch>
+                <Match when={store.mode === "normal"}>
+                  <Switch>
+                    <Match when={usage()}>
+                      {(item) => (
+                        <text fg={theme.textMuted} wrapMode="none">
+                          {[item().context, item().cost].filter(Boolean).join(" · ")}
+                        </text>
+                      )}
+                    </Match>
+                    <Match when={true}>
+                      <text fg={theme.text} wrapMode="none">
+                        {agentShortcut()} <span style={{ fg: theme.textMuted }}>agents</span>
+                      </text>
+                    </Match>
+                  </Switch>
+                  <text fg={theme.text} wrapMode="none">
+                    {paletteShortcut()} <span style={{ fg: theme.textMuted }}>commands</span>
+                  </text>
+                </Match>
+                <Match when={store.mode === "shell"}>
+                  <text fg={theme.text} wrapMode="none">
+                    esc <span style={{ fg: theme.textMuted }}>exit shell mode</span>
+                  </text>
+                </Match>
+              </Switch>
+            </box>
+          </Show>
+        </box>
       </box>
       <Autocomplete
         sessionID={props.sessionID}

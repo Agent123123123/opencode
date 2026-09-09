@@ -51,7 +51,7 @@ test("projects external V2 turns incrementally and preserves the exact session a
       })
     if (url.pathname === `/api/session/${sessionID}/message`) {
       messageReads++
-      return json({ data: structuredClone(persisted), cursor: null })
+      return json({ data: structuredClone(persisted.toSorted((a, b) => b.time.created - a.time.created)), cursor: {} })
     }
     if (
       url.pathname === `/api/session/${sessionID}/permission` ||

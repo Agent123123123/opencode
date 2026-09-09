@@ -93,7 +93,12 @@ export function MotryxRoute(props: {
   const [locallyDismissedRuntimeWarningIDs, setLocallyDismissedRuntimeWarningIDs] = createSignal<ReadonlySet<string>>(
     new Set(),
   )
-  const layout = createMemo(() => motryxProductLayout(dimensions()))
+  const layout = createMemo(() =>
+    motryxProductLayout({
+      ...dimensions(),
+      targetRows: props.debugView && target()?.role !== "orchestrator" ? (dimensions().width < 133 ? 2 : 1) : 0,
+    }),
+  )
   const selectedLane = createMemo(() => {
     const value = snapshot()
     if (!value) return undefined
@@ -109,26 +114,16 @@ export function MotryxRoute(props: {
   )
   const visibleAttentionItems = createMemo(() => {
     const dismissed = locallyDismissedAttentionIDs()
-    return (snapshot()?.attentionItems ?? []).filter((item) =>
-      item.kind !== "FINAL_FAILURE" && item.presentationState === "VISIBLE" && !dismissed.has(item.attentionID))
+    return (snapshot()?.attentionItems ?? []).filter(
+      (item) =>
+        item.kind !== "FINAL_FAILURE" && item.presentationState === "VISIBLE" && !dismissed.has(item.attentionID),
+    )
   })
   const visibleRuntimeWarnings = createMemo(() => {
     const dismissed = locallyDismissedRuntimeWarningIDs()
     return runtimeWarnings().filter((warning) => !dismissed.has(warning.warningID))
   })
-  const visibleIncidents = createMemo(() => (snapshot()?.incidents ?? []).filter((incident) =>
-    incident.status === "OPEN" && incident.presentationState === "VISIBLE"))
-  const noticeCount = createMemo(() => Number(visibleRuntimeWarnings().length > 0) +
-    Number(visibleIncidents().length > 0) + Number(visibleAttentionItems().length > 0))
-  const compactNotices = createMemo(() => layout().direction === "column" ||
-    dimensions().height < 24 || noticeCount() > 1)
-  const sidecarHeight = createMemo(() => {
-    const height = layout().sidecarHeight
-    if (typeof height !== "number") return height
-    // Reserve the standard composer and each compact notice before assigning panel rows.
-    const available = dimensions().height - 6 - noticeCount() - (layout().collapsedSidecar ? 1 : 3)
-    return Math.min(height, Math.max(2, available))
-  })
+  const sidecarHeight = () => layout().sidecarHeight
   const conversationWidth = createMemo(() => {
     if (layout().direction === "column") return Math.max(20, dimensions().width - 2)
     return Math.max(20, dimensions().width - (layout().sidecarWidth ?? 46) - 3)
@@ -268,11 +263,12 @@ export function MotryxRoute(props: {
         options={listed.sessions.map((item) => ({
           title: item.title,
           value: item.sessionID,
-          description: item.state === "CURRENT"
-            ? "Current Orchestrator"
-            : item.state === "RESUMABLE"
-              ? `Resume ${shortSessionID(item.sessionID)}`
-              : `Unavailable: ${item.unavailableReason ?? "not resumable"}`,
+          description:
+            item.state === "CURRENT"
+              ? "Current Orchestrator"
+              : item.state === "RESUMABLE"
+                ? `Resume ${shortSessionID(item.sessionID)}`
+                : `Unavailable: ${item.unavailableReason ?? "not resumable"}`,
           category: "Motryx",
           disabled: item.state === "UNAVAILABLE",
         }))}
@@ -312,13 +308,17 @@ export function MotryxRoute(props: {
     setSwitching(true)
     setConnection({ phase: "starting", detail: `Switching to ${selected.title}` })
     try {
-      const result = await switchMotryxSession(config, {
-        targetSessionID: sessionID,
-        expected: listed.current,
-      }, {
-        fetcher: props.fetcher,
-        signal: props.api.lifecycle.signal,
-      })
+      const result = await switchMotryxSession(
+        config,
+        {
+          targetSessionID: sessionID,
+          expected: listed.current,
+        },
+        {
+          fetcher: props.fetcher,
+          signal: props.api.lifecycle.signal,
+        },
+      )
       const current = result.current
       if (!current) throw new Error("Motryx switch returned no current route")
       const response = await props.api.client.v2.session.get({ sessionID: current.sessionID }, { throwOnError: true })
@@ -406,19 +406,23 @@ export function MotryxRoute(props: {
     setDismissingIncidentID(incidentID)
     setSnapshot({
       ...proof,
-      incidents: proof.incidents.map((incident) => incident.incidentID === incidentID
-        ? { ...incident, presentationState: "DISMISSED" as const }
-        : incident),
+      incidents: proof.incidents.map((incident) =>
+        incident.incidentID === incidentID ? { ...incident, presentationState: "DISMISSED" as const } : incident,
+      ),
       attention: {
         ...proof.attention,
         visibleOpenIncidentCount: Math.max(0, proof.attention.visibleOpenIncidentCount - 1),
       },
     })
     try {
-      await dismissMotryxIncident(current, { incidentID, snapshot: proof }, {
-        fetcher: props.fetcher,
-        signal: props.api.lifecycle.signal,
-      })
+      await dismissMotryxIncident(
+        current,
+        { incidentID, snapshot: proof },
+        {
+          fetcher: props.fetcher,
+          signal: props.api.lifecycle.signal,
+        },
+      )
       await projectionController?.refresh()
     } catch (error) {
       setSnapshot(proof)
@@ -479,27 +483,66 @@ export function MotryxRoute(props: {
     if (target()?.role !== "orchestrator") focusOrchestrator()
   })
 
+  const sidecarContent = (expanded = false) => (
+    <SidecarPanel
+      api={props.api}
+      snapshot={snapshot()}
+      state={connection()}
+      selectedLane={selectedLane()}
+      panel={panel()}
+      debugView={props.debugView === true}
+      width={expanded ? "100%" : sidecarWidth()}
+      height={expanded ? Math.max(3, Math.floor(dimensions().height * 0.6)) : sidecarHeight()}
+      collapsed={expanded ? false : layout().collapsedSidecar}
+      onPanel={expanded ? setPanel : showPanel}
+      onLane={selectLane}
+      onConversation={(role, laneID) => void focusWorker(role, laneID)}
+      onDismissIncident={(incidentID) => void dismissIncident(incidentID)}
+      warnings={runtimeWarnings()}
+      locallyDismissedWarningIDs={locallyDismissedRuntimeWarningIDs()}
+      onDismissWarning={dismissRuntimeWarningLocally}
+      locallyDismissedAttentionIDs={locallyDismissedAttentionIDs()}
+      onDismissAttention={dismissAttentionLocally}
+    />
+  )
+  function showPanel(value: "flow" | "inspect" | "incidents") {
+    setPanel(value)
+    if (!layout().collapsedSidecar && layout().showSidecar) return
+    props.api.ui.dialog.replace(() => sidecarContent(true))
+  }
+
   onMount(() => {
     if (!config) return
     const actions: MotryxRouteActions = {
       modelApplicationRoute: () => {
         const current = activeConfig()
         const proof = snapshot()
-        if (!current || !proof || switching() || connection().phase !== "live" ||
+        if (
+          !current ||
+          !proof ||
+          switching() ||
+          connection().phase !== "live" ||
           proof.orchestratorSessionID !== current.orchestratorSessionID ||
-          path.resolve(proof.projectID) !== path.resolve(current.projectID)) return
-        return { sessionID: proof.orchestratorSessionID, serverGeneration: proof.route.serverGeneration,
-          bindingGeneration: proof.binding.bindingGeneration, ownerRunID: proof.binding.ownerRunID }
+          path.resolve(proof.projectID) !== path.resolve(current.projectID)
+        )
+          return
+        return {
+          sessionID: proof.orchestratorSessionID,
+          serverGeneration: proof.route.serverGeneration,
+          bindingGeneration: proof.binding.bindingGeneration,
+          ownerRunID: proof.binding.ownerRunID,
+        }
       },
       refresh: async () => projectionController?.refresh().then(() => undefined),
       showSessions,
       rename: renameOrchestrator,
-      showFlow: () => setPanel("flow"),
-      showInspect: () => setPanel("inspect"),
-      showIncidents: () => setPanel("incidents"),
+      showFlow: () => showPanel("flow"),
+      showInspect: () => showPanel("inspect"),
+      showIncidents: () => showPanel("incidents"),
       dismissLatestIncident: () => {
-        const latest = snapshot()?.incidents.find((incident) =>
-          incident.status === "OPEN" && incident.presentationState === "VISIBLE")
+        const latest = snapshot()?.incidents.find(
+          (incident) => incident.status === "OPEN" && incident.presentationState === "VISIBLE",
+        )
         if (latest) void dismissIncident(latest.incidentID)
       },
       focusOrchestrator,
@@ -523,11 +566,7 @@ export function MotryxRoute(props: {
   )
 
   return (
-    <box
-      flexGrow={1}
-      minHeight={0}
-      flexDirection="column"
-    >
+    <box flexGrow={1} minHeight={0} flexDirection="column">
       <MotryxHeader
         api={props.api}
         width={dimensions().width}
@@ -538,13 +577,7 @@ export function MotryxRoute(props: {
         phase={connection().phase}
         status={status()}
         visibleAttentionCount={visibleAttentionItems().length + visibleRuntimeWarnings().length}
-      />
-
-      <RuntimeHealthWarningBanner
-        api={props.api}
-        warnings={visibleRuntimeWarnings()}
-        compact={compactNotices()}
-        onDismiss={dismissRuntimeWarningLocally}
+        onShowIncidents={() => showPanel("incidents")}
       />
 
       <Show
@@ -577,19 +610,6 @@ export function MotryxRoute(props: {
               compact={conversationWidth() < 84}
               onOrchestrator={focusOrchestrator}
             />
-            <RuntimeIncidentCard
-              api={props.api}
-              compact={compactNotices()}
-              incidents={visibleIncidents()}
-              busyIncidentID={dismissingIncidentID()}
-              onDismiss={(incidentID) => void dismissIncident(incidentID)}
-            />
-            <RuntimeAttentionBanner
-              api={props.api}
-              compact={compactNotices()}
-              items={visibleAttentionItems()}
-              onDismiss={dismissAttentionLocally}
-            />
             <Show
               when={target()}
               fallback={
@@ -601,7 +621,6 @@ export function MotryxRoute(props: {
                   sessionID={value().sessionID}
                   width={conversationWidth()}
                   showNativeSidebar={false}
-                  showIdleFooter={false}
                   showExitEpilogue={false}
                   interaction={value().role === "orchestrator" ? "interactive" : "read-only"}
                   historyMutation="disabled"
@@ -615,25 +634,7 @@ export function MotryxRoute(props: {
             </Show>
           </box>
 
-          <Show when={layout().showSidecar}>
-            <SidecarPanel
-              api={props.api}
-              snapshot={snapshot()}
-              state={connection()}
-              selectedLane={selectedLane()}
-              panel={panel()}
-              debugView={props.debugView === true}
-              width={sidecarWidth()}
-              height={sidecarHeight()}
-              collapsed={layout().collapsedSidecar}
-              onPanel={setPanel}
-              onLane={selectLane}
-              onConversation={(role, laneID) => void focusWorker(role, laneID)}
-              onDismissIncident={(incidentID) => void dismissIncident(incidentID)}
-              locallyDismissedAttentionIDs={locallyDismissedAttentionIDs()}
-              onDismissAttention={dismissAttentionLocally}
-            />
-          </Show>
+          <Show when={layout().showSidecar}>{sidecarContent()}</Show>
         </box>
       </Show>
     </box>
@@ -730,6 +731,7 @@ function MotryxHeader(props: {
   phase: MotryxProjectionPhase
   status?: string
   visibleAttentionCount: number
+  onShowIncidents: () => void
 }) {
   const targetRole = createMemo(() => {
     if (!props.target) return "No active conversation"
@@ -828,7 +830,7 @@ function MotryxHeader(props: {
         )}
       </Show>
       <Show when={(props.snapshot?.attention.visibleOpenIncidentCount ?? 0) + props.visibleAttentionCount > 0}>
-        <text flexShrink={0} fg={props.api.theme.current.error} wrapMode="none">
+        <text flexShrink={0} fg={props.api.theme.current.error} wrapMode="none" onMouseUp={props.onShowIncidents}>
           ! {(props.snapshot?.attention.visibleOpenIncidentCount ?? 0) + props.visibleAttentionCount}
         </text>
       </Show>
@@ -836,198 +838,7 @@ function MotryxHeader(props: {
   )
 }
 
-function RuntimeIncidentCard(props: {
-  api: TuiPluginApi
-  compact: boolean
-  incidents: MotryxControlSnapshot["incidents"]
-  busyIncidentID?: string
-  onDismiss: (incidentID: string) => void
-}) {
-  const latest = createMemo(() => props.incidents[0])
-  return (
-    <Show when={latest()}>
-      {(incident) => (
-        <Show
-          when={!props.compact}
-          fallback={
-            <box height={1} flexShrink={0} flexDirection="row" gap={1}>
-              <text flexGrow={1} fg={props.api.theme.current.error} truncate>
-                {`${incident().httpStatus ? `HTTP ${incident().httpStatus}` : incident().failureKind} · ${capitalize(incident().role)}: ${incident().safeSummary}`}
-              </text>
-              <text fg={props.api.theme.current.primary} onMouseUp={() => props.onDismiss(incident().incidentID)}>
-                {props.busyIncidentID === incident().incidentID ? "…" : "[×]"}
-              </text>
-            </box>
-          }
-        >
-          <box
-            flexShrink={0}
-            minHeight={3}
-            flexDirection="column"
-            border={["top", "bottom", "left", "right"]}
-            borderColor={props.api.theme.current.error}
-            paddingLeft={1}
-            paddingRight={1}
-          >
-            <box flexDirection="row" gap={1}>
-              <text fg={props.api.theme.current.error}>Runtime error · {capitalize(incident().role)}</text>
-              <box flexGrow={1} />
-              <Show when={props.incidents.length > 1}>
-                <text fg={props.api.theme.current.textMuted}>{props.incidents.length - 1} more</text>
-              </Show>
-              <box
-                onMouseUp={() => props.onDismiss(incident().incidentID)}
-                backgroundColor={props.api.theme.current.backgroundElement}
-              >
-                <text fg={props.api.theme.current.primary}>
-                  {props.busyIncidentID === incident().incidentID ? " … " : " [×] "}
-                </text>
-              </box>
-            </box>
-            <text fg={props.api.theme.current.text} wrapMode="word" maxHeight={3}>
-              {incident().safeSummary}
-            </text>
-            <Show when={runtimeIncidentDiagnostic(incident())}>
-              {(detail) => <text fg={props.api.theme.current.textMuted} maxHeight={3}>{detail()}</text>}
-            </Show>
-          </box>
-        </Show>
-      )}
-    </Show>
-  )
-}
-
-function RuntimeHealthWarningBanner(props: {
-  api: TuiPluginApi
-  compact: boolean
-  warnings: MotryxRuntimeHealthWarning[]
-  onDismiss: (warningID: string) => void
-}) {
-  const current = createMemo(() => props.warnings[0])
-  return (
-    <Show when={current()}>
-      {(warning) => (
-        <Show
-          when={!props.compact}
-          fallback={
-            <box height={1} flexShrink={0} flexDirection="row" gap={1}>
-              <text flexGrow={1} fg={props.api.theme.current.warning} truncate>
-                {`Runtime health: ${warning().safeSummary}`}
-              </text>
-              <text fg={props.api.theme.current.primary} onMouseUp={() => props.onDismiss(warning().warningID)}>
-                [×]
-              </text>
-            </box>
-          }
-        >
-          <box
-            flexShrink={0}
-            minHeight={4}
-            flexDirection="column"
-            border={["top", "bottom", "left", "right"]}
-            borderColor={props.api.theme.current.warning}
-            paddingLeft={1}
-            paddingRight={1}
-          >
-            <box flexDirection="row" gap={1}>
-              <text fg={props.api.theme.current.warning}>Runtime health could not be confirmed</text>
-              <box flexGrow={1} />
-              <box
-                onMouseUp={() => props.onDismiss(warning().warningID)}
-                backgroundColor={props.api.theme.current.backgroundElement}
-              >
-                <text fg={props.api.theme.current.primary}> [×] </text>
-              </box>
-            </box>
-            <text fg={props.api.theme.current.text} wrapMode="word" maxHeight={3}>
-              {warning().safeSummary}
-            </text>
-            <text fg={props.api.theme.current.textMuted} wrapMode="word">
-              Existing work was not interrupted. A new request can still fail independently.
-            </text>
-            <text fg={props.api.theme.current.textMuted}>
-              First observed {new Date(warning().firstObservedAt).toLocaleString()}
-            </text>
-          </box>
-        </Show>
-      )}
-    </Show>
-  )
-}
-
-function RuntimeAttentionBanner(props: {
-  api: TuiPluginApi
-  compact: boolean
-  items: MotryxAttentionItemProjection[]
-  onDismiss: (attentionID: string) => void
-}) {
-  const ordered = createMemo(() => [...props.items].sort(compareRuntimeAttention))
-  const current = createMemo(() => ordered()[0])
-  return (
-    <Show when={current()}>
-      {(attention) => (
-        <Show
-          when={!props.compact}
-          fallback={
-            <box height={1} flexShrink={0} flexDirection="row" gap={1}>
-              <text flexGrow={1} fg={runtimeAttentionColor(props.api, attention().severity)} truncate>
-                {`${runtimeAttentionTitle(attention())}: ${attention().summary}`}
-              </text>
-              <Show when={attention().dismissible}>
-                <text fg={props.api.theme.current.primary} onMouseUp={() => props.onDismiss(attention().attentionID)}>
-                  [×]
-                </text>
-              </Show>
-            </box>
-          }
-        >
-          <box
-            flexShrink={0}
-            minHeight={3}
-            flexDirection="column"
-            border={["top", "bottom", "left", "right"]}
-            borderColor={runtimeAttentionColor(props.api, attention().severity)}
-            paddingLeft={1}
-            paddingRight={1}
-          >
-            <box flexDirection="row" gap={1}>
-              <text fg={runtimeAttentionColor(props.api, attention().severity)}>
-                {runtimeAttentionTitle(attention())} · {capitalize(attention().role)}
-              </text>
-              <box flexGrow={1} />
-              <Show when={ordered().length > 1}>
-                <text fg={props.api.theme.current.textMuted}>{ordered().length - 1} more</text>
-              </Show>
-              <box
-                onMouseUp={attention().dismissible ? () => props.onDismiss(attention().attentionID) : undefined}
-                backgroundColor={props.api.theme.current.backgroundElement}
-              >
-                <text
-                  fg={attention().dismissible ? props.api.theme.current.primary : props.api.theme.current.textMuted}
-                >
-                  {attention().dismissible ? " [×] " : ""}
-                </text>
-              </box>
-            </box>
-            <text fg={props.api.theme.current.text} wrapMode="word" maxHeight={3}>
-              {attention().summary}
-            </text>
-            <Show when={runtimeAttentionDiagnostic(attention())}>
-              {(detail) => <text fg={props.api.theme.current.textMuted} maxHeight={5}>{detail()}</text>}
-            </Show>
-          </box>
-        </Show>
-      )}
-    </Show>
-  )
-}
-
-function MotryxLoadingPage(props: {
-  api: TuiPluginApi
-  width: number
-  height: number
-  phase: MotryxProjectionPhase
-}) {
+function MotryxLoadingPage(props: { api: TuiPluginApi; width: number; height: number; phase: MotryxProjectionPhase }) {
   const compact = createMemo(() => props.width < 54 || props.height < 17)
   const showMark = createMemo(() => props.width >= 28 && props.height >= 11)
   const message = createMemo(() =>
@@ -1130,6 +941,9 @@ function TargetChoice(props: { api: TuiPluginApi; label: string; onPick: () => v
 
 function SidecarPanel(props: {
   api: TuiPluginApi
+  warnings: MotryxRuntimeHealthWarning[]
+  locallyDismissedWarningIDs: ReadonlySet<string>
+  onDismissWarning: (warningID: string) => void
   snapshot?: MotryxControlSnapshot
   state: MotryxProjectionState
   selectedLane?: MotryxLaneProjection
@@ -1163,10 +977,22 @@ function SidecarPanel(props: {
           paddingRight={1}
         >
           <SidecarTabs api={props.api} panel={props.panel} state={props.state} onPanel={props.onPanel} />
+          <Show when={props.panel === "incidents"}>
+            <IncidentsPanel
+              api={props.api}
+              snapshot={props.snapshot}
+              warnings={props.warnings}
+              locallyDismissedWarningIDs={props.locallyDismissedWarningIDs}
+              onDismissWarning={props.onDismissWarning}
+              locallyDismissedAttentionIDs={props.locallyDismissedAttentionIDs}
+              onDismissAttention={props.onDismissAttention}
+              onDismiss={props.onDismissIncident}
+            />
+          </Show>
           <Show
-            when={props.snapshot}
+            when={props.panel !== "incidents" && props.snapshot}
             fallback={
-              <box paddingTop={1}>
+              <box visible={props.panel !== "incidents"} paddingTop={1}>
                 <text fg={props.api.theme.current.textMuted} wrapMode="word">
                   {props.state.detail ?? "Waiting for the workflow projection."}
                 </text>
@@ -1175,15 +1001,15 @@ function SidecarPanel(props: {
           >
             {(value) => (
               <>
-              <Show when={props.panel === "flow"}>
-                <FlowPanel
-                  api={props.api}
-                  snapshot={value()}
-                  selectedLaneID={props.selectedLane?.id}
-                  onLane={props.onLane}
-                />
-              </Show>
-              <Show when={props.panel === "inspect"}>
+                <Show when={props.panel === "flow"}>
+                  <FlowPanel
+                    api={props.api}
+                    snapshot={value()}
+                    selectedLaneID={props.selectedLane?.id}
+                    onLane={props.onLane}
+                  />
+                </Show>
+                <Show when={props.panel === "inspect"}>
                   <InspectPanel
                     api={props.api}
                     snapshot={value()}
@@ -1192,16 +1018,7 @@ function SidecarPanel(props: {
                     projectionLive={props.state.phase === "live"}
                     onConversation={props.onConversation}
                   />
-              </Show>
-              <Show when={props.panel === "incidents"}>
-                <IncidentsPanel
-                  api={props.api}
-                  snapshot={value()}
-                  locallyDismissedAttentionIDs={props.locallyDismissedAttentionIDs}
-                  onDismissAttention={props.onDismissAttention}
-                  onDismiss={props.onDismissIncident}
-                />
-              </Show>
+                </Show>
               </>
             )}
           </Show>
@@ -1315,8 +1132,15 @@ function FlowPanel(props: {
               {workflow().goal}
             </text>
           </box>
-          <text fg={props.snapshot.capacity.capacityReached ? props.api.theme.current.warning : props.api.theme.current.textMuted}>
-            worker lanes {props.snapshot.capacity.activeCount}/{props.snapshot.capacity.maxConcurrentLanes === 0
+          <text
+            fg={
+              props.snapshot.capacity.capacityReached
+                ? props.api.theme.current.warning
+                : props.api.theme.current.textMuted
+            }
+          >
+            worker lanes {props.snapshot.capacity.activeCount}/
+            {props.snapshot.capacity.maxConcurrentLanes === 0
               ? "unlimited"
               : props.snapshot.capacity.maxConcurrentLanes}
             {props.snapshot.capacity.readyLaneIDs.length > 0
@@ -1361,7 +1185,8 @@ function LaneRow(props: {
   onPick: () => void
 }) {
   const status = () => (props.lane.schedulingPhase ?? props.lane.displayStatus).toUpperCase()
-  const attention = () => status() === "BLOCKED" || status() === "FAILED" || props.lane.pendingCheckSummary !== undefined
+  const attention = () =>
+    status() === "BLOCKED" || status() === "FAILED" || props.lane.pendingCheckSummary !== undefined
   return (
     <box
       flexDirection="column"
@@ -1388,9 +1213,11 @@ function LaneRow(props: {
       </Show>
       <Show when={props.lane.schedulingReason}>
         <text fg={props.api.theme.current.textMuted}>
-          {props.lane.schedulingReason === "SLOT_BUSY" ? "Waiting for shared worker"
-            : props.lane.schedulingReason === "MANAGEMENT" ? "Paused for runtime management"
-            : "Waiting for execution capacity"}
+          {props.lane.schedulingReason === "SLOT_BUSY"
+            ? "Waiting for shared worker"
+            : props.lane.schedulingReason === "MANAGEMENT"
+              ? "Paused for runtime management"
+              : "Waiting for execution capacity"}
         </text>
       </Show>
     </box>
@@ -1399,14 +1226,19 @@ function LaneRow(props: {
 
 function IncidentsPanel(props: {
   api: TuiPluginApi
-  snapshot: MotryxControlSnapshot
+  snapshot?: MotryxControlSnapshot
+  warnings: MotryxRuntimeHealthWarning[]
+  locallyDismissedWarningIDs: ReadonlySet<string>
+  onDismissWarning: (warningID: string) => void
   locallyDismissedAttentionIDs: ReadonlySet<string>
   onDismissAttention: (attentionID: string) => void
   onDismiss: (incidentID: string) => void
 }) {
-  const activeAttention = createMemo(() => props.snapshot.attentionItems
-    .filter((item) => item.kind !== "FINAL_FAILURE" && item.presentationState === "VISIBLE")
-    .sort(compareRuntimeAttention))
+  const activeAttention = createMemo(() =>
+    (props.snapshot?.attentionItems ?? [])
+      .filter((item) => item.kind !== "FINAL_FAILURE" && item.presentationState === "VISIBLE")
+      .sort(compareRuntimeAttention),
+  )
   return (
     <scrollbox
       flexGrow={1}
@@ -1415,10 +1247,43 @@ function IncidentsPanel(props: {
       verticalScrollbarOptions={{ visible: true, paddingLeft: 1 }}
       horizontalScrollbarOptions={{ visible: false }}
     >
+      <text fg={props.api.theme.current.text}>Runtime health</text>
+      <Show
+        when={props.warnings.length > 0}
+        fallback={<text fg={props.api.theme.current.textMuted}>No runtime health warnings.</text>}
+      >
+        <For each={props.warnings}>
+          {(warning) => (
+            <box paddingBottom={1}>
+              <box flexDirection="row" gap={1}>
+                <text fg={props.api.theme.current.warning} flexGrow={1}>
+                  Runtime health could not be confirmed
+                </text>
+                <Show
+                  when={!props.locallyDismissedWarningIDs.has(warning.warningID)}
+                  fallback={<text fg={props.api.theme.current.textMuted}>hidden locally</text>}
+                >
+                  <text
+                    fg={props.api.theme.current.primary}
+                    onMouseUp={() => props.onDismissWarning(warning.warningID)}
+                  >
+                    [×]
+                  </text>
+                </Show>
+              </box>
+              <text fg={props.api.theme.current.text}>{warning.safeSummary}</text>
+              <text fg={props.api.theme.current.textMuted}>
+                First observed {new Date(warning.firstObservedAt).toLocaleString()}
+              </text>
+            </box>
+          )}
+        </For>
+      </Show>
       <text fg={props.api.theme.current.text}>Active runtime attention</text>
-      <Show when={activeAttention().length > 0} fallback={
-        <text fg={props.api.theme.current.textMuted}>No active runtime attention.</text>
-      }>
+      <Show
+        when={activeAttention().length > 0}
+        fallback={<text fg={props.api.theme.current.textMuted}>No active runtime attention.</text>}
+      >
         <For each={activeAttention()}>
           {(attention) => (
             <box flexDirection="column" gap={1} paddingBottom={1}>
@@ -1438,12 +1303,15 @@ function IncidentsPanel(props: {
                   </Show>
                 </Show>
               </box>
-              <text fg={props.api.theme.current.text} wrapMode="word">{attention.summary}</text>
+              <text fg={props.api.theme.current.text} wrapMode="word">
+                {attention.summary}
+              </text>
               <Show when={runtimeAttentionDiagnostic(attention)}>
                 {(detail) => <text fg={props.api.theme.current.textMuted}>{detail()}</text>}
               </Show>
               <text fg={props.api.theme.current.textMuted}>
-                {attention.attentionID}{attention.laneID ? ` · lane ${attention.laneID}` : ""}
+                {attention.attentionID}
+                {attention.laneID ? ` · lane ${attention.laneID}` : ""}
               </text>
             </box>
           )}
@@ -1451,14 +1319,16 @@ function IncidentsPanel(props: {
       </Show>
       <text fg={props.api.theme.current.text}>Runtime incidents</text>
       <Show
-        when={props.snapshot.incidents.length > 0}
+        when={(props.snapshot?.incidents.length ?? 0) > 0}
         fallback={<text fg={props.api.theme.current.textMuted}>No runtime incidents.</text>}
       >
-        <For each={props.snapshot.incidents}>
+        <For each={props.snapshot?.incidents ?? []}>
           {(incident) => (
             <box flexDirection="column" gap={1} paddingBottom={1}>
               <box flexDirection="row" gap={1}>
-                <text fg={incident.status === "OPEN" ? props.api.theme.current.error : props.api.theme.current.textMuted}>
+                <text
+                  fg={incident.status === "OPEN" ? props.api.theme.current.error : props.api.theme.current.textMuted}
+                >
                   {incident.status} · {capitalize(incident.role)} · {incident.failureKind}
                 </text>
                 <box flexGrow={1} />
@@ -1471,12 +1341,15 @@ function IncidentsPanel(props: {
                   <text fg={props.api.theme.current.textMuted}>dismissed</text>
                 </Show>
               </box>
-              <text fg={props.api.theme.current.text} wrapMode="word">{incident.safeSummary}</text>
+              <text fg={props.api.theme.current.text} wrapMode="word">
+                {incident.safeSummary}
+              </text>
               <Show when={runtimeIncidentDiagnostic(incident)}>
                 {(detail) => <text fg={props.api.theme.current.textMuted}>{detail()}</text>}
               </Show>
               <text fg={props.api.theme.current.textMuted}>
-                {incident.incidentID}{incident.laneID ? ` · lane ${incident.laneID}` : ""}
+                {incident.incidentID}
+                {incident.laneID ? ` · lane ${incident.laneID}` : ""}
               </text>
             </box>
           )}
@@ -1501,10 +1374,12 @@ function runtimeIncidentDiagnostic(incident: MotryxControlSnapshot["incidents"][
 
 function compareRuntimeAttention(left: MotryxAttentionItemProjection, right: MotryxAttentionItemProjection): number {
   const severity = { ERROR: 3, WARNING: 2, INFO: 1 } as const
-  return severity[right.severity] - severity[left.severity] ||
+  return (
+    severity[right.severity] - severity[left.severity] ||
     Number(right.actionRequired) - Number(left.actionRequired) ||
     right.createdAt - left.createdAt ||
     left.attentionID.localeCompare(right.attentionID)
+  )
 }
 
 function runtimeAttentionTitle(attention: MotryxAttentionItemProjection): string {
@@ -1525,9 +1400,11 @@ function runtimeAttentionTitle(attention: MotryxAttentionItemProjection): string
 
 function runtimeAttentionDiagnostic(attention: MotryxAttentionItemProjection): string | undefined {
   const retry = attention.retryLayer
-    ? `${attention.retryLayer.toLowerCase()} retry${attention.retryAttempt !== undefined
-      ? ` ${attention.retryAttempt}${attention.retryLimit !== undefined ? `/${attention.retryLimit}` : ""}`
-      : ""}`
+    ? `${attention.retryLayer.toLowerCase()} retry${
+        attention.retryAttempt !== undefined
+          ? ` ${attention.retryAttempt}${attention.retryLimit !== undefined ? `/${attention.retryLimit}` : ""}`
+          : ""
+      }`
     : undefined
   const values = [
     retry,
@@ -1586,16 +1463,23 @@ function InspectPanel(props: {
   const artifacts = createMemo(() =>
     props.snapshot.artifacts.filter((artifact) => artifact.producedByLaneID === props.lane?.id),
   )
-  const runtimeExecutions = createMemo(() => props.snapshot.runtimeExecutions
-    .filter((execution) => execution.laneID === props.lane?.id))
-  const executionHistory = createMemo(() => props.snapshot.executionHistory
-    .filter((summary) => summary.laneID === props.lane?.id))
-  const attentionItems = createMemo(() => props.snapshot.attentionItems
-    .filter((attention) => attention.presentationState === "VISIBLE" && (
-      (attention.laneID !== undefined && attention.laneID === props.lane?.id) ||
-      (attention.slotID !== undefined && [props.lane?.coordinatorSlotID, props.lane?.checkerSlotID].includes(attention.slotID))
-    ))
-    .sort(compareRuntimeAttention))
+  const runtimeExecutions = createMemo(() =>
+    props.snapshot.runtimeExecutions.filter((execution) => execution.laneID === props.lane?.id),
+  )
+  const executionHistory = createMemo(() =>
+    props.snapshot.executionHistory.filter((summary) => summary.laneID === props.lane?.id),
+  )
+  const attentionItems = createMemo(() =>
+    props.snapshot.attentionItems
+      .filter(
+        (attention) =>
+          attention.presentationState === "VISIBLE" &&
+          ((attention.laneID !== undefined && attention.laneID === props.lane?.id) ||
+            (attention.slotID !== undefined &&
+              [props.lane?.coordinatorSlotID, props.lane?.checkerSlotID].includes(attention.slotID))),
+      )
+      .sort(compareRuntimeAttention),
+  )
   const primaryAttention = createMemo(() => attentionItems()[0])
   const failureAttention = createMemo(() => {
     const incidentID = props.lane?.failure?.incidentID
@@ -1632,7 +1516,9 @@ function InspectPanel(props: {
         {(lane) => (
           <box flexDirection="column" gap={1}>
             <text fg={props.api.theme.current.text}>{lane().name}</text>
-            <text fg={laneColor(props.api, lane().displayStatus.toUpperCase())}>{motryxLaneStatusLabel(lane().displayStatus)}</text>
+            <text fg={laneColor(props.api, lane().displayStatus.toUpperCase())}>
+              {motryxLaneStatusLabel(lane().displayStatus)}
+            </text>
             <Show when={props.debugView}>
               <text fg={props.api.theme.current.warning}>DEBUG conversation</text>
               <box flexDirection="row" flexWrap="wrap" gap={1}>
@@ -1649,7 +1535,8 @@ function InspectPanel(props: {
                   api={props.api}
                   label="Open Checker"
                   enabled={
-                    props.projectionLive && resolveProjectedDebugTarget(props.snapshot, lane().id, "checker") !== undefined
+                    props.projectionLive &&
+                    resolveProjectedDebugTarget(props.snapshot, lane().id, "checker") !== undefined
                   }
                   onPick={() => props.onConversation("checker", lane().id)}
                 />
@@ -1725,20 +1612,12 @@ function InspectPanel(props: {
             <InspectValue
               api={props.api}
               label="runtime execution"
-              value={
-                runtimeExecutions()
-                  .map(formatRuntimeExecution)
-                  .join(", ") || "none"
-              }
+              value={runtimeExecutions().map(formatRuntimeExecution).join(", ") || "none"}
             />
             <InspectValue
               api={props.api}
               label="execution history"
-              value={
-                executionHistory()
-                  .map(formatExecutionHistory)
-                  .join(", ") || "none"
-              }
+              value={executionHistory().map(formatExecutionHistory).join(", ") || "none"}
             />
             <Show when={props.debugView}>
               <text fg={props.api.theme.current.warning}>DEBUG identity</text>
@@ -1795,9 +1674,7 @@ export function resolveProjectedDebugTarget(
   const lane = snapshot.lanes.find((item) => item.id === laneID)
   if (!lane) return undefined
   const slotID = role === "coordinator" ? lane.coordinatorSlotID : lane.checkerSlotID
-  const readiness = role === "coordinator"
-    ? lane.coordinatorRuntimeReadiness
-    : lane.checkerRuntimeReadiness
+  const readiness = role === "coordinator" ? lane.coordinatorRuntimeReadiness : lane.checkerRuntimeReadiness
   const runtime = role === "coordinator" ? lane.coordinatorRuntime : lane.checkerRuntime
   if (!slotID || readiness !== "bound" || !runtime || runtime.slotID !== slotID) return undefined
   const agents = snapshot.agents.filter(
@@ -1840,9 +1717,13 @@ function laneColor(api: TuiPluginApi, status: string) {
   if (status === "DONE") return api.theme.current.success
   if (status === "BLOCKED" || status === "FAILED") return api.theme.current.error
   if (
-    status === "PENDING" || status === "CHECKING" || status === "AWAITING_CHECK" ||
-    status === "ELIGIBLE" || status === "PREPARING"
-  ) return api.theme.current.warning
+    status === "PENDING" ||
+    status === "CHECKING" ||
+    status === "AWAITING_CHECK" ||
+    status === "ELIGIBLE" ||
+    status === "PREPARING"
+  )
+    return api.theme.current.warning
   if (status === "WORKING") return api.theme.current.info
   return api.theme.current.textMuted
 }

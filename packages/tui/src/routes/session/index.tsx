@@ -20,6 +20,9 @@ import { mkdir, writeFile } from "node:fs/promises"
 import { useRoute, useRouteData } from "../../context/route"
 import { useProject } from "../../context/project"
 import { useSync } from "../../context/sync"
+import { useOptionalData } from "../../context/data"
+import { attachHistoryScroll } from "./history-scroll"
+import { conversationPromptHeight, MIN_CONVERSATION_HEIGHT } from "../../component/prompt/layout"
 import { useEvent } from "../../context/event"
 import { SplitBorder } from "../../ui/border"
 import { useTuiPaths, useTuiStartup, useTuiTerminalEnvironment } from "../../context/runtime"
@@ -169,11 +172,7 @@ const sessionSurfaceReadOnlyBlockedCommands = new Set([
   "session.child.previous",
 ])
 
-const sessionSurfaceHistoryMutationCommands = new Set([
-  "session.fork",
-  "session.undo",
-  "session.redo",
-])
+const sessionSurfaceHistoryMutationCommands = new Set(["session.fork", "session.undo", "session.redo"])
 
 export function sessionSurfaceCommandEnabled(
   interaction: SessionSurfaceProps["interaction"],
@@ -222,7 +221,6 @@ export type SessionSurfaceProps = {
   initialPrompt?: PromptInfo
   width?: number
   showNativeSidebar?: boolean
-  showIdleFooter?: boolean
   showExitEpilogue?: boolean
   interaction?: "interactive" | "read-only"
   historyMutation?: "standard" | "disabled"
@@ -326,6 +324,8 @@ export function SessionSurface(props: SessionSurfaceProps) {
   })
 
   const dimensions = useTerminalDimensions()
+  const [surfaceHeight, setSurfaceHeight] = createSignal(dimensions().height)
+  const tooSmall = () => surfaceHeight() < MIN_CONVERSATION_HEIGHT || contentWidth() < 20
   const [sidebar, setSidebar] = kv.signal<"auto" | "hide">("sidebar", "auto")
   const [sidebarOpen, setSidebarOpen] = createSignal(false)
   const [conceal, setConceal] = createSignal(true)
@@ -418,6 +418,10 @@ export function SessionSurface(props: SessionSurfaceProps) {
   })
 
   let seeded = false
+  let historyScroll: ReturnType<typeof attachHistoryScroll> | undefined
+  const data = useOptionalData()
+  const history = () => data?.session.message.history(route.sessionID)
+  onCleanup(() => historyScroll?.dispose())
   let scroll: ScrollBoxRenderable
   let prompt: PromptRef | undefined
   const bind = (r: PromptRef | undefined) => {
@@ -498,7 +502,13 @@ export function SessionSurface(props: SessionSurfaceProps) {
     dialog.clear()
   }
 
+  function retryHistory() {
+    if (history()?.failed === "older") historyScroll?.retry()
+    else void data?.session.message.refresh(route.sessionID).catch(() => {})
+  }
+
   function toBottom() {
+    historyScroll?.bottom()
     setTimeout(() => {
       if (!scroll || scroll.isDestroyed) return
       scroll.scrollTo(scroll.scrollHeight)
@@ -838,12 +848,23 @@ export function SessionSurface(props: SessionSurfaceProps) {
       },
     },
     {
+      title: "Retry loading conversation history",
+      value: "session.history.retry",
+      category: "Session",
+      enabled: startup.sessionApi === "v2" && !!history()?.error,
+      run: () => {
+        retryHistory()
+        dialog.clear()
+      },
+    },
+    {
       title: "Page up",
       value: "session.page.up",
       category: "Session",
       hidden: true,
       run: () => {
         scroll.scrollBy(-scroll.height / 2)
+        historyScroll?.up()
         dialog.clear()
       },
     },
@@ -854,6 +875,7 @@ export function SessionSurface(props: SessionSurfaceProps) {
       hidden: true,
       run: () => {
         scroll.scrollBy(scroll.height / 2)
+        historyScroll?.down()
         dialog.clear()
       },
     },
@@ -864,6 +886,7 @@ export function SessionSurface(props: SessionSurfaceProps) {
       hidden: true,
       run: () => {
         scroll.scrollBy(-1)
+        historyScroll?.up()
         dialog.clear()
       },
     },
@@ -874,6 +897,7 @@ export function SessionSurface(props: SessionSurfaceProps) {
       hidden: true,
       run: () => {
         scroll.scrollBy(1)
+        historyScroll?.down()
         dialog.clear()
       },
     },
@@ -884,6 +908,7 @@ export function SessionSurface(props: SessionSurfaceProps) {
       hidden: true,
       run: () => {
         scroll.scrollBy(-scroll.height / 4)
+        historyScroll?.up()
         dialog.clear()
       },
     },
@@ -894,6 +919,7 @@ export function SessionSurface(props: SessionSurfaceProps) {
       hidden: true,
       run: () => {
         scroll.scrollBy(scroll.height / 4)
+        historyScroll?.down()
         dialog.clear()
       },
     },
@@ -904,6 +930,7 @@ export function SessionSurface(props: SessionSurfaceProps) {
       hidden: true,
       run: () => {
         scroll.scrollTo(0)
+        historyScroll?.up()
         dialog.clear()
       },
     },
@@ -913,6 +940,7 @@ export function SessionSurface(props: SessionSurfaceProps) {
       category: "Session",
       hidden: true,
       run: () => {
+        historyScroll?.bottom()
         scroll.scrollTo(scroll.scrollHeight)
         dialog.clear()
       },
@@ -1265,11 +1293,41 @@ export function SessionSurface(props: SessionSurfaceProps) {
           tui: tuiConfig,
         }}
       >
-        <box flexDirection="row" flexGrow={1} minHeight={0}>
-          <box flexGrow={1} minHeight={0} paddingBottom={1} paddingLeft={2} paddingRight={2} gap={1}>
+        <box
+          flexDirection="row"
+          flexGrow={1}
+          minHeight={0}
+          onSizeChange={function () {
+            setSurfaceHeight(this.height)
+          }}
+        >
+          <Show when={tooSmall()}>
+            <text fg={theme.textMuted}>Enlarge terminal to view conversation</text>
+          </Show>
+          <box
+            visible={!tooSmall()}
+            flexGrow={1}
+            minHeight={0}
+            paddingBottom={1}
+            paddingLeft={2}
+            paddingRight={2}
+            gap={1}
+          >
             <Show when={session()}>
               <scrollbox
-                ref={(r) => (scroll = r)}
+                ref={(r) => {
+                  scroll = r
+                  historyScroll?.dispose()
+                  if (startup.sessionApi === "v2" && data)
+                    historyScroll = attachHistoryScroll(r, renderer, {
+                      state: () => data.session.message.history(route.sessionID),
+                      loadOlder: () => data.session.message.loadOlder(route.sessionID),
+                    })
+                }}
+                onMouseScroll={(event) => {
+                  if (event.scroll?.direction === "up") queueMicrotask(() => historyScroll?.up())
+                  if (event.scroll?.direction === "down") queueMicrotask(() => historyScroll?.down())
+                }}
                 viewportOptions={{
                   paddingRight: showScrollbar() ? 1 : 0,
                 }}
@@ -1286,7 +1344,16 @@ export function SessionSurface(props: SessionSurfaceProps) {
                 flexGrow={1}
                 scrollAcceleration={scrollAcceleration()}
               >
-                <box height={1} />
+                <box id="history-boundary" minHeight={1}>
+                  <Show when={history()?.loading}>
+                    <text fg={theme.textMuted}>Loading conversation history…</text>
+                  </Show>
+                  <Show when={history()?.error}>
+                    <text fg={theme.error} onMouseUp={retryHistory}>
+                      History unavailable · click to retry
+                    </text>
+                  </Show>
+                </box>
                 <For each={messages()}>
                   {(message, index) => (
                     <Switch>
@@ -1389,12 +1456,14 @@ export function SessionSurface(props: SessionSurfaceProps) {
               <box flexShrink={0}>
                 <Show when={interactive() && permissions().length > 0}>
                   <PermissionPrompt
+                    heightLimit={Math.max(1, surfaceHeight() - 5)}
                     request={permissions()[0]}
                     directory={sync.session.get(permissions()[0].sessionID)?.directory}
                   />
                 </Show>
                 <Show when={interactive() && permissions().length === 0 && questions().length > 0}>
                   <QuestionPrompt
+                    heightLimit={Math.max(1, surfaceHeight() - 5)}
                     request={questions()[0]}
                     directory={sync.session.get(questions()[0].sessionID)?.directory}
                   />
@@ -1420,7 +1489,10 @@ export function SessionSurface(props: SessionSurfaceProps) {
                         toBottom()
                       }}
                       sessionID={route.sessionID}
-                      showIdleFooter={props.showIdleFooter}
+                      heightLimit={conversationPromptHeight(
+                        surfaceHeight(),
+                        tuiConfig.prompt?.max_height ?? Math.max(6, Math.floor(dimensions().height / 3)),
+                      )}
                       right={
                         props.promptRight ?? (
                           <pluginRuntime.Slot name="session_prompt_right" session_id={route.sessionID} />
@@ -1650,7 +1722,7 @@ function AssistantMessage(props: { message: AssistantMessage; parts: Part[]; las
       </Show>
       <Switch>
         <Match when={props.last || final() || props.message.error?.name === "MessageAbortedError"}>
-          <box ref={(el: BoxRenderable) => alwaysSeparate.add(el)} paddingLeft={3}>
+          <box id={`${props.message.id}:footer`} ref={(el: BoxRenderable) => alwaysSeparate.add(el)} paddingLeft={3}>
             <text marginTop={1}>
               <span
                 style={{
@@ -1717,6 +1789,7 @@ function ReasoningPart(props: { last: boolean; part: ReasoningPart; message: Ass
   return (
     <Show when={content()}>
       <box
+        id={props.part.id}
         ref={(el: BoxRenderable) => alwaysSeparate.add(el)}
         paddingLeft={3}
         marginTop={1}
@@ -1799,7 +1872,13 @@ function TextPart(props: { last: boolean; part: TextPart; message: AssistantMess
   const { theme, syntax } = useTheme()
   return (
     <Show when={props.part.text.trim()}>
-      <box ref={(el: BoxRenderable) => alwaysSeparate.add(el)} paddingLeft={3} marginTop={1} flexShrink={0}>
+      <box
+        id={props.part.id}
+        ref={(el: BoxRenderable) => alwaysSeparate.add(el)}
+        paddingLeft={3}
+        marginTop={1}
+        flexShrink={0}
+      >
         <markdown
           syntaxStyle={syntax()}
           streaming={true}
@@ -1993,6 +2072,7 @@ function InlineTool(props: {
 
   return (
     <InlineToolRow
+      id={props.part.id}
       icon={props.icon}
       iconColor={props.iconColor}
       color={fg()}
@@ -2023,6 +2103,7 @@ function InlineTool(props: {
 }
 
 export function InlineToolRow(props: {
+  id?: string
   icon: string
   iconColor?: RGBA
   color?: RGBA
@@ -2043,6 +2124,7 @@ export function InlineToolRow(props: {
 }) {
   return (
     <box
+      id={props.id}
       paddingLeft={3}
       onMouseOver={props.onMouseOver}
       onMouseOut={props.onMouseOut}
@@ -2103,6 +2185,7 @@ export function InlineToolRow(props: {
 }
 
 function BlockTool(props: {
+  id?: string
   title?: string
   children: JSX.Element
   onClick?: () => void
@@ -2115,6 +2198,7 @@ function BlockTool(props: {
   const error = createMemo(() => (props.part?.state.status === "error" ? props.part.state.error : undefined))
   return (
     <box
+      id={props.id ?? props.part?.id}
       ref={(el: BoxRenderable) => alwaysSeparate.add(el)}
       border={["left"]}
       paddingTop={1}
@@ -2607,7 +2691,7 @@ function ApplyPatch(props: ToolProps) {
       <Match when={files().length > 0}>
         <For each={files()}>
           {(file) => (
-            <BlockTool title={title(file)} part={props.part}>
+            <BlockTool id={`${props.part.id}:${file.filePath}`} title={title(file)} part={props.part}>
               <Show
                 when={file.type !== "delete"}
                 fallback={

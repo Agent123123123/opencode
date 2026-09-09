@@ -109,7 +109,7 @@ function TextBody(props: { title: string; description?: string; icon?: string })
   )
 }
 
-export function PermissionPrompt(props: { request: PermissionRequest; directory?: string }) {
+export function PermissionPrompt(props: { request: PermissionRequest; directory?: string; heightLimit?: number }) {
   const sdk = useSDK()
   const project = useProject()
   const sync = useSync()
@@ -157,6 +157,7 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
     <Switch>
       <Match when={store.stage === "always"}>
         <Prompt
+          heightLimit={props.heightLimit}
           title="Always allow"
           body={
             <Switch>
@@ -191,6 +192,7 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
       </Match>
       <Match when={store.stage === "reject"}>
         <RejectPrompt
+          heightLimit={props.heightLimit}
           onConfirm={(message) => {
             void reply("reject", message || undefined)
           }}
@@ -408,6 +410,7 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
 
           const body = (
             <Prompt
+              heightLimit={props.heightLimit}
               title="Permission required"
               header={header()}
               body={current.body}
@@ -439,7 +442,7 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
   )
 }
 
-function RejectPrompt(props: { onConfirm: (message: string) => void; onCancel: () => void }) {
+function RejectPrompt(props: { onConfirm: (message: string) => void; onCancel: () => void; heightLimit?: number }) {
   let input: TextareaRenderable
   const { theme } = useTheme()
   const tuiConfig = useTuiConfig()
@@ -471,12 +474,16 @@ function RejectPrompt(props: { onConfirm: (message: string) => void; onCancel: (
 
   return (
     <box
+      maxHeight={props.heightLimit}
       backgroundColor={theme.backgroundPanel}
       border={["left"]}
       borderColor={theme.error}
       customBorderChars={SplitBorder.customBorderChars}
     >
-      <box gap={1} paddingLeft={1} paddingRight={3} paddingTop={1} paddingBottom={1}>
+      <scrollbox
+        minHeight={1}
+        contentOptions={{ gap: 1, paddingLeft: 1, paddingRight: 3, paddingTop: 1, paddingBottom: 1 }}
+      >
         <box flexDirection="row" gap={1} paddingLeft={1}>
           <text fg={theme.error}>{"△"}</text>
           <text fg={theme.text}>Reject permission</text>
@@ -484,7 +491,7 @@ function RejectPrompt(props: { onConfirm: (message: string) => void; onCancel: (
         <box paddingLeft={1}>
           <text fg={theme.textMuted}>Tell OpenCode what to do differently</text>
         </box>
-      </box>
+      </scrollbox>
       <box
         flexDirection={narrow() ? "column" : "row"}
         flexShrink={0}
@@ -498,6 +505,8 @@ function RejectPrompt(props: { onConfirm: (message: string) => void; onCancel: (
         gap={1}
       >
         <textarea
+          minHeight={1}
+          maxHeight={Math.max(1, (props.heightLimit ?? 15) - 5)}
           ref={(val: TextareaRenderable) => {
             input = val
             val.traits = { status: "REJECT" }
@@ -522,6 +531,7 @@ function RejectPrompt(props: { onConfirm: (message: string) => void; onCancel: (
 }
 
 function Prompt<const T extends Record<string, string>>(props: {
+  heightLimit?: number
   title: string
   header?: JSX.Element
   body: JSX.Element
@@ -638,14 +648,17 @@ function Prompt<const T extends Record<string, string>>(props: {
         ? { top: dimensions().height * -1 + 1, bottom: 1, left: 2, right: 2, position: "absolute" }
         : {
             top: 0,
-            maxHeight: 15,
+            maxHeight: Math.min(15, props.heightLimit ?? 15),
             bottom: 0,
             left: 0,
             right: 0,
             position: "relative",
           })}
     >
-      <box gap={1} paddingLeft={1} paddingRight={3} paddingTop={1} paddingBottom={1} flexGrow={1}>
+      <scrollbox
+        minHeight={1}
+        contentOptions={{ gap: 1, paddingLeft: 1, paddingRight: 3, paddingTop: 1, paddingBottom: 1 }}
+      >
         <Show
           when={props.header}
           fallback={
@@ -660,7 +673,7 @@ function Prompt<const T extends Record<string, string>>(props: {
           </box>
         </Show>
         {props.body}
-      </box>
+      </scrollbox>
       <box
         flexDirection={narrow() ? "column" : "row"}
         flexShrink={0}

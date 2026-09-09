@@ -9,6 +9,7 @@ import { ThemeProvider } from "../../../src/context/theme"
 import { TuiConfigProvider } from "../../../src/config"
 import { DiffViewerFileTree } from "../../../src/feature-plugins/system/diff-viewer-file-tree"
 import { TestTuiContexts } from "../../fixture/tui-environment"
+import { tmpdir } from "../../fixture/fixture"
 import {
   allExpandedFileTreeDirectories,
   buildFileTree,
@@ -153,8 +154,25 @@ describe("DiffViewerFileTree", () => {
 })
 
 async function renderFrame(component: () => JSX.Element) {
-  const app = await testRender(() => withTheme(component), { width: 40, height: 10 })
+  await using tmp = await tmpdir()
+  await Bun.write(`${tmp.path}/kv.json`, "{}")
+  let mounted = false
+  const app = await testRender(
+    () =>
+      withTheme(() => {
+        mounted = true
+        return component()
+      }, tmp.path),
+    { width: 40, height: 10 },
+  )
   try {
+    // KVProvider hydrates asynchronously; a blank pre-hydration frame is not
+    // the component's empty state, regardless of how long rendering took.
+    const deadline = Date.now() + 3000
+    while (!mounted) {
+      if (Date.now() > deadline) throw new Error("file tree did not mount")
+      await Bun.sleep(10)
+    }
     await renderOnceSettled(app)
     return await captureSettledFrame(app)
   } finally {
@@ -178,9 +196,9 @@ async function captureSettledFrame(app: Awaited<ReturnType<typeof testRender>>) 
   return app.captureCharFrame()
 }
 
-function withTheme(component: () => JSX.Element) {
+function withTheme(component: () => JSX.Element, state?: string) {
   return (
-    <TestTuiContexts>
+    <TestTuiContexts paths={state ? { state } : undefined}>
       <TuiConfigProvider config={createTuiResolvedConfig()}>
         <KVProvider>
           <ThemeProvider mode="dark">{component()}</ThemeProvider>

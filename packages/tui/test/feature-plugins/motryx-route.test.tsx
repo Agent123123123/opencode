@@ -91,17 +91,25 @@ test("Motryx plugin route composes the standard session surface with the Flow/In
     runtimeExecutions: [],
     executionHistory: [],
     attentionItems: [],
-    runtimeWarnings: [{
-      warningID: "runtime_health_warning_route",
-      kind: "ROUTE_HEALTH_UNCONFIRMED",
-      scope: "SESSION",
-      components: ["OPEN_CODE"],
-      firstObservedAt: "2026-08-17T00:00:00.000Z",
-      lastObservedAt: "2026-08-17T00:00:30.000Z",
-      safeSummary: "OpenCode health could not be confirmed.",
-      dismissible: true,
-    }],
-    attention: { visibleOpenIncidentCount: 0, failedLaneCount: 0, activeAttentionCount: 0, userActionRequiredCount: 0, retryingCount: 0 },
+    runtimeWarnings: [
+      {
+        warningID: "runtime_health_warning_route",
+        kind: "ROUTE_HEALTH_UNCONFIRMED",
+        scope: "SESSION",
+        components: ["OPEN_CODE"],
+        firstObservedAt: "2026-08-17T00:00:00.000Z",
+        lastObservedAt: "2026-08-17T00:00:30.000Z",
+        safeSummary: "OpenCode health could not be confirmed.",
+        dismissible: true,
+      },
+    ],
+    attention: {
+      visibleOpenIncidentCount: 0,
+      failedLaneCount: 0,
+      activeAttentionCount: 0,
+      userActionRequiredCount: 0,
+      retryingCount: 0,
+    },
     diagnostics: [],
   }
   let currentSnapshot: MotryxControlSnapshot = snapshot
@@ -159,10 +167,15 @@ test("Motryx plugin route composes the standard session surface with the Flow/In
     expect(frame).not.toContain("CONVERSATION")
     expect(frame).not.toContain("ROUTABLE")
     expect(frame).toContain("Ship the v1.18.3 migration")
-    expect(frame).toContain("Runtime health could not be confirmed")
-    expect(frame).toContain("Existing work was not interrupted")
+    expect(frame).toContain("! 1")
+    expect(frame).not.toContain("Runtime health could not be confirmed")
+    actions!.showIncidents()
+    frame = await renderUntil(app, (value) => value.includes("Runtime health could not be confirmed"))
     await clickFrameText(app, frame, "[×]")
-    frame = await renderUntil(app, (value) => !value.includes("Runtime health could not be confirmed"))
+    frame = await renderUntil(app, (value) => value.includes("locally"))
+    expect(frame.split("\n")[0]).not.toContain("! 1")
+    actions!.showFlow()
+    frame = await renderUntil(app, (value) => value.includes("TUI migration"))
     expect(frame).toContain("TUI migration")
     expect(frame).toContain("DONE")
     expect(frame).not.toContain("CHECKER_DETAIL_INSPECT_ONLY")
@@ -172,7 +185,6 @@ test("Motryx plugin route composes the standard session surface with the Flow/In
     expect(frame).not.toContain("2 Coordinator")
     expect(frame).not.toContain("/motryx flow")
     expect(frame).not.toContain("lane details")
-    expect(surfaceProps?.showIdleFooter).toBe(false)
     expect(surfaceProps?.showNativeSidebar).toBe(false)
     expect(surfaceProps?.showExitEpilogue).toBe(false)
     expect(surfaceProps?.historyMutation).toBe("disabled")
@@ -237,7 +249,7 @@ test("Motryx plugin route composes the standard session surface with the Flow/In
       expect(responsiveFrame).toContain("PERMISSION QUESTION")
       expect(responsiveFrame).toContain("COMPOSER STATUS")
       if (width === 40 && height === 12) {
-        expect(responsiveFrame).toContain("[FLOW] INSPECT INCIDENTS")
+        expect(responsiveFrame).not.toContain("[FLOW]")
         expect(responsiveFrame).not.toContain("INSPECTINCIDENTS")
       }
     }
@@ -290,7 +302,7 @@ test("Motryx plugin route composes the standard session surface with the Flow/In
   }
 })
 
-test("Motryx runtime error card can be dismissed without resolving the incident", async () => {
+test("Motryx incident details remain reachable without moving conversation or resolving a dismissed incident", async () => {
   const projectID = path.resolve("/tmp/motryx-route-incident-project")
   const sessionID = "ses_route_incident"
   const config: MotryxControlConfig = {
@@ -332,29 +344,37 @@ test("Motryx runtime error card can be dismissed without resolving the incident"
     workflow: undefined,
     lanes: [],
     incidents: [incident],
-    attentionItems: [{
-      attentionID: `incident:${incident.incidentID}`,
-      kind: "FINAL_FAILURE" as const,
-      severity: "ERROR" as const,
-      scopeKind: "SESSION" as const,
-      role: "orchestrator",
-      inputID: "input_orchestrator_failure",
-      summaryID: "summary_orchestrator_failure",
-      incidentID: incident.incidentID,
-      summary: incident.safeSummary,
-      reasonCode: "retry_exhausted_transport",
-      nextAction: "repair_and_retry",
-      actionRequired: true,
-      dismissible: true,
-      presentationState: "VISIBLE" as const,
-      createdAt: incident.openedAt,
-      failureKind: "transport",
-      transportKind: incident.transportKind,
-      transportCode: incident.transportCode,
-      providerID: incident.providerID,
-      modelID: incident.modelID,
-    }],
-    attention: { visibleOpenIncidentCount: 1, failedLaneCount: 0, activeAttentionCount: 1, userActionRequiredCount: 1, retryingCount: 0 },
+    attentionItems: [
+      {
+        attentionID: `incident:${incident.incidentID}`,
+        kind: "FINAL_FAILURE" as const,
+        severity: "ERROR" as const,
+        scopeKind: "SESSION" as const,
+        role: "orchestrator",
+        inputID: "input_orchestrator_failure",
+        summaryID: "summary_orchestrator_failure",
+        incidentID: incident.incidentID,
+        summary: incident.safeSummary,
+        reasonCode: "retry_exhausted_transport",
+        nextAction: "repair_and_retry",
+        actionRequired: true,
+        dismissible: true,
+        presentationState: "VISIBLE" as const,
+        createdAt: incident.openedAt,
+        failureKind: "transport",
+        transportKind: incident.transportKind,
+        transportCode: incident.transportCode,
+        providerID: incident.providerID,
+        modelID: incident.modelID,
+      },
+    ],
+    attention: {
+      visibleOpenIncidentCount: 1,
+      failedLaneCount: 0,
+      activeAttentionCount: 1,
+      userActionRequiredCount: 1,
+      retryingCount: 0,
+    },
   } as MotryxControlSnapshot
   let dismissals = 0
   let actions: MotryxRouteActions | undefined
@@ -372,8 +392,17 @@ test("Motryx runtime error card can be dismissed without resolving the incident"
             snapshot = {
               ...snapshot,
               incidents: [{ ...incident, presentationState: "DISMISSED" }],
-              attentionItems: snapshot.attentionItems.map((item) => ({ ...item, presentationState: "DISMISSED" as const })),
-              attention: { visibleOpenIncidentCount: 0, failedLaneCount: 0, activeAttentionCount: 0, userActionRequiredCount: 0, retryingCount: 0 },
+              attentionItems: snapshot.attentionItems.map((item) => ({
+                ...item,
+                presentationState: "DISMISSED" as const,
+              })),
+              attention: {
+                visibleOpenIncidentCount: 0,
+                failedLaneCount: 0,
+                activeAttentionCount: 0,
+                userActionRequiredCount: 0,
+                retryingCount: 0,
+              },
             }
             return Response.json({
               schemaVersion: 12,
@@ -401,63 +430,69 @@ test("Motryx runtime error card can be dismissed without resolving the incident"
     { width: 100, height: 24 },
   )
   try {
-    let frame = await renderUntil(app, (value) => value.includes(incident.safeSummary))
-    expect(frame).toContain("Runtime error · Orchestrator")
+    let frame = await renderUntil(app, (value) => value.includes("! 1"))
+    expect(frame).toContain("No workflow yet.")
+    expect(frame).not.toContain("Runtime error")
+    actions!.showIncidents()
+    frame = await renderUntil(app, (value) => value.includes("attempts: 3"))
+    expect(frame).toContain("OPEN · Orchestrator · transport")
     expect(frame).toContain("attempts: 3")
     expect(frame).toContain("retries exhausted")
     expect(frame).toContain("not retryable")
-    expect(frame).toContain("transport UND_ERR_HEADERS_TIMEOUT")
-    expect(frame).toContain("kind timeout")
-    expect(frame).toContain("zai/glm-5.2")
-    expect(frame).toContain("No workflow yet.")
-    expect(frame).toContain("! 1")
-    expect(frame).not.toContain("Final failure · Orchestrator")
-    for (const [width, height] of [[40, 12], [60, 17], [80, 21], [60, 24]]) {
+    expect(frame).toContain("UND_ERR_HEADERS_TIMEOUT")
+    expect(frame).not.toContain("Final failure")
+    expect(dismissals).toBe(0)
+    actions!.showFlow()
+    const original = snapshot
+    for (const [width, height] of [
+      [40, 12],
+      [60, 17],
+      [80, 21],
+      [60, 24],
+    ]) {
       app.resize(width, height)
       frame = await renderUntil(app, (value) => value.includes("COMPOSER BOTTOM"))
-      expect(frame).toContain("transport · Orchestrator")
+      const before = frame.split("\n").findIndex((line) => line.includes("COMPOSER BOTTOM"))
+      snapshot = {
+        ...original,
+        runtimeWarnings: [
+          {
+            warningID: "combined_health_warning",
+            kind: "ROUTE_HEALTH_UNCONFIRMED",
+            scope: "SESSION",
+            components: ["OPEN_CODE"],
+            firstObservedAt: "2026-08-17T00:00:00.000Z",
+            lastObservedAt: "2026-08-17T00:00:30.000Z",
+            safeSummary: "OpenCode health could not be confirmed.",
+            dismissible: true,
+          },
+        ],
+        attentionItems: [
+          ...original.attentionItems,
+          {
+            ...original.attentionItems[0],
+            attentionID: "combined_unknown_outcome",
+            kind: "OUTCOME_UNKNOWN",
+            reasonCode: "unknown",
+            nextAction: "reconcile_outcome",
+          },
+        ],
+      }
+      await actions!.refresh()
+      frame = await renderUntil(app, (value) => value.includes("! 3"))
       expect(frame).toContain("COMPOSER DRAFT")
-      expect(frame.split("\n").findIndex((line) => line.includes("COMPOSER BOTTOM")))
-        .toBeLessThan(frame.split("\n").findIndex((line) => line.includes("[FLOW]")))
+      expect(frame.split("\n").findIndex((line) => line.includes("COMPOSER BOTTOM"))).toBe(before)
+      expect(frame).not.toContain("Runtime health:")
+      snapshot = original
+      await actions!.refresh()
+      await renderUntil(app, (value) => value.includes("! 1"))
     }
-    expect(dismissals).toBe(0)
-    const original = snapshot
-    snapshot = {
-      ...snapshot,
-      runtimeWarnings: [{
-        warningID: "combined_health_warning",
-        kind: "ROUTE_HEALTH_UNCONFIRMED",
-        scope: "SESSION",
-        components: ["OPEN_CODE"],
-        firstObservedAt: "2026-08-17T00:00:00.000Z",
-        lastObservedAt: "2026-08-17T00:00:30.000Z",
-        safeSummary: "OpenCode health could not be confirmed.",
-        dismissible: true,
-      }],
-      attentionItems: [...snapshot.attentionItems, {
-        ...snapshot.attentionItems[0],
-        attentionID: "combined_unknown_outcome",
-        kind: "OUTCOME_UNKNOWN",
-        reasonCode: "unknown",
-        nextAction: "reconcile_outcome",
-      }],
-    }
-    await actions!.refresh()
-    for (const [width, height] of [[40, 12], [60, 17], [80, 21]]) {
-      app.resize(width, height)
-      frame = await renderUntil(app, (value) => value.includes("Runtime health:"))
-      expect(frame).toContain("COMPOSER DRAFT")
-      expect(frame).toContain("COMPOSER BOTTOM")
-      expect(frame).toContain("Outcome unknown")
-      expect(frame.split("\n").findIndex((line) => line.includes("COMPOSER BOTTOM")))
-        .toBeLessThan(frame.split("\n").findIndex((line) => line.includes("[FLOW]")))
-    }
-    snapshot = original
-    await actions!.refresh()
-    frame = await renderUntil(app, (value) => !value.includes("Runtime health:"))
+    app.resize(120, 40)
+    actions!.showIncidents()
+    frame = await renderUntil(app, (value) => value.includes("attempts: 3"))
     await clickFrameText(app, frame, "[×]")
-    frame = await renderUntil(app, (value) => !value.includes(incident.safeSummary))
-    expect(frame).not.toContain("Runtime error · Orchestrator")
+    frame = await renderUntil(app, (value) => value.includes("dismissed"))
+    expect(frame.split("\n")[0]).not.toContain("! 1")
     expect(dismissals).toBe(1)
     expect(snapshot.incidents[0]).toMatchObject({ status: "OPEN", presentationState: "DISMISSED" })
   } finally {
@@ -471,40 +506,87 @@ test("A2A errors can be closed locally while a new failed request remains visibl
   const sessionID = "ses_a2a_visibility"
   const config = { apiURL: "http://127.0.0.1:28999", token: "fixture", projectID, orchestratorSessionID: sessionID }
   const lifecycle = new AbortController()
-  const api = { ...createTuiPluginApi(), lifecycle: { signal: lifecycle.signal, onDispose: () => () => {} } } as unknown as TuiPluginApi
-  const failure = { attentionID: "a2a-failure:first", kind: "A2A_FAILURE" as const, severity: "ERROR" as const,
-    scopeKind: "SESSION" as const, role: "analyst", inputID: "first", summary: "Analyst provider rejected the reply request.",
-    failureKind: "authentication", actionRequired: false, dismissible: true, presentationState: "VISIBLE" as const, createdAt: 1 }
-  let snapshot = { ...debugRouteSnapshot(projectID, sessionID), workflow: undefined, lanes: [], incidents: [], attentionItems: [failure] }
+  const api = {
+    ...createTuiPluginApi(),
+    lifecycle: { signal: lifecycle.signal, onDispose: () => () => {} },
+  } as unknown as TuiPluginApi
+  const failure = {
+    attentionID: "a2a-failure:first",
+    kind: "A2A_FAILURE" as const,
+    severity: "ERROR" as const,
+    scopeKind: "SESSION" as const,
+    role: "analyst",
+    inputID: "first",
+    summary: "Analyst provider rejected the reply request.",
+    failureKind: "authentication",
+    actionRequired: false,
+    dismissible: true,
+    presentationState: "VISIBLE" as const,
+    createdAt: 1,
+  }
+  let snapshot = {
+    ...debugRouteSnapshot(projectID, sessionID),
+    workflow: undefined,
+    lanes: [],
+    incidents: [],
+    attentionItems: [failure],
+  }
   let actions: MotryxRouteActions | undefined
   const requests: string[] = []
   const events = new ReadableStream<Uint8Array>()
-  const app = await testRender(() => <MotryxRoute api={api} config={config}
-    fetcher={async (input) => {
-      const url = new URL(input instanceof Request ? input.url : input.toString())
-      requests.push(url.pathname)
-      if (url.pathname === "/ic/workflow") return Response.json(snapshot)
-      return new Response(events, { headers: { "content-type": "text/event-stream" } })
-    }} sessionSurface={() => <text>Conversation remains available</text>}
-    onActionsAvailable={(next) => { actions = next }} />, { width: 120, height: 32 })
+  const app = await testRender(
+    () => (
+      <MotryxRoute
+        api={api}
+        config={config}
+        fetcher={async (input) => {
+          const url = new URL(input instanceof Request ? input.url : input.toString())
+          requests.push(url.pathname)
+          if (url.pathname === "/ic/workflow") return Response.json(snapshot)
+          return new Response(events, { headers: { "content-type": "text/event-stream" } })
+        }}
+        sessionSurface={() => <text>Conversation remains available</text>}
+        onActionsAvailable={(next) => {
+          actions = next
+        }}
+      />
+    ),
+    { width: 120, height: 32 },
+  )
   try {
-    let frame = await renderUntil(app, (value) => value.includes(failure.summary))
+    await renderUntil(app, (value) => value.includes("! 1"))
+    actions!.showIncidents()
+    let frame = await renderUntil(app, (value) => value.includes("A2A reply failed"))
     expect(frame).toContain("A2A reply failed · Analyst")
     expect(frame).toContain("Conversation remains available")
     await clickFrameText(app, frame, "[×]")
     await actions!.refresh()
-    frame = await renderUntil(app, (value) => !value.includes(failure.summary))
-    expect(frame).not.toContain("A2A reply failed")
+    frame = await renderUntil(app, (value) => value.includes("locally"))
+    expect(frame.split("\n")[0]).not.toContain("! 1")
     expect(requests).not.toContain("/ic/incidents/first/dismiss")
     expect(requests.filter((url) => url.includes("dismiss"))).toEqual([])
     expect(snapshot.attentionItems[0].presentationState).toBe("VISIBLE")
-    snapshot = { ...snapshot, attentionItems: [...snapshot.attentionItems,
-      { ...failure, attentionID: "a2a-failure:second", inputID: "second", summary: "Another request failed.", createdAt: 2 }] }
+    snapshot = {
+      ...snapshot,
+      attentionItems: [
+        ...snapshot.attentionItems,
+        {
+          ...failure,
+          attentionID: "a2a-failure:second",
+          inputID: "second",
+          summary: "Another request failed.",
+          createdAt: 2,
+        },
+      ],
+    }
     await actions!.refresh()
     frame = await renderUntil(app, (value) => value.includes("Another request failed."))
-    expect(frame).not.toContain(failure.summary)
+    expect(frame).toContain("locally")
     expect(frame).toContain("A2A reply failed · Analyst")
-  } finally { lifecycle.abort(); app.renderer.destroy() }
+  } finally {
+    lifecycle.abort()
+    app.renderer.destroy()
+  }
 })
 
 test("Motryx separates runtime retry from stable reconciliation attention", async () => {
@@ -584,13 +666,17 @@ test("Motryx separates runtime retry from stable reconciliation attention", asyn
   )
 
   try {
+    await renderUntil(app, (value) => value.includes("! 1"))
+    actions!.showIncidents()
     let frame = await renderUntil(app, (value) => value.includes("OpenCode is retrying"))
-    expect(frame).toContain("Provider retry · Orchestrator")
+    expect(frame).toContain("Provider retry")
     expect(frame).toContain("provider retry 1/2")
     expect(frame).toContain("next wait_for_retry")
-    expect(frame).toContain("No workflow yet.")
+    expect(frame).toContain("[INCIDENTS]")
 
     await clickFrameText(app, frame, "[×]")
+    await renderUntil(app, (value) => value.includes("locally"))
+    actions!.showFlow()
     frame = await renderUntil(app, (value) => !value.includes("OpenCode is retrying"))
     expect(frame).not.toContain("OpenCode is retrying")
     await actions!.refresh()
@@ -652,11 +738,12 @@ test("Motryx separates runtime retry from stable reconciliation attention", asyn
     actions!.showFlow()
     await app.renderOnce()
     await actions!.refresh()
-    frame = await renderUntil(app, (value) => value.includes("previous input may have been admitted"))
-    expect(frame).toContain("Outcome unknown · Orchestrator")
+    actions!.showIncidents()
+    frame = await renderUntil(app, (value) => value.includes("Outcome unknown"))
+    expect(frame).toContain("Outcome unknown")
     expect(frame).toContain("HTTP 503")
     expect(frame).toContain("transport UND_ERR_HEADERS_TIMEOUT")
-    expect(frame).toContain("next reconcile_outcome")
+    expect(frame).toContain("reconcile_outcome")
 
     const laneSnapshot = debugRouteSnapshot(projectID, sessionID)
     const waitingAttention = {
@@ -681,30 +768,32 @@ test("Motryx separates runtime retry from stable reconciliation attention", asyn
         displayStatus: "PENDING",
       })),
       runtimeExecutions: [],
-      executionHistory: [{
-        summaryID: "summary_lane_reconciliation",
-        evidenceKey: "evidence_lane_reconciliation",
-        origin: "FRAMEWORK",
-        productSessionID: sessionID,
-        ownerKind: "FUNCTION_SLOT",
-        ownerID: "slot_debug_coordinator",
-        ownerGeneration: 1,
-        workflowID: "workflow",
-        laneID: "lane_debug",
-        role: "coordinator",
-        checkpointKind: "LANE",
-        checkpointID: "lane_debug",
-        sessionID: "ses_coordinator",
-        inputID: "msg_lane_reconciliation",
-        turnID: "turn_lane_reconciliation",
-        terminalKind: "FAILED",
-        terminalEventID: "event_lane_reconciliation",
-        terminalProofRef: "proof_lane_reconciliation",
-        terminalAt: Date.now() - 1_000,
-        failureKind: "provider_internal",
-        safeSummary: "Provider returned an ambiguous response after the tool effect.",
-        createdAt: Date.now() - 4_000,
-      }],
+      executionHistory: [
+        {
+          summaryID: "summary_lane_reconciliation",
+          evidenceKey: "evidence_lane_reconciliation",
+          origin: "FRAMEWORK",
+          productSessionID: sessionID,
+          ownerKind: "FUNCTION_SLOT",
+          ownerID: "slot_debug_coordinator",
+          ownerGeneration: 1,
+          workflowID: "workflow",
+          laneID: "lane_debug",
+          role: "coordinator",
+          checkpointKind: "LANE",
+          checkpointID: "lane_debug",
+          sessionID: "ses_coordinator",
+          inputID: "msg_lane_reconciliation",
+          turnID: "turn_lane_reconciliation",
+          terminalKind: "FAILED",
+          terminalEventID: "event_lane_reconciliation",
+          terminalProofRef: "proof_lane_reconciliation",
+          terminalAt: Date.now() - 1_000,
+          failureKind: "provider_internal",
+          safeSummary: "Provider returned an ambiguous response after the tool effect.",
+          createdAt: Date.now() - 4_000,
+        },
+      ],
       attentionItems: [waitingAttention],
       attention: {
         visibleOpenIncidentCount: 0,
@@ -728,17 +817,20 @@ test("Motryx separates runtime retry from stable reconciliation attention", asyn
     currentSnapshot = {
       ...currentSnapshot,
       projectionRevision: "server:shared-slot-attention",
-      attentionItems: [{
-        ...waitingAttention,
-        attentionID: "attention_shared_slot",
-        laneID: undefined,
-        slotID: "slot_debug_coordinator",
-        summary: "Shared coordinator Slot needs reconciliation.",
-      }],
+      attentionItems: [
+        {
+          ...waitingAttention,
+          attentionID: "attention_shared_slot",
+          laneID: undefined,
+          slotID: "slot_debug_coordinator",
+          summary: "Shared coordinator Slot needs reconciliation.",
+        },
+      ],
     }
     await actions!.refresh()
-    frame = await renderUntil(app, (value) => value.includes("Shared coordinator Slot needs reconciliation."))
-    expect(frame).toContain("Shared coordinator Slot needs reconciliation.")
+    frame = await renderUntil(app, (value) => value.includes("Shared coordinator Slot needs"))
+    expect(frame).toContain("Shared coordinator Slot needs")
+    expect(frame).toContain("reconciliation.")
   } finally {
     lifecycle.abort()
     app.renderer.destroy()
@@ -875,7 +967,13 @@ test("/sessions switches the exact Motryx Orchestrator and rebinds conversation 
     executionHistory: [],
     attentionItems: [],
     runtimeWarnings: [],
-    attention: { visibleOpenIncidentCount: 0, failedLaneCount: 0, activeAttentionCount: 0, userActionRequiredCount: 0, retryingCount: 0 },
+    attention: {
+      visibleOpenIncidentCount: 0,
+      failedLaneCount: 0,
+      activeAttentionCount: 0,
+      userActionRequiredCount: 0,
+      retryingCount: 0,
+    },
     diagnostics: [],
   })
   const sessionList = (currentID: string, bindingGeneration: number) => ({
@@ -889,15 +987,16 @@ test("/sessions switches the exact Motryx Orchestrator and rebinds conversation 
       ownerRunID: currentID === sourceID ? "run_source" : "run_target",
     },
     transition: null,
-    sessions: currentID === sourceID
-      ? [
-          { sessionID: sourceID, title: titles.get(sourceID)!, lastRoutedAt: now, state: "CURRENT" },
-          { sessionID: targetID, title: titles.get(targetID)!, lastRoutedAt: now, state: "RESUMABLE" },
-        ]
-      : [
-          { sessionID: targetID, title: titles.get(targetID)!, lastRoutedAt: now, state: "CURRENT" },
-          { sessionID: sourceID, title: titles.get(sourceID)!, lastRoutedAt: now, state: "RESUMABLE" },
-        ],
+    sessions:
+      currentID === sourceID
+        ? [
+            { sessionID: sourceID, title: titles.get(sourceID)!, lastRoutedAt: now, state: "CURRENT" },
+            { sessionID: targetID, title: titles.get(targetID)!, lastRoutedAt: now, state: "RESUMABLE" },
+          ]
+        : [
+            { sessionID: targetID, title: titles.get(targetID)!, lastRoutedAt: now, state: "CURRENT" },
+            { sessionID: sourceID, title: titles.get(sourceID)!, lastRoutedAt: now, state: "RESUMABLE" },
+          ],
   })
   let actions: MotryxRouteActions | undefined
   let surface: SessionSurfaceProps | undefined
@@ -1020,7 +1119,9 @@ test("/sessions switches the exact Motryx Orchestrator and rebinds conversation 
     await renderUntil(app, (value) => value.includes(`SWITCHED SURFACE ${sourceID}`))
     staleRename?.onConfirm?.("Stale target")
     expect(updates).toHaveLength(3)
-    expect(notices).toContain("Motryx route changed while rename was open. Run /rename again for the current Orchestrator.")
+    expect(notices).toContain(
+      "Motryx route changed while rename was open. Run /rename again for the current Orchestrator.",
+    )
 
     await actions!.rename()
     dialogRender?.()
@@ -1231,9 +1332,7 @@ test("debug targets require exact OpenCode readback and reset on generation chan
     expect(renameDialog?.value).toBe("Debug Orchestrator")
     renameDialog?.onConfirm?.("Renamed while viewing worker")
     await renderUntil(app, () => renames.length === 1)
-    expect(renames).toEqual([
-      { sessionID: config.orchestratorSessionID, title: "Renamed while viewing worker" },
-    ])
+    expect(renames).toEqual([{ sessionID: config.orchestratorSessionID, title: "Renamed while viewing worker" }])
 
     for (const [width, height] of [
       [40, 12],
@@ -1385,7 +1484,96 @@ function debugRouteSnapshot(projectID: string, orchestratorSessionID: string, ge
     executionHistory: [],
     attentionItems: [],
     runtimeWarnings: [],
-    attention: { visibleOpenIncidentCount: 0, failedLaneCount: 0, activeAttentionCount: 0, userActionRequiredCount: 0, retryingCount: 0 },
+    attention: {
+      visibleOpenIncidentCount: 0,
+      failedLaneCount: 0,
+      activeAttentionCount: 0,
+      userActionRequiredCount: 0,
+      retryingCount: 0,
+    },
     diagnostics: [],
   }
 }
+
+test("health warnings remain reachable without a snapshot when the sidecar is folded", async () => {
+  const { createSignal, Show } = await import("solid-js")
+  const projectID = path.resolve("/tmp/motryx-warning-no-snapshot")
+  const config: MotryxControlConfig = {
+    apiURL: "http://test",
+    token: "test",
+    projectID,
+    orchestratorSessionID: "ses_warning",
+  }
+  const lifecycle = new AbortController()
+  const base = createTuiPluginApi()
+  const [modal, setModal] = createSignal<() => import("solid-js").JSX.Element>()
+  const api = {
+    ...base,
+    lifecycle: { signal: lifecycle.signal, onDispose: () => () => {} },
+    ui: {
+      ...base.ui,
+      dialog: {
+        ...base.ui.dialog,
+        replace: (render: () => import("solid-js").JSX.Element) => setModal(() => render),
+        clear: () => setModal(undefined),
+      },
+    },
+  } as unknown as TuiPluginApi
+  let actions: MotryxRouteActions | undefined
+  const warning = {
+    warningID: "warning_without_snapshot",
+    kind: "ROUTE_HEALTH_UNCONFIRMED",
+    scope: "SESSION",
+    components: ["OPEN_CODE"],
+    firstObservedAt: "2026-09-09T00:00:00.000Z",
+    lastObservedAt: "2026-09-09T00:00:00.000Z",
+    safeSummary: "NO_SNAPSHOT_WARNING",
+    dismissible: true,
+  }
+  const app = await testRender(
+    () => (
+      <>
+        <MotryxRoute
+          api={api}
+          config={config}
+          onActionsAvailable={(value) => {
+            actions = value
+          }}
+          sessionSurface={() => <text>CONVERSATION</text>}
+          fetcher={async (input) => {
+            const url = new URL(input instanceof Request ? input.url : input.toString())
+            if (url.pathname === "/ic/health")
+              return Response.json({
+                schemaVersion: 12,
+                status: "starting",
+                projectID,
+                orchestratorSessionID: config.orchestratorSessionID,
+                serverGeneration: "test",
+                runtimeWarnings: [warning],
+              })
+            return new Response("starting", { status: 503 })
+          }}
+        />
+        <Show when={modal()}>
+          {(render) => (
+            <box position="absolute" top={2} width={58} height={13}>
+              {render()()}
+            </box>
+          )}
+        </Show>
+      </>
+    ),
+    { width: 60, height: 17 },
+  )
+  try {
+    await renderUntil(app, (frame) => frame.includes("!1"))
+    actions!.showIncidents()
+    const frame = await renderUntil(app, (value) => value.includes("NO_SNAPSHOT_WARNING"))
+    expect(frame).toContain("Runtime health")
+    expect(frame).toContain("NO_SNAPSHOT_WARNING")
+    expect(modal()).toBeDefined()
+  } finally {
+    lifecycle.abort()
+    app.renderer.destroy()
+  }
+})

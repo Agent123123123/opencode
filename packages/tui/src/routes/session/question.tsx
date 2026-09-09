@@ -1,7 +1,7 @@
 import { createStore } from "solid-js/store"
 import { createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js"
 import { useRenderer } from "@opentui/solid"
-import type { TextareaRenderable } from "@opentui/core"
+import { CliRenderEvents, type BoxRenderable, type ScrollBoxRenderable, type TextareaRenderable } from "@opentui/core"
 import { selectedForeground, tint, useTheme } from "../../context/theme"
 import type { QuestionAnswer, QuestionRequest } from "@opencode-ai/sdk/v2"
 import { useSDK } from "../../context/sdk"
@@ -12,7 +12,7 @@ import { useTuiStartup } from "../../context/runtime"
 
 const QUESTION_MODE = "question"
 
-export function QuestionPrompt(props: { request: QuestionRequest; directory?: string }) {
+export function QuestionPrompt(props: { request: QuestionRequest; directory?: string; heightLimit?: number }) {
   const sdk = useSDK()
   const { theme } = useTheme()
   const renderer = useRenderer()
@@ -33,6 +33,21 @@ export function QuestionPrompt(props: { request: QuestionRequest; directory?: st
   })
 
   let textarea: TextareaRenderable | undefined
+  let body: ScrollBoxRenderable | undefined
+  const choices = new Map<number, BoxRenderable>()
+  let revealSelection = false
+  const reveal = () => {
+    if (!revealSelection || !body) return
+    revealSelection = false
+    const choice = choices.get(store.selected)
+    if (!choice || choice.isDestroyed) return
+    const top = choice.y - body.viewport.y
+    const height = Math.min(choice.height, body.viewport.height)
+    if (top < 0) body.scrollBy(top)
+    else if (top + height > body.viewport.height) body.scrollBy(top + height - body.viewport.height)
+  }
+  renderer.on(CliRenderEvents.FRAME, reveal)
+  onCleanup(() => renderer.off(CliRenderEvents.FRAME, reveal))
 
   const question = createMemo(() => questions()[store.tab])
   const confirm = createMemo(() => !single() && store.tab === questions().length)
@@ -119,6 +134,7 @@ export function QuestionPrompt(props: { request: QuestionRequest; directory?: st
   }
 
   function moveTo(index: number) {
+    revealSelection = true
     setStore("selected", index)
   }
 
@@ -312,12 +328,20 @@ export function QuestionPrompt(props: { request: QuestionRequest; directory?: st
 
   return (
     <box
+      maxHeight={props.heightLimit}
+      flexShrink={0}
       backgroundColor={theme.backgroundPanel}
       border={["left"]}
       borderColor={theme.accent}
       customBorderChars={SplitBorder.customBorderChars}
     >
-      <box gap={1} paddingLeft={1} paddingRight={3} paddingTop={1} paddingBottom={1}>
+      <scrollbox
+        ref={(value) => {
+          body = value
+        }}
+        minHeight={1}
+        contentOptions={{ gap: 1, paddingLeft: 1, paddingRight: 3, paddingTop: 1, paddingBottom: 1 }}
+      >
         <Show when={!single()}>
           <box flexDirection="row" gap={1} paddingLeft={1}>
             <For each={questions()}>
@@ -392,6 +416,7 @@ export function QuestionPrompt(props: { request: QuestionRequest; directory?: st
                   const picked = () => store.answers[store.tab]?.includes(opt.label) ?? false
                   return (
                     <box
+                      ref={(value) => choices.set(i(), value)}
                       onMouseOver={() => moveTo(i())}
                       onMouseDown={() => moveTo(i())}
                       onMouseUp={() => {
@@ -424,6 +449,7 @@ export function QuestionPrompt(props: { request: QuestionRequest; directory?: st
               </For>
               <Show when={custom()}>
                 <box
+                  ref={(value) => choices.set(options().length, value)}
                   onMouseOver={() => moveTo(options().length)}
                   onMouseDown={() => moveTo(options().length)}
                   onMouseUp={() => {
@@ -502,7 +528,7 @@ export function QuestionPrompt(props: { request: QuestionRequest; directory?: st
             }}
           </For>
         </Show>
-      </box>
+      </scrollbox>
       <box
         flexDirection="row"
         flexShrink={0}

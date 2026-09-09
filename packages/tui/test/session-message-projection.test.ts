@@ -82,17 +82,17 @@ test("keeps Motryx control inputs durable but synthetic in the conversation surf
     [
       {
         id: "msg_user",
-        type: "user",
+        type: "user" as const,
         text: "Visible user input",
         time: { created: 1 },
       },
       {
         id: "msg_wake",
-        type: "user",
+        type: "user" as const,
         text: '<ic_agent_wakeup>\n{"wake_id":"wake-1"}\n</ic_agent_wakeup>',
         time: { created: 2 },
       },
-    ],
+    ].toReversed(),
     {
       agent: "orchestrator",
       model: { providerID: "zai-coding-plan", id: "glm-5.2", variant: "default" },

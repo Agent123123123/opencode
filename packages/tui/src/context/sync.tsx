@@ -39,6 +39,7 @@ import {
   projectQuestionRequestToLegacy,
   projectSessionInfoToLegacy,
   projectSessionMessagesToLegacy,
+  type SessionMessageProjectionCache,
 } from "./session-message-projection"
 import { v2TurnHasTerminalAssistant } from "./session-v2"
 
@@ -193,18 +194,28 @@ export const {
         .then((x) => (x.data ?? []).toSorted((a, b) => a.id.localeCompare(b.id)))
     }
 
+    const projections = new Map<string, SessionMessageProjectionCache>()
+
     function projectV2Session(sessionID: string) {
       const sourceData = v2Data()
       const info = sourceData.session.get(sessionID)
       const source = sourceData.session.message.list(sessionID)
       if (!info || !source) return
       const session = projectSessionInfoToLegacy(info)
-      const projected = projectSessionMessagesToLegacy(sessionID, source, {
-        agent: info.agent,
-        model: info.model,
-        directory: info.location.directory,
-      })
-      const visible = projected.messages.slice(-100)
+      const cache = projections.get(sessionID) ?? new Map()
+      projections.set(sessionID, cache)
+      const projected = projectSessionMessagesToLegacy(
+        sessionID,
+        source,
+        {
+          agent: info.agent,
+          model: info.model,
+          directory: info.location.directory,
+        },
+        cache,
+        (id) => sourceData.session.message.version(sessionID, id),
+      )
+      const visible = projected.messages
       const visibleIDs = new Set(visible.map((message) => message.id))
       batch(() => {
         const match = search(store.session, sessionID, (item) => item.id)
@@ -242,12 +253,8 @@ export const {
             }
           }),
         )
-        for (const message of visible)
-          setStore(
-            "part",
-            message.id,
-            reconcile(projected.parts[message.id] ?? [], { key: "id", merge: true }),
-          )
+        for (const message of visible.filter((item) => projected.changed.has(item.id)))
+          setStore("part", message.id, reconcile(projected.parts[message.id] ?? [], { key: "id", merge: true }))
         setStore("message", sessionID, reconcile(visible, { key: "id", merge: true }))
       })
     }

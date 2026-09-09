@@ -1,3 +1,5 @@
+import { MIN_CONVERSATION_HEIGHT } from "../../component/prompt/layout"
+
 export type MotryxProductLayout = {
   mode: "wide" | "compact-side" | "stacked" | "conversation-first" | "safe"
   direction: "row" | "column"
@@ -7,22 +9,27 @@ export type MotryxProductLayout = {
   collapsedSidecar: boolean
 }
 
-export function motryxProductLayout(input: { width: number; height: number }): MotryxProductLayout {
+export function motryxProductLayout(input: {
+  width: number
+  height: number
+  targetRows?: number
+}): MotryxProductLayout {
+  const available = input.height - 1 - (input.targetRows ?? 0)
   if (input.width < 40 || input.height < 12) {
     return {
       mode: "safe",
       direction: "column",
       sidecarHeight: 2,
-      showSidecar: true,
+      showSidecar: false,
       collapsedSidecar: true,
     }
   }
-  if (input.height <= 16) {
+  if (available < MIN_CONVERSATION_HEIGHT + 6 + 2) {
     return {
       mode: "conversation-first",
       direction: "column",
       sidecarHeight: 2,
-      showSidecar: true,
+      showSidecar: available >= MIN_CONVERSATION_HEIGHT + 2,
       collapsedSidecar: true,
     }
   }
@@ -49,7 +56,10 @@ export function motryxProductLayout(input: { width: number; height: number }): M
   return {
     mode: "stacked",
     direction: "column",
-    sidecarHeight: input.height <= 21 ? 6 : Math.min(11, Math.max(7, Math.floor(input.height * 0.36))),
+    sidecarHeight: Math.min(
+      available - MIN_CONVERSATION_HEIGHT - 2,
+      input.height <= 21 ? 6 : Math.min(11, Math.max(7, Math.floor(input.height * 0.36))),
+    ),
     showSidecar: true,
     collapsedSidecar: false,
   }
