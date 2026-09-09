@@ -75,7 +75,7 @@ export function parseMotryxModelApplication(value: unknown, tier: MotryxModelTie
     throw new Error("Missing model application failure")
   }
   const online = application.status === "accepted" || application.status === "partial"
-  if (online && (application.schemaVersion !== 11 || application.tier !== tier ||
+  if (online && (application.schemaVersion !== 12 || application.tier !== tier ||
     !Array.isArray(application.accepted) || !Array.isArray(application.unconfirmed))) {
     throw new Error("Invalid online model application response")
   }

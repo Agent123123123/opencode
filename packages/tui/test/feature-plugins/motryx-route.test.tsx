@@ -34,7 +34,7 @@ test("Motryx plugin route composes the standard session surface with the Flow/In
   const checkerDetail =
     "CHECKER_DETAIL_INSPECT_ONLY registered snapshot evidence implementation showing recommended_skills"
   const snapshot: MotryxControlSnapshot = {
-    schemaVersion: 11,
+    schemaVersion: 12,
     projectID,
     orchestratorSessionID: config.orchestratorSessionID,
     projectionRevision: "server-generation:ic:route",
@@ -376,7 +376,7 @@ test("Motryx runtime error card can be dismissed without resolving the incident"
               attention: { visibleOpenIncidentCount: 0, failedLaneCount: 0, activeAttentionCount: 0, userActionRequiredCount: 0, retryingCount: 0 },
             }
             return Response.json({
-              schemaVersion: 11,
+              schemaVersion: 12,
               incidentID: incident.incidentID,
               status: "OPEN",
               presentationState: "DISMISSED",
@@ -403,6 +403,9 @@ test("Motryx runtime error card can be dismissed without resolving the incident"
   try {
     let frame = await renderUntil(app, (value) => value.includes(incident.safeSummary))
     expect(frame).toContain("Runtime error · Orchestrator")
+    expect(frame).toContain("attempts: 3")
+    expect(frame).toContain("retries exhausted")
+    expect(frame).toContain("not retryable")
     expect(frame).toContain("transport UND_ERR_HEADERS_TIMEOUT")
     expect(frame).toContain("kind timeout")
     expect(frame).toContain("zai/glm-5.2")
@@ -461,6 +464,47 @@ test("Motryx runtime error card can be dismissed without resolving the incident"
     lifecycle.abort()
     app.renderer.destroy()
   }
+})
+
+test("A2A errors can be closed locally while a new failed request remains visible", async () => {
+  const projectID = "/tmp/motryx-a2a-visibility"
+  const sessionID = "ses_a2a_visibility"
+  const config = { apiURL: "http://127.0.0.1:28999", token: "fixture", projectID, orchestratorSessionID: sessionID }
+  const lifecycle = new AbortController()
+  const api = { ...createTuiPluginApi(), lifecycle: { signal: lifecycle.signal, onDispose: () => () => {} } } as unknown as TuiPluginApi
+  const failure = { attentionID: "a2a-failure:first", kind: "A2A_FAILURE" as const, severity: "ERROR" as const,
+    scopeKind: "SESSION" as const, role: "analyst", inputID: "first", summary: "Analyst provider rejected the reply request.",
+    failureKind: "authentication", actionRequired: false, dismissible: true, presentationState: "VISIBLE" as const, createdAt: 1 }
+  let snapshot = { ...debugRouteSnapshot(projectID, sessionID), workflow: undefined, lanes: [], incidents: [], attentionItems: [failure] }
+  let actions: MotryxRouteActions | undefined
+  const requests: string[] = []
+  const events = new ReadableStream<Uint8Array>()
+  const app = await testRender(() => <MotryxRoute api={api} config={config}
+    fetcher={async (input) => {
+      const url = new URL(input instanceof Request ? input.url : input.toString())
+      requests.push(url.pathname)
+      if (url.pathname === "/ic/workflow") return Response.json(snapshot)
+      return new Response(events, { headers: { "content-type": "text/event-stream" } })
+    }} sessionSurface={() => <text>Conversation remains available</text>}
+    onActionsAvailable={(next) => { actions = next }} />, { width: 120, height: 32 })
+  try {
+    let frame = await renderUntil(app, (value) => value.includes(failure.summary))
+    expect(frame).toContain("A2A reply failed · Analyst")
+    expect(frame).toContain("Conversation remains available")
+    await clickFrameText(app, frame, "[×]")
+    await actions!.refresh()
+    frame = await renderUntil(app, (value) => !value.includes(failure.summary))
+    expect(frame).not.toContain("A2A reply failed")
+    expect(requests).not.toContain("/ic/incidents/first/dismiss")
+    expect(requests.filter((url) => url.includes("dismiss"))).toEqual([])
+    expect(snapshot.attentionItems[0].presentationState).toBe("VISIBLE")
+    snapshot = { ...snapshot, attentionItems: [...snapshot.attentionItems,
+      { ...failure, attentionID: "a2a-failure:second", inputID: "second", summary: "Another request failed.", createdAt: 2 }] }
+    await actions!.refresh()
+    frame = await renderUntil(app, (value) => value.includes("Another request failed."))
+    expect(frame).not.toContain(failure.summary)
+    expect(frame).toContain("A2A reply failed · Analyst")
+  } finally { lifecycle.abort(); app.renderer.destroy() }
 })
 
 test("Motryx separates runtime retry from stable reconciliation attention", async () => {
@@ -786,7 +830,7 @@ test("/sessions switches the exact Motryx Orchestrator and rebinds conversation 
   } as unknown as TuiPluginApi
   const now = "2026-07-19T00:00:00.000Z"
   const routeSnapshot = (sessionID: string, bindingGeneration: number): MotryxControlSnapshot => ({
-    schemaVersion: 11,
+    schemaVersion: 12,
     projectID,
     orchestratorSessionID: sessionID,
     projectionRevision: `server-generation:ic:${sessionID}`,
@@ -835,7 +879,7 @@ test("/sessions switches the exact Motryx Orchestrator and rebinds conversation 
     diagnostics: [],
   })
   const sessionList = (currentID: string, bindingGeneration: number) => ({
-    schemaVersion: 11,
+    schemaVersion: 12,
     projectID,
     status: "ROUTABLE",
     current: {
@@ -1267,7 +1311,7 @@ async function clickFrameText(app: Awaited<ReturnType<typeof testRender>>, frame
 function debugRouteSnapshot(projectID: string, orchestratorSessionID: string, generation = 7, server = "server") {
   const now = "2026-07-19T00:00:00.000Z"
   return {
-    schemaVersion: 11,
+    schemaVersion: 12,
     projectID,
     orchestratorSessionID,
     projectionRevision: `${server}:revision`,

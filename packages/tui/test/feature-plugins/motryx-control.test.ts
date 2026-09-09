@@ -25,7 +25,7 @@ const config: MotryxControlConfig = {
 function snapshot(overrides: Record<string, unknown> = {}) {
   const now = "2026-07-19T00:00:00.000Z"
   return {
-    schemaVersion: 11,
+    schemaVersion: 12,
     projectID,
     orchestratorSessionID: config.orchestratorSessionID,
     projectionRevision: "server-generation:ic:revision",
@@ -105,9 +105,9 @@ describe("Motryx typed control snapshot", () => {
     ).toEqual({ ok: false, error: "Motryx control API must use http or https" })
   })
 
-  test("accepts an exact schema-v11 ROUTABLE/binding/reconcile proof", () => {
+  test("accepts an exact schema-v12 ROUTABLE/binding/reconcile proof", () => {
     expect(parseMotryxControlSnapshot(snapshot(), config)).toMatchObject({
-      schemaVersion: 11,
+      schemaVersion: 12,
       projectID,
       orchestratorSessionID: config.orchestratorSessionID,
       projectionRevision: "server-generation:ic:revision",
@@ -123,7 +123,7 @@ describe("Motryx typed control snapshot", () => {
     })
   })
 
-  test("accepts runtime claims and terminal-only execution history", () => {
+  test.each(["WORKING", "SETTLING"])("accepts %s claims and terminal-only execution history", (phase) => {
     const value = parseMotryxControlSnapshot(
       snapshot({
         lanes: [
@@ -167,7 +167,7 @@ describe("Motryx typed control snapshot", () => {
           inputID: "input_1",
           turnID: "turn_1",
           role: "coordinator",
-          phase: "WORKING",
+          phase,
           checkpointRevision: 0,
           createdAt: 1_786_510_000_000,
         }],
@@ -209,7 +209,7 @@ describe("Motryx typed control snapshot", () => {
       },
     })
     expect(value.functionSlots[0]).toMatchObject({ runtimeReadiness: "ready" })
-    expect(value.runtimeExecutions[0]).toMatchObject({ claimID: "claim_1", phase: "WORKING" })
+    expect(value.runtimeExecutions[0]).toMatchObject({ claimID: "claim_1", phase })
     expect(value.executionHistory[0]).toMatchObject({ summaryID: "summary_1", terminalKind: "COMPLETED" })
   })
 
@@ -339,7 +339,7 @@ describe("Motryx typed control snapshot", () => {
       fetcher: async (input, init) => {
         request = new Request(input, init)
         return Response.json({
-          schemaVersion: 11,
+          schemaVersion: 12,
           incidentID: "incident_1",
           status: "OPEN",
           presentationState: "DISMISSED",
@@ -362,7 +362,7 @@ describe("Motryx typed control snapshot", () => {
 
 describe("Motryx typed Orchestrator sessions", () => {
   const sessions = () => ({
-    schemaVersion: 11,
+    schemaVersion: 12,
     projectID,
     status: "ROUTABLE",
     current: {

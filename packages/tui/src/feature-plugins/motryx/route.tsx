@@ -888,7 +888,7 @@ function RuntimeIncidentCard(props: {
               {incident().safeSummary}
             </text>
             <Show when={runtimeIncidentDiagnostic(incident())}>
-              {(detail) => <text fg={props.api.theme.current.textMuted} maxHeight={2}>{detail()}</text>}
+              {(detail) => <text fg={props.api.theme.current.textMuted} maxHeight={3}>{detail()}</text>}
             </Show>
           </box>
         </Show>
@@ -1488,6 +1488,9 @@ function IncidentsPanel(props: {
 
 function runtimeIncidentDiagnostic(incident: MotryxControlSnapshot["incidents"][number]): string | undefined {
   const values = [
+    incident.attemptCount !== undefined ? `attempts: ${incident.attemptCount}` : undefined,
+    incident.retryExhausted === true ? "retries exhausted" : undefined,
+    incident.retryable === false ? "not retryable" : undefined,
     incident.httpStatus ? `HTTP ${incident.httpStatus}` : undefined,
     incident.transportCode ? `transport ${incident.transportCode}` : undefined,
     incident.transportKind ? `kind ${incident.transportKind}` : undefined,
@@ -1515,6 +1518,7 @@ function runtimeAttentionTitle(attention: MotryxAttentionItemProjection): string
     USER_PAUSED: "Paused by user",
     RUNTIME_RESTART: "Waiting for runtime restart",
     FINAL_FAILURE: "Final failure",
+    A2A_FAILURE: "A2A reply failed",
   }
   return labels[attention.kind]
 }
@@ -1551,7 +1555,7 @@ function formatRetryTime(timestamp: number): string {
 
 function formatRuntimeExecution(execution: MotryxControlSnapshot["runtimeExecutions"][number]): string {
   const values = [
-    `${execution.role}:${execution.phase}`,
+    `${execution.role}:${execution.phase === "SETTLING" ? "waiting for execution to settle" : execution.phase}`,
     execution.inputID ? `input ${execution.inputID}` : "claim acquired",
     execution.turnID ? `turn ${execution.turnID}` : undefined,
   ].filter((value): value is string => Boolean(value))

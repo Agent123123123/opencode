@@ -1,6 +1,6 @@
 import path from "node:path"
 
-export const MOTRYX_CONTROL_SCHEMA_VERSION = 11 as const
+export const MOTRYX_CONTROL_SCHEMA_VERSION = 12 as const
 
 export type MotryxControlConfig = {
   apiURL: string
@@ -224,7 +224,7 @@ export type MotryxRuntimeExecutionProjection = {
   causalInputID?: string
   turnID?: string
   role: string
-  phase: "DISPATCHING" | "WORKING" | "WAITING_A2A" | "CHECKING" | "INTERRUPTING"
+  phase: "DISPATCHING" | "WORKING" | "WAITING_A2A" | "CHECKING" | "INTERRUPTING" | "SETTLING"
   createdAt: number
 }
 
@@ -266,6 +266,7 @@ export type MotryxAttentionKind =
   | "USER_PAUSED"
   | "RUNTIME_RESTART"
   | "FINAL_FAILURE"
+  | "A2A_FAILURE"
 
 export type MotryxAttentionItemProjection = {
   attentionID: string
@@ -292,6 +293,8 @@ export type MotryxAttentionItemProjection = {
   retryAttempt?: number
   retryLimit?: number
   retryNotBefore?: number
+  retryPhase?: "waiting" | "requesting"
+  requestID?: string
   failureKind?: string
   httpStatus?: number
   transportKind?: string
@@ -405,7 +408,7 @@ export async function fetchMotryxControlHealth(
     throw new MotryxControlSchemaError("Motryx control health did not return JSON")
   }
   const root = requiredRecord(await response.json(), "health")
-  if (root.schemaVersion !== MOTRYX_CONTROL_SCHEMA_VERSION) fail("health.schemaVersion must be 11")
+  if (root.schemaVersion !== MOTRYX_CONTROL_SCHEMA_VERSION) fail("health.schemaVersion must be 12")
   if (root.status !== "ok" && root.status !== "switching" && root.status !== "starting") {
     fail("health.status is invalid")
   }
@@ -494,7 +497,7 @@ async function parseSessionListResponse(response: Response, config: MotryxContro
 
 export function parseMotryxSessionList(value: unknown, expected: MotryxControlConfig): MotryxSessionList {
   const root = requiredRecord(value, "sessions")
-  if (root.schemaVersion !== MOTRYX_CONTROL_SCHEMA_VERSION) fail("sessions.schemaVersion must be 11")
+  if (root.schemaVersion !== MOTRYX_CONTROL_SCHEMA_VERSION) fail("sessions.schemaVersion must be 12")
   const projectID = exactProject(root.projectID, expected.projectID, "sessions.projectID")
   if (root.status !== "ROUTABLE" && root.status !== "SWITCHING" && root.status !== "UNAVAILABLE") {
     fail("sessions.status is invalid")
@@ -625,7 +628,7 @@ export async function dismissMotryxIncident(
     throw new MotryxControlHttpError(response.status, `Motryx incident dismissal returned HTTP ${response.status}${detail}`)
   }
   const result = requiredRecord(value, "incident dismissal")
-  if (result.schemaVersion !== MOTRYX_CONTROL_SCHEMA_VERSION) fail("incident dismissal schemaVersion must be 11")
+  if (result.schemaVersion !== MOTRYX_CONTROL_SCHEMA_VERSION) fail("incident dismissal schemaVersion must be 12")
   if (result.incidentID !== input.incidentID) fail("incident dismissal returned a different incident")
   if (result.presentationState !== "DISMISSED") fail("incident dismissal did not persist DISMISSED")
   return {
@@ -638,7 +641,7 @@ export async function dismissMotryxIncident(
 
 export function parseMotryxControlSnapshot(value: unknown, expected: MotryxControlConfig): MotryxControlSnapshot {
   const root = requiredRecord(value, "snapshot")
-  if (root.schemaVersion !== MOTRYX_CONTROL_SCHEMA_VERSION) fail("snapshot.schemaVersion must be 11")
+  if (root.schemaVersion !== MOTRYX_CONTROL_SCHEMA_VERSION) fail("snapshot.schemaVersion must be 12")
   const projectID = exactProject(root.projectID, expected.projectID, "snapshot.projectID")
   const orchestratorSessionID = exactString(
     root.orchestratorSessionID,
@@ -940,6 +943,7 @@ const ATTENTION_KINDS = new Set<MotryxAttentionKind>([
   "USER_PAUSED",
   "RUNTIME_RESTART",
   "FINAL_FAILURE",
+  "A2A_FAILURE",
 ])
 
 function parseAttentionItem(value: unknown, label: string): MotryxAttentionItemProjection {
@@ -980,6 +984,8 @@ function parseAttentionItem(value: unknown, label: string): MotryxAttentionItemP
     retryAttempt: optionalNonNegativeInteger(item.retryAttempt, `${label}.retryAttempt`),
     retryLimit: optionalNonNegativeInteger(item.retryLimit, `${label}.retryLimit`),
     retryNotBefore: optionalFiniteNumber(item.retryNotBefore, `${label}.retryNotBefore`),
+    retryPhase: optionalEnum(item.retryPhase, new Set(["waiting", "requesting"] as const), `${label}.retryPhase`),
+    requestID: optionalString(item.requestID, `${label}.requestID`),
     failureKind: optionalString(item.failureKind, `${label}.failureKind`),
     httpStatus: optionalFiniteNumber(item.httpStatus, `${label}.httpStatus`),
     transportKind: optionalString(item.transportKind, `${label}.transportKind`),
@@ -1055,7 +1061,7 @@ function parseRuntimeExecution(value: unknown, label: string): MotryxRuntimeExec
     turnID: optionalString(item.turnID, `${label}.turnID`),
     role: requiredString(item.role, `${label}.role`),
     phase: exactEnum(item.phase, new Set([
-      "DISPATCHING", "WORKING", "WAITING_A2A", "CHECKING", "INTERRUPTING",
+      "DISPATCHING", "WORKING", "WAITING_A2A", "CHECKING", "INTERRUPTING", "SETTLING",
     ] as const), `${label}.phase`),
     createdAt: finiteNumber(item.createdAt, `${label}.createdAt`),
   })

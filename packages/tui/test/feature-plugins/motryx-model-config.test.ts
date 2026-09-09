@@ -72,7 +72,7 @@ test("Motryx model tier selection executes argv directly and reports command fai
 
 function response(status = "accepted", applied = false) {
   return { status: "ok", tier: "strong", modelPolicy: { strong: { model: "provider/saved", variant: "default" } },
-    application: { status, schemaVersion: 11, tier: "strong", selection: { model: "provider/latest", variant: "high" },
+    application: { status, schemaVersion: 12, tier: "strong", selection: { model: "provider/latest", variant: "high" },
       accepted: [{ sessionID: "ses_1", role: "orchestrator", applied }], unconfirmed: [] } }
 }
 
