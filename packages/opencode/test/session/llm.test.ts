@@ -1449,7 +1449,7 @@ describe("session.llm.stream", () => {
               Effect.gen(function* () {
                 const web = yield* HttpClientRequest.toWeb(request).pipe(Effect.orDie)
                 captured = (yield* Effect.promise(() => web.json())) as Record<string, unknown>
-                return HttpClientResponse.fromWeb(request, createEventResponse(chunks, true))
+                return { response: HttpClientResponse.fromWeb(request, createEventResponse(chunks, true)), attemptCount: 1 }
               }),
           }),
         )
